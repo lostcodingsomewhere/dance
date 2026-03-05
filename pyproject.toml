@@ -1,0 +1,81 @@
+[project]
+name = "dance"
+version = "0.1.0"
+description = "DJ track analysis pipeline for house/techno - automated cue points, energy tagging, and Traktor integration"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Arya" }]
+
+dependencies = [
+    # CLI & UX
+    "click>=8.1",
+    "rich>=13.0",
+
+    # Configuration & validation
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+
+    # Database
+    "sqlalchemy>=2.0",
+
+    # Spotify download
+    "spotdl>=4.2",
+
+    # Audio I/O
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "mutagen>=1.47",
+
+    # Audio analysis (Essentia)
+    "essentia>=2.1b6.dev1034",
+
+    # Stem separation
+    "demucs>=4.0",
+    "torch>=2.0",
+
+    # Traktor integration
+    "traktor-nml-utils>=3.0",
+
+    # Utilities
+    "tqdm>=4.65",
+    "watchdog>=3.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "mypy>=1.5",
+]
+llm = [
+    # LLM augmentation (Qwen2-Audio)
+    "transformers>=4.40",
+    "accelerate>=0.27",
+    "bitsandbytes>=0.42",  # For quantization (optional on Mac, needed for 4-bit)
+]
+
+[project.scripts]
+dance = "dance.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dance"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
