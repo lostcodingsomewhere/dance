@@ -9,6 +9,17 @@ The repo has three pieces:
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST over the SQLite DB, plus a WebSocket for live Ableton state and an OSC passthrough for clip launching / transport.
 3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Glanceable iPad-landscape UI for mixing live: Now Playing, Up Next (seeded recommendations), Library, Session History.
 
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — three-layer architecture, the Stage protocol + dispatcher, schema overview
+- [docs/cli.md](docs/cli.md) — every `dance` subcommand and the state it touches
+- [docs/api.md](docs/api.md) — REST + WebSocket reference (auto-generated `/docs` at runtime)
+- [docs/tagging.md](docs/tagging.md) — CLAP zero-shot vs Qwen2-Audio, vocabulary, tuning
+- [docs/als-export.md](docs/als-export.md) — generated Live Set contents, color palette, limitations
+- [docs/abletonosc_setup.md](docs/abletonosc_setup.md) — installing AbletonOSC + what works / doesn't
+- [docs/troubleshooting.md](docs/troubleshooting.md) — MPS quirks, OSC firewall, spotDL auth, Live errors
+- [docs/dev.md](docs/dev.md) — adding stages, endpoints, migrations; pre-commit hygiene
+
 ## Architecture
 
 ```

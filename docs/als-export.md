@@ -1,0 +1,120 @@
+# Ableton Live Set (.als) export
+
+Generate a Live Set per track from the analyzed bundle (stems + cues + tempo). Open it in Live and you get five colored audio tracks pre-pointed at the right files, master tempo set, and timeline locators at every detected region.
+
+## Quick start
+
+```bash
+dance export-als 42
+# -> /Users/you/Music/Dance/Sets/My Song - Some Artist.als
+open "/Users/you/Music/Dance/Sets/My Song - Some Artist.als"
+```
+
+Or batch:
+
+```bash
+dance export-als --all
+```
+
+Or via the API:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/tracks/42/als
+```
+
+The React UI's `LoadActions` component (`companion-app/src/components/LoadActions.tsx`) wraps this and reveals the file in Finder on success.
+
+## What the generated .als contains
+
+`src/dance/als/writer.py:344` (`build_live_set_xml`):
+
+- **5 audio tracks**, in this canonical vertical order:
+  - `Drums` — points at `<stems_dir>/<hash>/drums.wav`
+  - `Bass` — `bass.wav`
+  - `Vocals` — `vocals.wav`
+  - `Other` — `other.wav`
+  - `Mix` — points at the original full-mix file, muted by default (`writer.py:186`)
+- **Master tempo** — set to the track's detected BPM (`audio_analysis.bpm`).
+- **4/4 time signature** — fixed (`writer.py:309`).
+- **Locators** — one per track-level `Region` row, named from `region.name` or auto-named (`Cue 1`, `Intro`, etc. — see `src/dance/als/markers.py:46`). Per-stem regions are dropped (Live's master timeline can't carry them).
+
+## Color palette
+
+`src/dance/als/writer.py:60` — Live's built-in palette indices (0-69):
+
+| Kind   | Index | Color  |
+|--------|-------|--------|
+| drums  | 1     | red    |
+| bass   | 7     | orange |
+| vocals | 13    | yellow |
+| other  | 39    | blue   |
+| mix    | 25    | grey   |
+
+These match Live's "Color" palette in Session view. The TrackCard in the React UI uses a different color scheme (`STEM_TRACK_COLORS` in `osc/bridge.py:206`) — that's for the live "Push to Live" path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
+
+## Output location
+
+`settings.als_output_dir`, default `~/Music/Dance/Sets`. Override:
+
+```bash
+DANCE_ALS_OUTPUT_DIR=/Volumes/Stage/Sets dance export-als 42
+```
+
+Custom `--out`:
+
+```bash
+dance export-als 42 --out ~/Music/Dance/Sets/PeakTime.als
+```
+
+`out_path` must resolve inside `als_output_dir` — otherwise `AlsOutsideDirError` (`src/dance/als/generator.py:46`) / 403 over the API. This is a hard safety guard so the API endpoint can't be tricked into writing anywhere on disk.
+
+## File format — honest disclaimer
+
+The `.als` format is **gzipped XML with a schema Ableton does not publish**. The structure in `src/dance/als/writer.py` was reverse-engineered from publicly archived sample Sets and community parsers (e.g. `kiddikai/ableton-parser`). We target Live 11.x's schema (`ABLETON_ROOT_ATTRS` at `writer.py:50`); Live 12 reads it transparently.
+
+We deliberately emit a **minimal** Set:
+- Root `<Ableton>` element, `<LiveSet>` wrapper.
+- One `<AudioTrack>` per stem, each with `<Name>`, `<ColorIndex>`, and a `<DeviceChain><MainSequencer><Sample><SampleRef><FileRef>` pointing at the absolute path on disk.
+- `<MasterTrack>` with a Manual Tempo.
+- `<Locators>` with our region markers.
+
+What we do **not** emit:
+- Mixer state, sends, routing, automation — Live fills these in with defaults on load.
+- Warp markers — `MarkersGenerated="false"` (`writer.py:263`), so Live auto-warps on first open. You may want to confirm BPM in Live and lock it.
+- View state, freeze data, device chains beyond the sample reference.
+- Embedded sample data — `FileRef` paths are **absolute**. Moving the stems folder breaks the Set.
+
+### If Live rejects the .als
+
+Possible — the schema is undocumented. If you see "This is not a valid Ableton Live Set" or similar:
+
+1. Capture the exact error message Live shows.
+2. The .als is just gzipped XML — unzip it (`gunzip -c file.als > file.xml`) and diff against a Set Live wrote natively for the same audio.
+3. File the diff + error message. The fix is typically a missing element or attribute in `src/dance/als/writer.py`; this is additive — we add the missing field, the existing tests stay green.
+
+Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml` and asserts shape (track count, locator count, tempo, etc.). They don't and can't assert "Live will accept this" — only Live can.
+
+## Workflow
+
+```
+dance export-als 42
+  -> writes ~/Music/Dance/Sets/Track Title - Artist.als
+  -> (or response from POST /tracks/42/als)
+
+open ~/Music/Dance/Sets/...
+  -> Live launches, opens the Set
+  -> Live auto-warps each clip on first play
+  -> Save the Set inside Live to bake the warp markers
+```
+
+## Limitations
+
+| Limitation                                | Workaround |
+|-------------------------------------------|------------|
+| No warp markers pre-baked                 | Live auto-warps on first open; save the Set to bake. |
+| No device chains (EQ, compression, etc.)  | Set up a template Set with your chains, drag clips in. |
+| No automation envelopes                   | Drawing automation is a manual step in Live. |
+| No view state (zoom, scroll, selection)   | Live opens to the default arrangement view. |
+| Stems referenced by **absolute** path     | Don't move the stems folder. If you must, regenerate the .als after the move. |
+| Mix track is muted by default             | Click the mute button if you want the original mix as a reference layer. |
+| One Set per track                         | This is a stem-prep workflow, not a set-building one. For combined sets, drag the clips between Sets in Live. |

@@ -63,7 +63,8 @@ def reveal(
     """Open the OS file manager at the given path.
 
     Body: ``{"path": "/absolute/path/to/file_or_dir"}``.
-    Only paths inside ``library_dir`` or ``stems_dir`` are accepted.
+    Only paths inside ``library_dir``, ``stems_dir``, or ``als_output_dir``
+    are accepted.
     """
     raw = body.get("path")
     if not raw or not isinstance(raw, str):
@@ -75,7 +76,7 @@ def reveal(
     if not _is_allowed(target, settings):
         raise HTTPException(
             status_code=403,
-            detail="path must be inside library_dir or stems_dir",
+            detail="path must be inside library_dir, stems_dir, or als_output_dir",
         )
 
     cmd = _reveal_command(target)

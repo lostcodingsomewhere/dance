@@ -122,11 +122,15 @@ def _add_file_ref(parent: etree._Element, path: Path, name: str | None = None) -
     """Insert a ``<FileRef>`` describing ``path`` for a Sample element."""
     file_ref = etree.SubElement(parent, "FileRef")
 
-    rel_path = etree.SubElement(file_ref, "RelativePath")
-    # Walk all parents above the file, in reverse, as RelativePathElement entries.
+    # Live requires <RelativePath Value="..."/> with the relative path string;
+    # the per-element <RelativePathElement Dir=".."/> children are how Live
+    # records each path component for portability search.
     parts = list(path.resolve().parts)
     if parts and parts[0] == "/":  # POSIX root
         parts = parts[1:]
+    rel_path_str = "/".join(parts[:-1])
+    rel_path = etree.SubElement(file_ref, "RelativePath")
+    rel_path.set("Value", rel_path_str)
     for part in parts[:-1]:
         rpe = etree.SubElement(rel_path, "RelativePathElement")
         rpe.set("Dir", part)

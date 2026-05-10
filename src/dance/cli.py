@@ -82,6 +82,7 @@ def config(
         table.add_row("Library Directory", str(settings.library_dir))
         table.add_row("Stems Directory", str(settings.stems_dir))
         table.add_row("Data Directory", str(settings.data_dir))
+        table.add_row(".als Output Directory", str(settings.als_output_dir))
         table.add_row("Skip Stems", str(settings.skip_stems))
         table.add_row("Skip Embeddings", str(settings.skip_embeddings))
         table.add_row("CLAP Model", settings.clap_model)
@@ -89,8 +90,37 @@ def config(
         console.print(table)
         return
 
-    console.print("[yellow]Settings are configured via environment variables or ~/.dance/.env[/yellow]")
-    console.print("Use --show to view current config.")
+    changes: list[tuple[str, str]] = []
+    if spotify_playlist is not None:
+        if "spotify.com/playlist" not in spotify_playlist:
+            console.print("[red]Invalid Spotify playlist URL[/red]")
+            sys.exit(1)
+        changes.append(("DANCE_SPOTIFY_PLAYLIST_URL", spotify_playlist))
+    if library_dir is not None:
+        changes.append(("DANCE_LIBRARY_DIR", str(library_dir.expanduser().resolve())))
+
+    if not changes:
+        console.print(
+            "No changes. Use --show to view current config, or pass "
+            "--spotify-playlist / --library-dir to update ~/.dance/.env."
+        )
+        return
+
+    # Persist by merging into ~/.dance/.env (preserve other keys verbatim).
+    env_path = settings.data_dir / ".env"
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+    for k, v in changes:
+        existing[k] = v
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+    console.print(f"[green]Wrote {len(changes)} setting(s) to {env_path}[/green]")
+    for k, v in changes:
+        console.print(f"  {k} = {v}")
 
 
 @main.command()
