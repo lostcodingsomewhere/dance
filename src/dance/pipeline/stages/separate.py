@@ -1,253 +1,153 @@
 """
-Stem separation stage using Demucs.
+Stem separation stage (Demucs).
 
-Separates tracks into drums, bass, vocals, and other (synths/pads).
-Uses htdemucs_ft model for best quality.
-Supports MPS acceleration on Apple Silicon.
+Writes one StemFile row per (track, kind). Demucs's source names map to our
+StemKind enum 1:1: drums, bass, vocals, other.
 """
 
+from __future__ import annotations
+
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from dance.config import Settings
-from dance.core.database import Stems, Track, TrackState
+from dance.core.database import StemFile, StemKind, Track, TrackState
+from dance.pipeline.utils.device import pick_device
 
 logger = logging.getLogger(__name__)
 
-# Try to import demucs
 try:
+    import librosa
+    import numpy as np
+    import soundfile as sf
     import torch
-    import torchaudio
-    from demucs.pretrained import get_model
     from demucs.apply import apply_model
-    DEMUCS_AVAILABLE = True
+    from demucs.pretrained import get_model
+
+    _DEMUCS_OK = True
 except ImportError:
-    DEMUCS_AVAILABLE = False
-    logger.warning("Demucs not available - stem separation disabled")
+    _DEMUCS_OK = False
+    logger.warning("Demucs not available — stem separation disabled")
+
+
+# Demucs source name -> our StemKind (htdemucs_ft happens to use the same names,
+# but be explicit so future model swaps don't break us).
+_DEMUCS_SOURCE_MAP: dict[str, StemKind] = {
+    "drums": StemKind.DRUMS,
+    "bass": StemKind.BASS,
+    "vocals": StemKind.VOCALS,
+    "other": StemKind.OTHER,
+}
 
 
 class StemSeparationStage:
-    """
-    Stem separation using Demucs.
+    """Separates each track into 4 stems via Demucs."""
 
-    Separates tracks into:
-    - drums: Kick, snare, hats, percussion
-    - bass: Bass lines
-    - vocals: Vocals and vocal-like sounds
-    - other: Synths, pads, FX
+    name = "separate"
+    input_state = TrackState.ANALYZED
+    output_state = TrackState.SEPARATED
+    error_state = TrackState.ERROR
 
-    Uses MPS acceleration on Apple Silicon Macs.
-    """
+    def __init__(self) -> None:
+        self._model = None
+        self._device: str | None = None
+        self._model_name: str | None = None
 
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self.stems_dir = settings.stems_dir
-        self.model_name = "htdemucs_ft"  # Best quality model
-        self.model = None
-        self.device = None
+    # ------------------------------------------------------------------
 
-    def _get_device(self) -> str:
-        """Get the best available device for inference."""
-        if not DEMUCS_AVAILABLE:
-            return "cpu"
+    def _ensure_model(self, settings: Settings) -> None:
+        if self._model is not None and self._model_name == settings.demucs_model:
+            return
+        if not _DEMUCS_OK:
+            raise RuntimeError("Demucs is not installed")
 
-        if torch.cuda.is_available():
-            return "cuda"
-        elif torch.backends.mps.is_available():
-            # Apple Silicon MPS acceleration
-            return "mps"
-        else:
-            return "cpu"
+        self._device = pick_device(settings.demucs_device)
+        logger.info("Loading Demucs model %s on %s", settings.demucs_model, self._device)
+        model = get_model(settings.demucs_model)
+        model.to(self._device)
+        model.eval()
+        self._model = model
+        self._model_name = settings.demucs_model
 
-    def _load_model(self):
-        """Lazy load the Demucs model."""
-        if not DEMUCS_AVAILABLE:
-            raise RuntimeError(
-                "Demucs not installed. Install with: pip install demucs"
-            )
+    # ------------------------------------------------------------------
 
-        if self.model is None:
-            logger.info(f"Loading Demucs model: {self.model_name}")
-            self.device = self._get_device()
-            logger.info(f"Using device: {self.device}")
-
-            self.model = get_model(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-
-    def _get_stem_dir(self, track: Track) -> Path:
-        """Get directory for track's stems."""
-        # Use first 8 chars of hash for directory name
-        stem_dir = self.stems_dir / track.file_hash[:8]
-        stem_dir.mkdir(parents=True, exist_ok=True)
-        return stem_dir
-
-    def separate_track(self, session: Session, track: Track) -> bool:
-        """
-        Separate a track into stems.
-
-        Args:
-            session: Database session.
-            track: Track to separate.
-
-        Returns:
-            True if separation succeeded.
-        """
-        # Check if already separated
-        existing = session.query(Stems).filter_by(track_id=track.id).first()
-        if existing:
-            logger.info(f"Stems already exist for: {track.title}")
-            return True
-
-        if not DEMUCS_AVAILABLE:
-            logger.warning("Skipping stem separation - Demucs not available")
+    def process(self, session: Session, track: Track, settings: Settings) -> bool:
+        if not _DEMUCS_OK:
+            track.state = self.error_state.value
+            track.error_message = "Demucs not installed"
+            session.commit()
             return False
 
-        # Update state
+        # Idempotent: if all 4 stems already exist on disk and in DB, skip.
+        existing = session.query(StemFile).filter_by(track_id=track.id).all()
+        if len(existing) == 4 and all(Path(s.path).exists() for s in existing):
+            track.state = self.output_state.value
+            session.commit()
+            logger.info("Stems already present for track %s", track.id)
+            return True
+
         track.state = TrackState.SEPARATING.value
         session.commit()
 
-        try:
-            self._load_model()
+        self._ensure_model(settings)
 
-            file_path = Path(track.file_path)
-            if not file_path.exists():
-                raise FileNotFoundError(f"Track file not found: {file_path}")
+        path = Path(track.file_path)
+        if not path.exists():
+            raise FileNotFoundError(path)
 
-            logger.info(f"Separating stems: {track.artist} - {track.title}")
+        logger.info("Separating: %s — %s", track.artist, track.title)
+        # Load via librosa as stereo at Demucs's native sample rate, then
+        # convert to a torch tensor. We use librosa rather than torchaudio
+        # because torchaudio 2.9 dropped its built-in loader in favor of
+        # torchcodec, which would be an extra dep + a system FFmpeg.
+        audio_np, _ = librosa.load(
+            str(path), sr=self._model.samplerate, mono=False
+        )
+        if audio_np.ndim == 1:
+            audio_np = np.stack([audio_np, audio_np], axis=0)
+        elif audio_np.shape[0] > 2:
+            audio_np = audio_np[:2]
+        wav = torch.from_numpy(audio_np).to(self._device)
 
-            # Load audio
-            wav, sr = torchaudio.load(str(file_path))
+        with torch.no_grad():
+            sources = apply_model(
+                self._model,
+                wav[None],
+                device=self._device,
+                progress=False,
+                num_workers=0,
+            )[0]
 
-            # Resample if needed
-            if sr != self.model.samplerate:
-                resampler = torchaudio.transforms.Resample(sr, self.model.samplerate)
-                wav = resampler(wav)
+        # Drop stale rows so we don't accumulate duplicates on a retry.
+        if existing:
+            for s in existing:
+                session.delete(s)
+            session.commit()
 
-            # Ensure stereo
-            if wav.shape[0] == 1:
-                wav = wav.repeat(2, 1)
-            elif wav.shape[0] > 2:
-                wav = wav[:2]
+        out_dir = settings.stems_dir / track.file_hash[:8]
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-            # Move to device
-            wav = wav.to(self.device)
-
-            # Apply model
-            with torch.no_grad():
-                # Add batch dimension
-                sources = apply_model(
-                    self.model,
-                    wav[None],
-                    device=self.device,
-                    progress=True,
-                    num_workers=0,
-                )[0]
-
-            # Save stems
-            stem_dir = self._get_stem_dir(track)
-            stem_paths = {}
-
-            for i, source_name in enumerate(self.model.sources):
-                stem_path = stem_dir / f"{source_name}.wav"
-                # Move to CPU for saving
-                stem_audio = sources[i].cpu()
-                torchaudio.save(
-                    str(stem_path),
-                    stem_audio,
-                    self.model.samplerate,
+        for i, source_name in enumerate(self._model.sources):
+            kind = _DEMUCS_SOURCE_MAP.get(source_name)
+            if kind is None:
+                logger.warning("Skipping unknown demucs source: %s", source_name)
+                continue
+            stem_path = out_dir / f"{kind.value}.wav"
+            # soundfile expects shape (samples, channels), torch tensors are
+            # (channels, samples) — transpose before write.
+            stem_np = sources[i].cpu().numpy().T
+            sf.write(str(stem_path), stem_np, self._model.samplerate, subtype="PCM_16")
+            session.add(
+                StemFile(
+                    track_id=track.id,
+                    kind=kind.value,
+                    path=str(stem_path),
+                    model_used=self._model_name,
                 )
-                stem_paths[source_name] = str(stem_path)
-                logger.debug(f"Saved stem: {stem_path}")
-
-            # Store in database
-            stems = Stems(
-                track_id=track.id,
-                drums_path=stem_paths.get("drums"),
-                bass_path=stem_paths.get("bass"),
-                vocals_path=stem_paths.get("vocals"),
-                other_path=stem_paths.get("other"),
-                model_used=self.model_name,
             )
-            session.add(stems)
 
-            # Update track state
-            track.state = TrackState.SEPARATED.value
-            session.commit()
-
-            logger.info(f"Separated: {track.artist} - {track.title}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Stem separation failed for {track.title}: {e}")
-            track.state = TrackState.ERROR.value
-            track.error_message = f"Stem separation failed: {str(e)[:400]}"
-            session.commit()
-            return False
-
-    def get_stem_paths(self, session: Session, track: Track) -> Optional[dict]:
-        """
-        Get paths to separated stems for a track.
-
-        Returns:
-            Dict with stem paths, or None if not separated.
-        """
-        stems = session.query(Stems).filter_by(track_id=track.id).first()
-        if not stems:
-            return None
-
-        return {
-            "drums": stems.drums_path,
-            "bass": stems.bass_path,
-            "vocals": stems.vocals_path,
-            "other": stems.other_path,
-        }
-
-
-def separate_pending_tracks(
-    session: Session,
-    settings: Settings,
-    limit: Optional[int] = None,
-) -> tuple[int, int]:
-    """
-    Separate all tracks in ANALYZED state.
-
-    Args:
-        session: Database session.
-        settings: Application settings.
-        limit: Maximum number of tracks to process.
-
-    Returns:
-        Tuple of (success_count, error_count).
-    """
-    if settings.skip_stems:
-        logger.info("Stem separation disabled in settings")
-        return 0, 0
-
-    query = session.query(Track).filter(
-        Track.state == TrackState.ANALYZED.value
-    )
-
-    if limit:
-        query = query.limit(limit)
-
-    tracks = query.all()
-
-    if not tracks:
-        return 0, 0
-
-    stage = StemSeparationStage(settings)
-    success = 0
-    errors = 0
-
-    for track in tracks:
-        if stage.separate_track(session, track):
-            success += 1
-        else:
-            errors += 1
-
-    return success, errors
+        track.state = self.output_state.value
+        session.commit()
+        return True

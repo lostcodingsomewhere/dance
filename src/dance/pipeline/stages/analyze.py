@@ -13,8 +13,14 @@ from typing import Optional
 import numpy as np
 from sqlalchemy.orm import Session
 
-from dance.core.database import Analysis, Track, TrackState
+from dance.core.database import now_utc, Analysis, Track, TrackState
+from dance.pipeline.utils.audio import (
+    aggregate_rms,
+    detect_key_from_chroma,
+    normalize_bpm,
+)
 from dance.pipeline.utils.camelot import key_to_camelot
+from dance.pipeline.utils.db import upsert
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +44,26 @@ except ImportError:
 
 class AnalysisStage:
     """
-    Comprehensive audio analysis for DJ mixing.
-
-    For house/techno, we prioritize:
-    1. Accurate BPM (within 0.1 BPM for beatmatching)
-    2. Energy levels (for set building)
-    3. Key detection (for harmonic mixing)
+    Full-mix audio analysis: BPM, key (Camelot), energy, brightness, warmth,
+    danceability. Writes one ``AudioAnalysis`` row per track with
+    ``stem_file_id=NULL``.
     """
+
+    name = "analyze"
+    input_state = TrackState.PENDING
+    output_state = TrackState.ANALYZED
+    error_state = TrackState.ERROR
 
     def __init__(self, sample_rate: int = 44100):
         self.sample_rate = sample_rate
 
+    # Backwards-compat shim — older code/tests call .analyze_track().
     def analyze_track(self, session: Session, track: Track) -> bool:
+        from dance.config import get_settings
+
+        return self.process(session, track, get_settings())
+
+    def process(self, session, track, settings) -> bool:
         """
         Run full analysis on a track.
 
@@ -95,36 +109,28 @@ class AnalysisStage:
                 energy_stats.get("brightness", 0.5),
             )
 
-            # Create or update analysis record
-            analysis = session.query(Analysis).filter_by(track_id=track.id).first()
-            if analysis is None:
-                analysis = Analysis(track_id=track.id)
-                session.add(analysis)
-
-            # Update analysis fields
-            analysis.bpm = bpm
-            analysis.bpm_confidence = bpm_confidence
-            analysis.key_camelot = camelot
-            analysis.key_standard = standard_key
-            analysis.key_confidence = key_confidence
-            analysis.energy_overall = energy_stats["overall"]
-            analysis.energy_peak = energy_stats["peak"]
-            analysis.brightness = energy_stats.get("brightness", 0.5)
-            analysis.warmth = energy_stats.get("warmth", 0.5)
-            analysis.floor_energy = floor_energy
-            analysis.peak_time_suitability = floor_energy / 10.0
-
-            # Mood analysis (simplified - would use Essentia TF models in production)
-            analysis.mood_dark = self._estimate_darkness(energy_stats)
-            analysis.mood_aggressive = energy_stats.get("brightness", 0.5)
-            analysis.mood_electronic = 0.9  # Assume electronic for house/techno
-
-            # Danceability from rhythm regularity
-            analysis.danceability = self._estimate_danceability(audio, sr, bpm)
+            # Create or update analysis row for the full mix (stem_file_id = NULL).
+            upsert(
+                session,
+                Analysis,
+                where={"track_id": track.id, "stem_file_id": None},
+                bpm=bpm,
+                bpm_confidence=bpm_confidence,
+                key_camelot=camelot,
+                key_standard=standard_key,
+                key_confidence=key_confidence,
+                energy_overall=energy_stats["overall"],
+                energy_peak=energy_stats["peak"],
+                brightness=energy_stats.get("brightness", 0.5),
+                warmth=energy_stats.get("warmth", 0.5),
+                floor_energy=floor_energy,
+                danceability=self._estimate_danceability(audio, sr, bpm),
+                analyzed_at=now_utc(),
+            )
 
             # Update track state
             track.state = TrackState.ANALYZED.value
-            track.analyzed_at = datetime.utcnow()
+            track.analyzed_at = now_utc()
             session.commit()
 
             logger.info(
@@ -163,8 +169,7 @@ class AnalysisStage:
                 rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
                 bpm, beats, beats_confidence, _, _ = rhythm_extractor(audio)
                 confidence = float(np.mean(beats_confidence)) if len(beats_confidence) > 0 else 0.5
-                bpm = self._normalize_bpm(bpm)
-                return bpm, confidence
+                return normalize_bpm(bpm), confidence
             except Exception as e:
                 logger.warning(f"Essentia BPM failed, falling back to librosa: {e}")
 
@@ -172,28 +177,9 @@ class AnalysisStage:
             tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr)
             # tempo can be a float or ndarray depending on librosa version
             bpm = float(tempo[0]) if hasattr(tempo, '__len__') else float(tempo)
-            bpm = self._normalize_bpm(bpm)
-            return bpm, 0.7  # Default confidence for librosa
+            return normalize_bpm(bpm), 0.7  # Default confidence for librosa
 
         raise RuntimeError("No BPM detection available")
-
-    def _normalize_bpm(self, bpm: float) -> float:
-        """
-        Normalize BPM to house/techno range (118-145).
-
-        Most house is 120-130, techno 125-140.
-        If detected BPM is half or double, correct it.
-        """
-        # Handle extreme values
-        if bpm < 90:
-            return bpm * 2
-        elif bpm > 180:
-            return bpm / 2
-        elif bpm < 110:
-            # Could be half-time, check if double is in range
-            if 118 <= bpm * 2 <= 145:
-                return bpm * 2
-        return bpm
 
     def _analyze_key(self, audio: np.ndarray, sr: int) -> tuple[str, str, float]:
         """
@@ -213,18 +199,8 @@ class AnalysisStage:
         if LIBROSA_AVAILABLE:
             # Use chroma features for key detection
             chroma = librosa.feature.chroma_cqt(y=audio, sr=sr)
-            chroma_mean = np.mean(chroma, axis=1)
-
-            # Simple key detection from chroma
-            key_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-            key_idx = int(np.argmax(chroma_mean))
-            key = key_names[key_idx]
-
-            # Estimate major/minor from chroma pattern
-            # This is a simplification - real key detection is more complex
-            mode = "minor" if chroma_mean[(key_idx + 3) % 12] > chroma_mean[(key_idx + 4) % 12] else "major"
-
-            return key, mode, 0.6  # Lower confidence for simple method
+            key, mode, _ = detect_key_from_chroma(chroma)
+            return key, mode, 0.6  # Lower confidence than essentia
 
         return "C", "major", 0.5  # Default fallback
 
@@ -245,15 +221,13 @@ class AnalysisStage:
             # Manual RMS calculation
             frame_length = 2048
             hop_length = 512
-            rms = []
+            rms_list = []
             for i in range(0, len(audio) - frame_length, hop_length):
                 frame = audio[i:i + frame_length]
-                rms.append(np.sqrt(np.mean(frame ** 2)))
-            rms = np.array(rms)
+                rms_list.append(np.sqrt(np.mean(frame ** 2)))
+            rms = np.array(rms_list)
 
-        # Normalize to 0-1 (calibrated for electronic music)
-        overall = np.clip(np.mean(rms) / 0.2, 0, 1)
-        peak = np.clip(np.percentile(rms, 95) / 0.3, 0, 1)
+        overall, peak = aggregate_rms(rms)
 
         # Spectral centroid (brightness)
         if LIBROSA_AVAILABLE:
@@ -303,19 +277,6 @@ class AnalysisStage:
         score = int(raw_score * 10) + 1
         return max(1, min(10, score))
 
-    def _estimate_darkness(self, energy_stats: dict) -> float:
-        """
-        Estimate how 'dark' a track sounds.
-
-        Dark = low brightness, high warmth (bass-heavy)
-        """
-        brightness = energy_stats.get("brightness", 0.5)
-        warmth = energy_stats.get("warmth", 0.5)
-
-        # Inverse of brightness, weighted with warmth
-        darkness = (1 - brightness) * 0.6 + warmth * 0.4
-        return float(np.clip(darkness, 0, 1))
-
     def _estimate_danceability(
         self,
         audio: np.ndarray,
@@ -337,39 +298,3 @@ class AnalysisStage:
 
         # Could add more sophisticated analysis here
         return base_danceability
-
-
-def analyze_pending_tracks(
-    session: Session,
-    limit: Optional[int] = None,
-) -> tuple[int, int]:
-    """
-    Analyze all tracks in PENDING state.
-
-    Args:
-        session: Database session.
-        limit: Maximum number of tracks to analyze.
-
-    Returns:
-        Tuple of (success_count, error_count).
-    """
-    query = session.query(Track).filter(
-        Track.state.in_([TrackState.PENDING.value])
-    )
-
-    if limit:
-        query = query.limit(limit)
-
-    tracks = query.all()
-
-    stage = AnalysisStage()
-    success = 0
-    errors = 0
-
-    for track in tracks:
-        if stage.analyze_track(session, track):
-            success += 1
-        else:
-            errors += 1
-
-    return success, errors

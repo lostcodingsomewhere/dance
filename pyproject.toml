@@ -1,7 +1,7 @@
 [project]
 name = "dance"
-version = "0.1.0"
-description = "DJ track analysis pipeline for house/techno - automated cue points, energy tagging, and Traktor integration"
+version = "0.2.0"
+description = "Stem-performance brain for Ableton Live: Spotify → analyzed tracks with stems, cues, loops, tags, and graph edges"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -18,29 +18,41 @@ dependencies = [
 
     # Database
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
 
     # Spotify download
     "spotdl>=4.2",
 
-    # Audio I/O
+    # Audio I/O & analysis
     "librosa>=0.10",
     "soundfile>=0.12",
     "mutagen>=1.47",
-
-    # Audio analysis (Essentia)
     "essentia>=2.1b6.dev1034",
 
-    # Stem separation
+    # Stem separation. We route audio I/O through librosa/soundfile rather
+    # than torchaudio (avoids torchaudio 2.9's new torchcodec + FFmpeg
+    # dependency for plain WAV/MP3 loading).
     "demucs>=4.0",
     "torch>=2.0",
 
-    # Traktor integration
-    "traktor-nml-utils>=3.0",
+    # Embeddings (CLAP via transformers)
+    "transformers>=4.40",
+
+    # OSC bridge to Ableton Live (AbletonOSC plugin)
+    "python-osc>=1.8",
+
+    # Companion-app backend
+    # FastAPI is pinned to match spotdl 4.4's range (<0.104, >=0.103). When spotdl
+    # bumps its constraint, we can move forward.
+    "fastapi>=0.103,<0.104",
+    "uvicorn>=0.23,<0.24",
+    "websockets>=12.0",
 
     # Utilities
     "tqdm>=4.65",
     "watchdog>=3.0",
     "numpy>=1.24",
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
@@ -49,12 +61,9 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.1",
     "mypy>=1.5",
-]
-llm = [
-    # LLM augmentation (Qwen2-Audio)
-    "transformers>=4.40",
-    "accelerate>=0.27",
-    "bitsandbytes>=0.42",  # For quantization (optional on Mac, needed for 4-bit)
+    # FastAPI 0.103 ships with Starlette 0.27, whose TestClient still uses the
+    # legacy ``httpx.Client(app=...)`` constructor removed in httpx 0.28.
+    "httpx>=0.27,<0.28",
 ]
 
 [project.scripts]
@@ -79,3 +88,6 @@ ignore = ["E501"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

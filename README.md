@@ -1,239 +1,126 @@
-# Dance - DJ Track Analysis Pipeline
+# Dance
 
-Automated cue points, energy tagging, and Traktor integration for house/techno DJs.
+Stem-performance brain for **Ableton Live**.
 
-**Spotify playlist → downloaded → analyzed → Traktor-ready in one pipeline**
+Spotify playlist → analyzed tracks with **stems, cues, loops, tags, and graph edges**, ready to consume by Ableton (manual stem loading in v1) and a companion React app (in `companion-app/`) for live recommendations during stem-mixing sets.
 
-## Quick Start
-
-```bash
-# Install
-pip install -e .
-
-# Configure Spotify playlist
-dance config --spotify-playlist "https://open.spotify.com/playlist/YOUR_PLAYLIST"
-
-# Run full pipeline
-dance run --once
-```
-
-## Features
-
-- **Spotify-first workflow**: Add tracks to playlist → they appear in Traktor
-- **Energy scoring (1-10)**: Objective metric for set building
-- **Auto cue points**: Color-coded at phrase boundaries (intro, drop, breakdown, outro)
-- **Camelot key detection**: For harmonic mixing
-- **MPS-accelerated stems**: Fast Demucs separation on Apple Silicon
-- **LLM audio understanding**: Rich tagging via Qwen2-Audio (optional)
-
-## Pipeline Stages
-
-```
-INGEST → ANALYZE → SEPARATE → LLM AUGMENT → DETECT CUES → EXPORT
-           ↓          ↓            ↓              ↓           ↓
-        Essentia   Demucs    Qwen2-Audio    Phrase-snap   Traktor
-        BPM/Key    Stems     Genre/Mood     Cue points    NML
-```
-
-## Commands
-
-```bash
-# Show current configuration
-dance config --show
-
-# Sync from Spotify (download new tracks)
-dance sync
-
-# Process tracks (analyze, separate, detect cues)
-dance process
-
-# Process without stems or LLM (faster)
-dance process --skip-stems --skip-llm
-
-# Export to Traktor
-dance export
-
-# Full pipeline in daemon mode (continuous sync)
-dance run
-
-# Show pipeline status
-dance status
-
-# List tracks with filters
-dance list --energy 8 --bpm-range 125-130 --key 8A
-```
-
-## LLM Augmentation (Optional)
-
-Dance can use [Qwen2-Audio](https://github.com/QwenLM/Qwen2-Audio) to add rich metadata:
-
-- **Subgenre classification**: tech house, melodic techno, progressive house, etc.
-- **Mood tags**: dark, driving, hypnotic, uplifting, groovy
-- **Notable elements**: acid line, vocal chops, rolling bassline
-- **DJ notes**: "Good peak-time track", "Long intro for mixing"
-- **Contextual cue names**: "Drop 1 - Big acid synth" instead of just "Drop 1"
-- **Quality validation**: Verify BPM/key detection accuracy
-
-### Install LLM Dependencies
-
-```bash
-pip install -e ".[llm]"
-```
-
-### Hardware Requirements
-
-| Mac | Memory | Quantization | Time/Track |
-|-----|--------|--------------|------------|
-| M1 Pro | 16GB | 4-bit | ~12-15 sec |
-| M1/M2 Max | 32GB | 8-bit or none | ~8-10 sec |
-| M3 Max/Ultra | 48GB+ | none | ~3-5 sec |
-
-### LLM Commands
-
-```bash
-# Check LLM status and GPU info
-dance llm-status
-
-# Analyze specific track with LLM
-dance llm-analyze --track-id 123
-
-# Re-analyze completed tracks
-dance llm-analyze --reanalyze --limit 10
-
-# Disable LLM (environment variable)
-export DANCE_SKIP_LLM=true
-```
-
-### Traktor Export with LLM
-
-When LLM is enabled, tracks export with enhanced metadata:
-
-**Comments field:**
-```
-[Tech House] dark, driving | Peak-time banger | E8 128bpm 8A
-```
-
-**Cue point names:**
-- `Intro - Minimal kick pattern`
-- `Drop 1 - Big acid synth`
-- `Breakdown - Vocal chop loop`
-- `Outro - Filter sweep out`
-
-## Configuration
-
-Settings are loaded from environment variables or `~/.dance/.env`:
-
-```bash
-# Directories
-DANCE_LIBRARY_DIR=~/Music/DJ/library
-DANCE_STEMS_DIR=~/Music/DJ/stems
-DANCE_DATA_DIR=~/.dance
-
-# Traktor (auto-detected if not set)
-DANCE_TRAKTOR_COLLECTION_PATH=~/Documents/Native Instruments/Traktor Pro 4/collection.nml
-
-# Processing
-DANCE_SKIP_STEMS=false
-DANCE_SKIP_LLM=false
-
-# LLM Configuration
-DANCE_LLM_MODEL=Qwen/Qwen2-Audio-7B-Instruct
-DANCE_LLM_DEVICE=auto  # auto, mps, cuda, cpu
-DANCE_LLM_QUANTIZE=4bit  # 4bit, 8bit, or none
-
-# Daemon mode
-DANCE_SYNC_INTERVAL_MINUTES=30
-```
-
-## Database
-
-Tracks are stored in SQLite with content-based deduplication (SHA256 hash). The database includes:
-
-- Track metadata (artist, title, file path)
-- Analysis results (BPM, key, energy, mood)
-- LLM augmentation (subgenre, tags, cue contexts)
-- Beat grid and phrase boundaries
-- Cue points with colors and names
-- Stem file paths
+The repo has three pieces:
+1. **Python pipeline** (`src/dance/`) — the brain. Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
+2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST over the SQLite DB, plus a WebSocket for live Ableton state and an OSC passthrough for clip launching / transport.
+3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Glanceable iPad-landscape UI for mixing live: Now Playing, Up Next (seeded recommendations), Library, Session History.
 
 ## Architecture
 
 ```
-src/dance/
-├── cli.py              # Click CLI commands
-├── config.py           # Pydantic settings
-├── core/
-│   └── database.py     # SQLAlchemy models
-├── pipeline/
-│   ├── orchestrator.py # Pipeline coordinator
-│   └── stages/
-│       ├── ingest.py   # File scanning
-│       ├── analyze.py  # Essentia analysis
-│       ├── separate.py # Demucs stems
-│       ├── llm_augment.py  # Qwen2-Audio
-│       └── detect_cues.py  # Cue placement
-├── llm/
-│   ├── qwen_audio.py   # Model wrapper
-│   └── prompts.py      # Prompt templates
-├── spotify/
-│   └── downloader.py   # spotDL wrapper
-└── export/
-    └── traktor.py      # NML file export
+Spotify playlist
+      ↓
+   ingest (file scan, hash, metadata)
+      ↓
+   analyze (Essentia/librosa: BPM, key, energy, mood)
+      ↓
+   separate (Demucs: drums, bass, vocals, other)
+      ↓
+   analyze_stems (per-stem RMS, presence, BPM, pitch, kick density)
+      ↓
+   detect_regions (sections + cue points + loop candidates, per track and per stem)
+      ↓
+   embed (CLAP embeddings for full mix + each stem)
+      ↓
+   build_graph (track-to-track edges: harmonic, tempo, embedding-neighbor, tag-overlap)
+      ↓
+   SQLite DB (consumed by companion app + Ableton via AbletonOSC)
 ```
 
-## Spotify Setup
+Each stage is an independent `Stage` object registered with the dispatcher. Stages are state-driven — a stage runs on tracks whose `state` matches its `input_state`. No central orchestrator, no hardcoded order.
 
-By default, spotDL uses shared API credentials that can get rate-limited. For reliable downloads, set up your own credentials:
+## Install
 
-### Option 1: Your Own API Credentials (Recommended)
-
-1. Go to https://developer.spotify.com/dashboard
-2. Create an app to get your `client_id` and `client_secret`
-3. Update `~/.spotdl/config.json`:
-
-```json
-{
-    "client_id": "YOUR_CLIENT_ID",
-    "client_secret": "YOUR_CLIENT_SECRET"
-}
+Backend:
+```bash
+pip install -e ".[dev]"
 ```
 
-### Option 2: OAuth User Auth
+Companion app:
+```bash
+cd companion-app && npm install
+```
+
+## Quick start — pipeline
 
 ```bash
-spotdl --user-auth
+dance config --spotify-playlist "https://open.spotify.com/playlist/<id>"
+dance run --once          # sync + process
+dance build-graph         # build recommendation edges
 ```
 
-This opens a browser to log in with your Spotify account and uses your personal auth token.
+## Quick start — companion app
 
-## Dependencies
+Two processes:
 
-Core:
-- `essentia` - Audio analysis (BPM, key, energy)
-- `demucs` - Stem separation
-- `librosa` - Audio loading (fallback)
-- `spotdl` - Spotify downloads
-- `traktor-nml-utils` - Traktor integration
+```bash
+# Terminal 1: backend
+uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
 
-Optional (LLM):
-- `transformers` - Hugging Face models
-- `accelerate` - Model optimization
-- `bitsandbytes` - Quantization
+# Terminal 2: React UI
+cd companion-app && npm run dev   # http://localhost:5173
+```
+
+Open `http://localhost:5173` on an iPad (landscape) or a desktop browser. Ableton state is pushed over the WebSocket — install AbletonOSC first (see [docs/abletonosc_setup.md](docs/abletonosc_setup.md)).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `dance config --show` | Show current configuration |
+| `dance sync` | Download tracks via spotDL |
+| `dance process` | Run pipeline on pending tracks |
+| `dance list` | Browse tracks with filters |
+| `dance run --once` | Sync + process, one pass |
+| `dance run` | Daemon mode |
+| `dance status` | Pipeline state counts |
+
+## Configuration
+
+Set via `~/.dance/.env` or environment variables (prefix `DANCE_`):
+
+```bash
+DANCE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/...
+DANCE_LIBRARY_DIR=~/Music/DJ/library
+DANCE_STEMS_DIR=~/Music/DJ/stems
+DANCE_DATA_DIR=~/.dance
+DANCE_SKIP_STEMS=false
+DANCE_SKIP_EMBEDDINGS=false
+DANCE_CLAP_MODEL=laion/clap-htsat-unfused
+DANCE_DEMUCS_MODEL=htdemucs_ft
+```
+
+## Project layout
+
+```
+src/dance/
+├── cli.py                  Click commands
+├── config.py               Pydantic settings
+├── core/
+│   └── database.py         SQLAlchemy models
+├── pipeline/
+│   ├── dispatcher.py       Stage registry + runner
+│   ├── stage.py            Stage protocol
+│   ├── stages/             One module per stage (ingest, analyze, separate, ...)
+│   └── utils/              Beat/phrase utilities, Camelot wheel
+├── spotify/
+│   └── downloader.py       spotDL wrapper
+├── recommender/
+│   └── graph_builder.py    Builds track_edges; exposes recommend()
+└── alembic/                Schema migrations
+```
 
 ## Development
 
 ```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Type checking
-mypy src/dance
-
-# Linting
+pytest                  # tests (uses synthetic audio fixtures)
 ruff check src/dance
+mypy src/dance
+alembic upgrade head    # apply migrations
 ```
 
 ## License

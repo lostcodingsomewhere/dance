@@ -54,3 +54,17 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+
+# Claude Code local settings
+.claude/
+
+# Companion app (Node)
+companion-app/node_modules/
+companion-app/dist/
+companion-app/tsconfig.tsbuildinfo
+companion-app/.vite/
+
+# Model weight downloads (HF / Demucs caches live in ~/.cache, never commit)
+*.safetensors
+*.bin
+*.ckpt

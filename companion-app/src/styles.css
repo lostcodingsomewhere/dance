@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --camelot-1: #5dd9c1; /* Ab minor */
+  --camelot-2: #4ecbb7;
+  --camelot-3: #4cb1d8;
+  --camelot-4: #5b8ee0;
+  --camelot-5: #7c70e5;
+  --camelot-6: #a05de0;
+  --camelot-7: #c850c0;
+  --camelot-8: #e35bb1;
+  --camelot-9: #e86b7c;
+  --camelot-10: #e88c5b;
+  --camelot-11: #e8b94d;
+  --camelot-12: #c8d44d;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+/* Bigger thumbs for iPad */
+button,
+[role="button"] {
+  touch-action: manipulation;
+}
