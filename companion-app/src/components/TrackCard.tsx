@@ -8,6 +8,7 @@ export interface TrackCardData {
   bpm: number | null | undefined;
   key_camelot: string | null | undefined;
   floor_energy: number | null | undefined;
+  tags?: string[];
   score?: number | null;
 }
 
@@ -56,6 +57,18 @@ export function TrackCard({
             </span>
           )}
         </div>
+        {track.tags && track.tags.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {track.tags.slice(0, 8).map((t) => (
+              <span
+                key={t}
+                className="text-[11px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       {actions ? (
         <div className="flex items-center gap-2 shrink-0">{actions}</div>

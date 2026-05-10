@@ -35,8 +35,15 @@ dependencies = [
     "demucs>=4.0",
     "torch>=2.0",
 
-    # Embeddings (CLAP via transformers)
+    # Embeddings (CLAP via transformers). Same transformers install covers
+    # the Qwen2-Audio model used by the optional deep-tagger mode.
     "transformers>=4.40",
+
+    # 4-bit quantization for Qwen2-Audio on memory-constrained Macs.
+    # Optional — Qwen runs at full/half precision without it on machines
+    # with enough RAM.
+    "bitsandbytes>=0.42; platform_system != 'Darwin'",
+    "accelerate>=0.27",
 
     # OSC bridge to Ableton Live (AbletonOSC plugin)
     "python-osc>=1.8",

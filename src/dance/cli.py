@@ -281,6 +281,95 @@ def build_graph(ctx: click.Context, track_id: tuple[int, ...]) -> None:
 
 
 @main.command()
+@click.option("--track-id", "-t", type=int, help="Tag a single track")
+@click.option("--limit", "-n", type=int, default=None, help="Max tracks to tag")
+@click.option("--retag", is_flag=True, help="Re-tag tracks that already have tags from this mode")
+@click.option(
+    "--deep",
+    is_flag=True,
+    help="Use the Qwen2-Audio generative tagger (slow, ~10-30 s/track, ~8 GB weights) "
+    "instead of the default CLAP zero-shot tagger.",
+)
+@click.pass_context
+def tag(
+    ctx: click.Context,
+    track_id: Optional[int],
+    limit: Optional[int],
+    retag: bool,
+    deep: bool,
+) -> None:
+    """Run the local tagger over COMPLETE tracks.
+
+    Two modes:
+      * default — CLAP zero-shot (fast, ~50 ms/track, controlled vocabulary)
+      * --deep  — Qwen2-Audio (slow, generative, free-form dj_notes)
+
+    Both run locally — no API keys, no cloud.
+    """
+    settings: Settings = ctx.obj["settings"]
+    session = get_session(settings.db_url)
+
+    try:
+        from dance.core.database import TagSource, TrackTag
+        from dance.llm import ClapZeroShotTagger, Qwen2AudioTagger
+
+        if deep:
+            if not settings.deep_tagger_enabled:
+                console.print(
+                    "[yellow]Deep tagger disabled. Set DANCE_DEEP_TAGGER_ENABLED=true.[/yellow]"
+                )
+                return
+            tagger = Qwen2AudioTagger(settings)
+            mode_label = f"Qwen2-Audio ({settings.deep_tagger_model})"
+            src_value = TagSource.LLM.value
+        else:
+            if not settings.tagger_enabled:
+                console.print("[yellow]Tagger disabled in settings[/yellow]")
+                return
+            tagger = ClapZeroShotTagger(settings)
+            mode_label = f"CLAP zero-shot ({settings.clap_model})"
+            src_value = TagSource.INFERRED.value
+
+        q = session.query(Track).filter(Track.state == TrackState.COMPLETE.value)
+        if track_id is not None:
+            q = q.filter(Track.id == track_id)
+        elif not retag:
+            # Skip tracks that already have tags FROM THIS SOURCE.
+            already = (
+                session.query(TrackTag.track_id)
+                .filter(TrackTag.source == src_value)
+                .distinct()
+                .subquery()
+            )
+            q = q.filter(Track.id.notin_(already))
+        if limit is not None:
+            q = q.limit(limit)
+        targets = q.all()
+
+        if not targets:
+            console.print("[yellow]No tracks to tag[/yellow]")
+            return
+
+        console.print(f"[cyan]Tagging {len(targets)} track(s) via {mode_label}...[/cyan]")
+        ok = 0
+        errs = 0
+        for t in targets:
+            try:
+                res = tagger.tag_track(session, t)
+                tags = [v for _, v in res.all_tags()]
+                console.print(
+                    f"  [green]✓[/green] {t.title or t.file_name}: {', '.join(tags[:6])}"
+                )
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"  [red]✗[/red] {t.title or t.file_name}: {exc}")
+                errs += 1
+        console.print(f"\n[green]Tagged: {ok}[/green]  [red]Errors: {errs}[/red]")
+    finally:
+        session.close()
+
+
+@main.command()
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show pipeline state counts."""

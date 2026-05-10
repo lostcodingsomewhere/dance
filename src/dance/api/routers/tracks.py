@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from dance.api.deps import get_session, track_to_out
+from dance.api.deps import get_session, get_settings, track_to_out
 from dance.api.schemas import RegionOut, StemFileOut, TrackOut
+from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
     Region,
     StemFile,
     Track,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
 
@@ -80,6 +85,49 @@ def list_regions(
     if stem_file_id is not None:
         q = q.filter(Region.stem_file_id == stem_file_id)
     return q.order_by(Region.position_ms).all()
+
+
+@router.post("/{track_id}/tag", response_model=TrackOut)
+def tag_track(
+    track_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    deep: bool = Query(False, description="Use the Qwen2-Audio deep tagger (slow)"),
+) -> dict:
+    """Run the local tagger on a single track.
+
+    Default mode (``deep=false``) uses CLAP zero-shot: ranks a controlled
+    vocabulary against the track's audio embedding. Fast, no extra weights.
+
+    Deep mode (``deep=true``) uses Qwen2-Audio: listens to the audio and
+    generates free-form tags. Slow, needs ~8 GB of model weights downloaded
+    the first time. Requires ``deep_tagger_enabled = true`` in settings.
+
+    Replaces this track's existing tags from the chosen tagger's source
+    (``inferred`` for CLAP, ``llm`` for Qwen). Manual tags are preserved.
+    """
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+
+    from dance.llm import ClapZeroShotTagger, Qwen2AudioTagger
+
+    if deep:
+        if not settings.deep_tagger_enabled:
+            raise HTTPException(status_code=503, detail="deep tagger disabled in settings")
+        tagger = Qwen2AudioTagger(settings)
+    else:
+        if not settings.tagger_enabled:
+            raise HTTPException(status_code=503, detail="tagger disabled in settings")
+        tagger = ClapZeroShotTagger(settings)
+
+    try:
+        tagger.tag_track(session, track)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Tagger crashed on track %s", track_id)
+        raise HTTPException(status_code=502, detail=f"tagger failed: {exc}") from exc
+
+    return track_to_out(session, track)
 
 
 @router.get("/{track_id}/stems", response_model=list[StemFileOut])

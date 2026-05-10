@@ -653,3 +653,85 @@ def test_reveal_success_invokes_command(client, tmp_path, app, monkeypatch):
     assert r.json()["ok"] is True
     assert len(invocations) == 1
     assert str(target) in " ".join(invocations[0])
+
+
+# ---------------------------------------------------------------------------
+# Tag endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_tag_endpoint_zeroshot(client, app, fake_bridge):
+    """POST /tracks/{id}/tag (default mode) runs CLAP zero-shot."""
+    import numpy as np
+
+    from dance.core.database import TrackEmbedding
+    from dance.core.serialization import encode_embedding
+
+    settings = get_settings()
+    session = app.state.session_factory()
+    try:
+        t = Track(
+            file_hash="9" * 64, file_path="/z", file_name="z.wav",
+            file_size_bytes=1, title="z", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        session.add(t)
+        session.flush()
+        session.add(
+            TrackEmbedding(
+                track_id=t.id, stem_file_id=None,
+                model=settings.clap_model, model_version=None, dim=2,
+                embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
+                created_at=now_utc(),
+            )
+        )
+        session.commit()
+        track_id = t.id
+    finally:
+        session.close()
+
+    # Stub the CLAP tagger's text encoder so we don't load real CLAP.
+    import dance.llm.tagger as tagger_mod
+
+    original = tagger_mod.ClapZeroShotTagger._ensure_encoder
+
+    def stub_ensure(self):
+        self._text_encoder = lambda _l: np.array([1.0, 0.0], dtype=np.float32)
+        return self._text_encoder
+
+    tagger_mod.ClapZeroShotTagger._ensure_encoder = stub_ensure
+    try:
+        r = client.post(f"/api/v1/tracks/{track_id}/tag")
+    finally:
+        tagger_mod.ClapZeroShotTagger._ensure_encoder = original
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == track_id
+    # Tags should be populated.
+    assert isinstance(body["tags"], list)
+    assert len(body["tags"]) > 0
+
+
+def test_tag_endpoint_404(client):
+    r = client.post("/api/v1/tracks/99999/tag")
+    assert r.status_code == 404
+
+
+def test_tag_endpoint_deep_disabled_by_default(client, app, make_track):
+    """Deep mode is opt-in; requesting it when disabled returns 503."""
+    session = app.state.session_factory()
+    try:
+        t = Track(
+            file_hash="8" * 64, file_path="/d", file_name="d.wav",
+            file_size_bytes=1, title="d", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        session.add(t)
+        session.commit()
+        track_id = t.id
+    finally:
+        session.close()
+
+    r = client.post(f"/api/v1/tracks/{track_id}/tag?deep=true")
+    assert r.status_code == 503

@@ -201,6 +201,7 @@ export function Library() {
                   bpm: t.analysis?.bpm,
                   key_camelot: t.analysis?.key_camelot,
                   floor_energy: t.analysis?.floor_energy,
+                  tags: t.tags,
                 }}
                 actions={
                   <>
