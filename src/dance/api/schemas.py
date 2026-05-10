@@ -105,6 +105,7 @@ class RecommendationOut(_Base):
     reasons: list[dict[str, Any]] = Field(default_factory=list)
     title: str | None = None
     artist: str | None = None
+    file_path: str | None = None
     bpm: float | None = None
     key_camelot: str | None = None
     floor_energy: int | None = None
@@ -115,6 +116,14 @@ class RecommendRequest(BaseModel):
     k: int = 10
     kinds: list[str] | None = None
     weights: dict[str, float] | None = None
+    exclude: list[int] | None = None
+
+
+class TextRecommendRequest(BaseModel):
+    """Free-text query, ranked via CLAP audio↔text joint embedding."""
+
+    query: str
+    k: int = 10
     exclude: list[int] | None = None
 
 
@@ -186,6 +195,7 @@ __all__ = [
     "FireClipRequest",
     "RecommendRequest",
     "RecommendationOut",
+    "TextRecommendRequest",
     "RegionOut",
     "SessionCreateRequest",
     "SessionOut",

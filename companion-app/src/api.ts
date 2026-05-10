@@ -92,6 +92,17 @@ export function recommendBySeed(
   return request<Recommendation[]>(`/recommend/by-seed/${id}?k=${k}`);
 }
 
+export function recommendByText(
+  query: string,
+  k = 20,
+  exclude?: number[],
+): Promise<Recommendation[]> {
+  return request<Recommendation[]>("/recommend/text", {
+    method: "POST",
+    body: JSON.stringify({ query, k, exclude }),
+  });
+}
+
 // Sessions ------------------------------------------------------------------
 
 export function createSession(name?: string): Promise<DjSession> {
@@ -164,4 +175,33 @@ export function abletonSetVolume(
 
 export function abletonGetState(): Promise<AbletonState> {
   return request<AbletonState>("/ableton/state");
+}
+
+// Files --------------------------------------------------------------------
+
+export function revealPath(path: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>("/files/reveal", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Copy text to the clipboard. Works in modern browsers + Safari on iPad. */
+export async function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  // Fallback for older browsers / non-secure contexts.
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.style.position = "fixed";
+  el.style.opacity = "0";
+  document.body.appendChild(el);
+  el.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(el);
+  }
 }

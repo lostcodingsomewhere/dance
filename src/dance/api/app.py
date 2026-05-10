@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import sessionmaker
 
-from dance.api.routers import ableton, recommend, sessions, tracks, ws
+from dance.api.routers import ableton, files, recommend, sessions, tracks, ws
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
 from dance.osc.bridge import AbletonBridge, AbletonState
@@ -74,6 +74,8 @@ def create_app(
     app.state.bridge = bridge
     app.state.session_factory = session_factory
     app.state.ws_manager = ws_manager
+    # CLAP text encoder is lazy — first call to /recommend/text loads the model.
+    app.state.embedding_stage = None
 
     app.add_middleware(
         CORSMiddleware,
@@ -92,6 +94,7 @@ def create_app(
     app.include_router(recommend.router, prefix=API_PREFIX)
     app.include_router(sessions.router, prefix=API_PREFIX)
     app.include_router(ableton.router, prefix=API_PREFIX)
+    app.include_router(files.router, prefix=API_PREFIX)
     # WebSocket is unversioned at the moment — the spec says /ws.
     app.include_router(ws.router)
 

@@ -473,3 +473,183 @@ def test_websocket_initial_and_broadcast(
         update = ws.receive_json()
         assert update["tempo"] == 130.0
         assert update["is_playing"] is True
+
+
+# ---------------------------------------------------------------------------
+# Text recommendation endpoint (CLAP audio↔text)
+# ---------------------------------------------------------------------------
+
+
+def _stub_text_encoder_app(app, embedding_vec):
+    """Replace the CLAP-loading hook with a stub returning a fixed vector."""
+    import numpy as np
+
+    class _Stub:
+        def encode_text(self, _query: str):
+            return np.asarray(embedding_vec, dtype=np.float32)
+
+    app.state.embedding_stage = _Stub()
+
+
+def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
+    """POST /recommend/text returns tracks ordered by CLAP cosine similarity."""
+    import numpy as np
+
+    from dance.core.serialization import encode_embedding
+
+    # Use the same settings the app does so the model_name filter matches.
+    settings = get_settings()
+    model = settings.clap_model
+
+    session = app.state.session_factory()
+    try:
+        near = Track(
+            file_hash="1" * 64, file_path="/a", file_name="a.wav",
+            file_size_bytes=1, title="near", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        far = Track(
+            file_hash="2" * 64, file_path="/b", file_name="b.wav",
+            file_size_bytes=1, title="far", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        session.add_all([near, far])
+        session.flush()
+
+        # `near` aligned to [1,0,0], `far` aligned to [0,1,0].
+        from dance.core.database import TrackEmbedding
+
+        session.add(
+            TrackEmbedding(
+                track_id=near.id, stem_file_id=None,
+                model=model, model_version=None, dim=3,
+                embedding=encode_embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+                created_at=now_utc(),
+            )
+        )
+        session.add(
+            TrackEmbedding(
+                track_id=far.id, stem_file_id=None,
+                model=model, model_version=None, dim=3,
+                embedding=encode_embedding(np.array([0.0, 1.0, 0.0], dtype=np.float32)),
+                created_at=now_utc(),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    _stub_text_encoder_app(app, [1.0, 0.0, 0.0])
+
+    r = client.post(
+        "/api/v1/recommend/text",
+        json={"query": "punchy techy with vocals", "k": 5},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert [item["title"] for item in body] == ["near", "far"]
+    assert body[0]["score"] > body[1]["score"]
+    assert body[0]["reasons"][0]["kind"] == "text_query"
+
+
+def test_recommend_by_text_empty_query_rejected(client, app, fake_bridge):
+    _stub_text_encoder_app(app, [1.0, 0.0])
+    r = client.post("/api/v1/recommend/text", json={"query": "   ", "k": 5})
+    assert r.status_code == 400
+
+
+def test_recommend_by_text_exclude(client, app, fake_bridge):
+    import numpy as np
+
+    from dance.core.database import TrackEmbedding
+    from dance.core.serialization import encode_embedding
+
+    settings = get_settings()
+    session = app.state.session_factory()
+    try:
+        a = Track(
+            file_hash="3" * 64, file_path="/x", file_name="x.wav",
+            file_size_bytes=1, title="a", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        b = Track(
+            file_hash="4" * 64, file_path="/y", file_name="y.wav",
+            file_size_bytes=1, title="b", state="complete",
+            created_at=now_utc(), updated_at=now_utc(),
+        )
+        session.add_all([a, b])
+        session.flush()
+        for tid in (a.id, b.id):
+            session.add(
+                TrackEmbedding(
+                    track_id=tid, stem_file_id=None,
+                    model=settings.clap_model, model_version=None, dim=2,
+                    embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
+                    created_at=now_utc(),
+                )
+            )
+        session.commit()
+        excluded_id = a.id
+    finally:
+        session.close()
+
+    _stub_text_encoder_app(app, [1.0, 0.0])
+    r = client.post(
+        "/api/v1/recommend/text",
+        json={"query": "anything", "k": 5, "exclude": [excluded_id]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert excluded_id not in [item["track_id"] for item in body]
+
+
+# ---------------------------------------------------------------------------
+# Reveal-in-Finder endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_reveal_requires_path(client):
+    r = client.post("/api/v1/files/reveal", json={})
+    assert r.status_code == 400
+
+
+def test_reveal_404_when_missing(client, tmp_path, app):
+    app.state.settings.library_dir = tmp_path / "lib"
+    app.state.settings.stems_dir = tmp_path / "stems"
+    (tmp_path / "lib").mkdir()
+    bogus = tmp_path / "lib" / "does_not_exist.wav"
+    r = client.post("/api/v1/files/reveal", json={"path": str(bogus)})
+    assert r.status_code == 404
+
+
+def test_reveal_403_when_outside_allowed_dirs(client, tmp_path, app):
+    app.state.settings.library_dir = tmp_path / "lib"
+    app.state.settings.stems_dir = tmp_path / "stems"
+    (tmp_path / "lib").mkdir()
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"data")
+    r = client.post("/api/v1/files/reveal", json={"path": str(outside)})
+    assert r.status_code == 403
+
+
+def test_reveal_success_invokes_command(client, tmp_path, app, monkeypatch):
+    app.state.settings.library_dir = tmp_path / "lib"
+    app.state.settings.stems_dir = tmp_path / "stems"
+    (tmp_path / "lib").mkdir()
+    target = tmp_path / "lib" / "track.wav"
+    target.write_bytes(b"data")
+
+    invocations: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, cmd, **_kwargs):
+            invocations.append(list(cmd))
+
+    import dance.api.routers.files as files_mod
+    monkeypatch.setattr(files_mod.subprocess, "Popen", _FakePopen)
+
+    r = client.post("/api/v1/files/reveal", json={"path": str(target)})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert len(invocations) == 1
+    assert str(target) in " ".join(invocations[0])

@@ -15,10 +15,12 @@ export function TrackCard({
   track,
   actions,
   onClick,
+  badge,
 }: {
   track: TrackCardData;
   actions?: React.ReactNode;
   onClick?: () => void;
+  badge?: string;
 }) {
   return (
     <div
@@ -29,8 +31,15 @@ export function TrackCard({
     >
       <KeyBadge keyCamelot={track.key_camelot ?? null} size="md" />
       <div className="flex-1 min-w-0">
-        <div className="text-lg font-semibold text-neutral-50 truncate">
-          {track.title ?? `Track #${track.id}`}
+        <div className="flex items-baseline gap-2">
+          <div className="text-lg font-semibold text-neutral-50 truncate">
+            {track.title ?? `Track #${track.id}`}
+          </div>
+          {badge && (
+            <span className="text-xs font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded shrink-0">
+              {badge}
+            </span>
+          )}
         </div>
         <div className="text-sm text-neutral-400 truncate">
           {track.artist ?? "Unknown artist"}

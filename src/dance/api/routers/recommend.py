@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from dance.api.deps import fullmix_analysis, get_session
-from dance.api.schemas import RecommendationOut, RecommendRequest
+from dance.api.deps import fullmix_analysis, get_session, get_settings
+from dance.api.schemas import (
+    RecommendationOut,
+    RecommendRequest,
+    TextRecommendRequest,
+)
+from dance.config import Settings
 from dance.core.database import EdgeKind, Track
 from dance.recommender.recommender import Recommender
+
+logger = logging.getLogger(__name__)
+_clap_lock = threading.Lock()
 
 router = APIRouter(prefix="/recommend", tags=["recommend"])
 
@@ -59,6 +70,7 @@ def _run_recommend(
                 "reasons": r.reasons,
                 "title": track.title if track else None,
                 "artist": track.artist if track else None,
+                "file_path": track.file_path if track else None,
                 "bpm": analysis.bpm if analysis else None,
                 "key_camelot": analysis.key_camelot if analysis else None,
                 "floor_energy": analysis.floor_energy if analysis else None,
@@ -96,3 +108,69 @@ def recommend_by_seed(
         weights=None,
         exclude=None,
     )
+
+
+def _get_text_encoder(request: Request, settings: Settings):
+    """Lazy-load the EmbeddingStage on first text query; reuse it after."""
+    stage = request.app.state.embedding_stage
+    if stage is None:
+        with _clap_lock:
+            stage = request.app.state.embedding_stage
+            if stage is None:
+                from dance.pipeline.stages.embed import EmbeddingStage
+
+                stage = EmbeddingStage()
+                try:
+                    stage._ensure_model(settings)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("CLAP load failed")
+                    raise HTTPException(
+                        status_code=503, detail=f"CLAP model unavailable: {exc}"
+                    ) from exc
+                request.app.state.embedding_stage = stage
+    return stage.encode_text
+
+
+@router.post("/text", response_model=list[RecommendationOut])
+def recommend_by_text(
+    body: TextRecommendRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    """Rank tracks by CLAP cosine similarity to a free-text query.
+
+    Examples: "punchy techy with vocals", "deep rolling bassline",
+    "afro-house drums", "ambient pad intro".
+    """
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="query must be non-empty")
+
+    encoder = _get_text_encoder(request, settings)
+    rec = Recommender(session)
+    results = rec.recommend_by_text(
+        query=body.query,
+        text_encoder=encoder,
+        k=body.k,
+        model_name=settings.clap_model,
+        exclude=body.exclude,
+    )
+
+    out: list[dict] = []
+    for r in results:
+        track = session.get(Track, r.track_id)
+        analysis = fullmix_analysis(session, r.track_id)
+        out.append(
+            {
+                "track_id": r.track_id,
+                "score": r.score,
+                "reasons": r.reasons,
+                "title": track.title if track else None,
+                "artist": track.artist if track else None,
+                "file_path": track.file_path if track else None,
+                "bpm": analysis.bpm if analysis else None,
+                "key_camelot": analysis.key_camelot if analysis else None,
+                "floor_energy": analysis.floor_energy if analysis else None,
+            }
+        )
+    return out

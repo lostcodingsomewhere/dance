@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useMemo } from "react";
 import * as api from "../api";
+import { LoadActions } from "../components/LoadActions";
 import { TrackCard } from "../components/TrackCard";
 import { useRecommend } from "../hooks/useRecommend";
 import { useAddPlay, useCurrentSession } from "../hooks/useSession";
@@ -92,6 +93,7 @@ export function UpNext() {
             }}
             actions={
               <>
+                <LoadActions path={rec.file_path} />
                 <button
                   type="button"
                   onClick={() =>

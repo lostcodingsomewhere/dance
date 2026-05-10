@@ -122,6 +122,29 @@ class EmbeddingStage:
         audio, _ = librosa.load(str(path), sr=CLAP_SAMPLE_RATE, mono=True)
         return audio.astype(np.float32, copy=False)
 
+    def encode_text(self, text: str) -> np.ndarray:
+        """Embed a text query into the same 512-d space as audio embeddings.
+
+        CLAP is a joint audio/text model — text and audio embeddings live in
+        the same space, so cosine similarity between a text query and stored
+        audio embeddings ranks tracks by semantic match.
+        """
+        if self._model is None or self._processor is None:
+            raise RuntimeError("model not loaded — call _ensure_model first")
+
+        inputs = self._processor(text=[text], return_tensors="pt", padding=True)
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            features = self._model.get_text_features(**inputs)
+        if hasattr(features, "pooler_output"):
+            tensor = features.pooler_output
+        elif hasattr(features, "last_hidden_state"):
+            tensor = features.last_hidden_state.mean(dim=1)
+        else:
+            tensor = features
+        return tensor.cpu().numpy()[0].astype(np.float32, copy=False)
+
     # ------------------------------------------------------------------
 
     def process(self, session: Session, track: Track, settings: Settings) -> bool:

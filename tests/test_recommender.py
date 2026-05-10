@@ -656,3 +656,96 @@ def test_recommend_module_level_convenience(session, make_track, settings):
     out = recommend(session, [seed.id])
     assert isinstance(out[0], RecommendationResult)
     assert out[0].track_id == target.id
+
+
+# ---------------------------------------------------------------------------
+# recommend_by_text — CLAP text↔audio joint embedding
+# ---------------------------------------------------------------------------
+
+
+def _add_full_mix_embedding(session, track_id: int, vector: np.ndarray, model: str = "test-clap") -> None:
+    session.add(
+        TrackEmbedding(
+            track_id=track_id,
+            stem_file_id=None,
+            model=model,
+            model_version=None,
+            dim=int(vector.shape[0]),
+            embedding=encode_embedding(vector.astype(np.float32)),
+            created_at=now_utc(),
+        )
+    )
+
+
+def test_recommend_by_text_orders_by_cosine(session, make_track, settings):
+    """The track whose embedding is closest to the text query ranks first."""
+    near = make_track()
+    far = make_track()
+    other = make_track()
+
+    # Crafted vectors — `near` aligned with [1,0,0], `far` perpendicular,
+    # `other` somewhere in between.
+    _add_full_mix_embedding(session, near.id, np.array([1.0, 0.0, 0.0]))
+    _add_full_mix_embedding(session, far.id, np.array([0.0, 1.0, 0.0]))
+    _add_full_mix_embedding(session, other.id, np.array([0.7, 0.7, 0.0]))
+    session.commit()
+
+    def fake_encoder(q: str) -> np.ndarray:
+        assert q == "punchy techy with vocals"
+        return np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+    results = Recommender(session).recommend_by_text(
+        "punchy techy with vocals", text_encoder=fake_encoder, k=3
+    )
+
+    assert [r.track_id for r in results] == [near.id, other.id, far.id]
+    assert results[0].score > results[1].score > results[2].score
+    # `near` is exact match → cosine = 1.0
+    assert pytest.approx(results[0].score, abs=1e-5) == 1.0
+    # Reasons populated
+    assert results[0].reasons[0]["kind"] == "text_query"
+    assert results[0].reasons[0]["query"] == "punchy techy with vocals"
+
+
+def test_recommend_by_text_excludes_listed(session, make_track, settings):
+    a = make_track()
+    b = make_track()
+    _add_full_mix_embedding(session, a.id, np.array([1.0, 0.0]))
+    _add_full_mix_embedding(session, b.id, np.array([1.0, 0.0]))
+    session.commit()
+
+    out = Recommender(session).recommend_by_text(
+        "q", text_encoder=lambda _q: np.array([1.0, 0.0], dtype=np.float32),
+        exclude=[a.id],
+    )
+    assert [r.track_id for r in out] == [b.id]
+
+
+def test_recommend_by_text_filters_by_model(session, make_track, settings):
+    """Only embeddings matching the specified model are considered."""
+    a = make_track()
+    b = make_track()
+    _add_full_mix_embedding(session, a.id, np.array([1.0, 0.0]), model="model-A")
+    _add_full_mix_embedding(session, b.id, np.array([1.0, 0.0]), model="model-B")
+    session.commit()
+
+    out_a = Recommender(session).recommend_by_text(
+        "q", text_encoder=lambda _q: np.array([1.0, 0.0], dtype=np.float32),
+        model_name="model-A",
+    )
+    assert [r.track_id for r in out_a] == [a.id]
+
+
+def test_recommend_by_text_empty_query_returns_empty(session, make_track):
+    out = Recommender(session).recommend_by_text(
+        "  ", text_encoder=lambda _q: np.zeros(2, dtype=np.float32)
+    )
+    assert out == []
+
+
+def test_recommend_by_text_no_embeddings_returns_empty(session, make_track):
+    make_track()  # has no embedding rows
+    out = Recommender(session).recommend_by_text(
+        "q", text_encoder=lambda _q: np.array([1.0, 0.0], dtype=np.float32)
+    )
+    assert out == []

@@ -60,6 +60,7 @@ export interface Recommendation {
   reasons: { kind?: string; weight?: number; [k: string]: unknown }[];
   title: string | null;
   artist: string | null;
+  file_path: string | null;
   bpm: number | null;
   key_camelot: string | null;
   floor_energy: number | null;
