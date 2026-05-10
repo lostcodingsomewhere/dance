@@ -196,7 +196,7 @@ src/dance/
     utils/                shared (audio, db, device, beats, camelot)
   spotify/downloader.py
   recommender/
-  als/                    writer, generator, markers
+  als/                    writer, generator, markers, templates/blank_live12.xml
   osc/                    client, listener, bridge
   llm/                    tagger, qwen_audio, brief
   api/

@@ -80,7 +80,7 @@ If you actually want to silence it: `export NUMBA_DISABLE_JIT=1`, but you'll los
 
 ## Live "missing media" prompt when opening .als
 
-The generated `.als` references stems by **absolute path** (`src/dance/als/writer.py:121` — `_add_file_ref`). Live shows a "Missing Media" dialog if any of those paths don't resolve.
+The generated `.als` references stems by **absolute path** (`src/dance/als/writer.py` — `_add_file_ref`). Live shows a "Missing Media" dialog if any of those paths don't resolve.
 
 Causes:
 
@@ -98,21 +98,23 @@ gunzip -c "~/Music/Dance/Sets/Title - Artist.als" | grep -E '<Path Value=' | hea
 
 ## Live rejects the .als entirely
 
-If Live fails to load the Set (not "missing media" but a hard parse error), the `.als` schema in `src/dance/als/writer.py` is missing or mis-emitting something Live's current version requires.
+If Live fails to load the Set (not "missing media" but a hard parse error), `src/dance/als/writer.py` is mis-injecting into the template (`src/dance/als/templates/blank_live12.xml`).
 
 What to do:
 
-1. Capture the exact Live error message. It's usually unhelpful ("This file is not a valid Live Set") but sometimes includes a line number from Live's parser.
+1. Capture the exact Live error — Live 12 typically gives a line and column in the decompressed XML.
 2. Unzip and inspect:
    ```bash
    gunzip -c bad.als > bad.xml
-   xmllint --format bad.xml > bad-formatted.xml
    ```
-3. Generate a tiny Set from Live itself (one audio clip + tempo) and diff against ours:
+3. Read the indicated line; cross-check against the bundled template for what shape Live expects. Common gotchas:
+   - Class elements (e.g. `<TimeSignature>`, `<FollowAction>`) emitted as leaves with a `Value` attribute.
+   - Duplicate Pointee IDs after a deepcopy that wasn't renumbered (`_renumber_pointees` in `writer.py`).
+   - Tempo only written to `MainTrack/.../Tempo/Manual` — Live reads the `AutomationEnvelope FloatEvent` anchor in preference. Update both.
+4. If you upgraded Live and the bundled Live-12.4 template no longer loads, save a fresh blank Set as `Untitled.als` from your version, then:
    ```bash
-   diff <(xmllint --format good.xml) <(xmllint --format bad.xml) | head -200
+   gunzip -c ~/Desktop/Untitled.als > src/dance/als/templates/blank_live12.xml
    ```
-4. File the diff. The fix is almost always additive in `writer.py` — append the missing field, regenerate.
 
 Tests (`tests/test_als_generator.py`) only validate well-formedness and shape — they cannot assert "Live will accept this." Only Live can.
 

@@ -5,11 +5,15 @@ The ``.als`` format is gzipped, undocumented XML — we can validate
 running Live. So this file is rigorous about:
 
 * The output is a valid gzipped XML doc.
-* Top-level shape: Ableton root, LiveSet, 5 AudioTrack, 1 MasterTrack.
+* Top-level shape: Ableton root, LiveSet, 5 AudioTrack, 1 MainTrack.
 * Stem → AudioTrack mapping (drums clip lands on the drums track, etc.).
 * Locators match the Regions' positions and BPM-derived beats.
 * Track colors match the palette spec.
 * The clip's FileRef path matches the stem's stored path.
+
+The writer is template-based — it loads ``templates/blank_live12.xml``
+and injects our content — so the output retains all the Live-12
+boilerplate (Transport, GroovePool, ScaleInformation, etc.) verbatim.
 """
 
 from __future__ import annotations
@@ -251,12 +255,12 @@ def test_writer_emits_five_audio_tracks(tmp_path: Path):
     assert len(audio_tracks) == 5
 
 
-def test_writer_emits_one_master_track_with_correct_tempo(tmp_path: Path):
+def test_writer_emits_one_main_track_with_correct_tempo(tmp_path: Path):
     xml = build_live_set_xml(_build_minimal_spec(tmp_path, bpm=132.0))
     root = etree.fromstring(xml)
-    masters = root.findall("./LiveSet/MasterTrack")
-    assert len(masters) == 1
-    tempo_manual = root.find("./LiveSet/MasterTrack/DeviceChain/Mixer/Tempo/Manual")
+    mains = root.findall("./LiveSet/MainTrack")
+    assert len(mains) == 1
+    tempo_manual = root.find("./LiveSet/MainTrack/DeviceChain/Mixer/Tempo/Manual")
     assert tempo_manual is not None
     assert float(tempo_manual.get("Value")) == pytest.approx(132.0)
 
@@ -306,7 +310,7 @@ def test_writer_clip_references_actual_file_path(tmp_path: Path):
     # Path should equal the resolved drums.wav we wrote above.
     drums = root.find("./LiveSet/Tracks/AudioTrack")
     path_node = drums.find(
-        "./DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip/SampleRef/FileRef/Path"
+        "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
     )
     assert path_node is not None
     assert path_node.get("Value") == str((tmp_path / "drums.wav").resolve())
@@ -332,7 +336,7 @@ def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
     # Mix is last per STEM_ORDER.
     mix = audio_tracks[-1]
     disabled = mix.find(
-        "./DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip/Disabled"
+        "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
     )
     assert disabled is not None
     assert disabled.get("Value") == "true"
@@ -340,7 +344,7 @@ def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
     # The other stems should NOT be disabled.
     for t in audio_tracks[:-1]:
         d = t.find(
-            "./DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip/Disabled"
+            "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
         )
         assert d.get("Value") == "false"
 
@@ -383,8 +387,8 @@ def test_generator_structure_matches_spec(
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
     assert len(audio_tracks) == 5
 
-    # 1 MasterTrack with tempo == 128.0
-    tempo = root.find("./LiveSet/MasterTrack/DeviceChain/Mixer/Tempo/Manual")
+    # 1 MainTrack with tempo == 128.0
+    tempo = root.find("./LiveSet/MainTrack/DeviceChain/Mixer/Tempo/Manual")
     assert tempo is not None
     assert float(tempo.get("Value")) == pytest.approx(128.0)
 
@@ -408,7 +412,7 @@ def test_generator_stem_to_track_mapping(
     for kind in ("drums", "bass", "vocals", "other"):
         track_el = by_name[kind.capitalize()]
         path_el = track_el.find(
-            "./DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip/SampleRef/FileRef/Path"
+            "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
         )
         assert path_el is not None
         assert path_el.get("Value") == str(stem_paths[kind].resolve()), (
@@ -417,7 +421,7 @@ def test_generator_stem_to_track_mapping(
 
     # And mix references the original file.
     mix_path = by_name["Mix"].find(
-        "./DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip/SampleRef/FileRef/Path"
+        "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
     )
     assert mix_path.get("Value") == str(Path(track.file_path).resolve())
 

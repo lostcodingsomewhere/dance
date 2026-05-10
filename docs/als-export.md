@@ -26,31 +26,35 @@ The React UI's `LoadActions` component (`companion-app/src/components/LoadAction
 
 ## What the generated .als contains
 
-`src/dance/als/writer.py:344` (`build_live_set_xml`):
+`src/dance/als/writer.py` (`build_live_set_xml`):
 
 - **5 audio tracks**, in this canonical vertical order:
   - `Drums` — points at `<stems_dir>/<hash>/drums.wav`
   - `Bass` — `bass.wav`
   - `Vocals` — `vocals.wav`
   - `Other` — `other.wav`
-  - `Mix` — points at the original full-mix file, muted by default (`writer.py:186`)
-- **Master tempo** — set to the track's detected BPM (`audio_analysis.bpm`).
-- **4/4 time signature** — fixed (`writer.py:309`).
-- **Locators** — one per track-level `Region` row, named from `region.name` or auto-named (`Cue 1`, `Intro`, etc. — see `src/dance/als/markers.py:46`). Per-stem regions are dropped (Live's master timeline can't carry them).
+  - `Mix` — points at the original full-mix file, muted by default
+- **2 Return tracks** preserved from the template (A Reverb, B Delay) so sends are wired up.
+- **Master tempo** — set to the track's detected BPM (`audio_analysis.bpm`). Written to both `MainTrack/.../Tempo/Manual` *and* the master-tempo `AutomationEnvelope` anchor (the latter overrides Manual if you forget it).
+- **8 scenes**, with our AudioClip in scene 1 of each stem track. The remaining 7 slots are empty so you can drop in alternate loops / variations.
+- **WarpMarkers** — two per clip (start + end-of-stem), enough for Live to play the stem at its native tempo without re-warping.
+- **Locators** — one per track-level `Region` row, named from `region.name` or auto-named (`Cue 1`, `Intro`, etc. — see `src/dance/als/markers.py`). Per-stem regions are dropped (Live's master timeline can't carry them).
 
 ## Color palette
 
-`src/dance/als/writer.py:60` — Live's built-in palette indices (0-69):
+`src/dance/als/writer.py` — Live's built-in palette indices (0-69):
 
-| Kind   | Index | Color  |
-|--------|-------|--------|
-| drums  | 1     | red    |
-| bass   | 7     | orange |
-| vocals | 13    | yellow |
-| other  | 39    | blue   |
-| mix    | 25    | grey   |
+| Kind   | Index | Color (Live 12.4)  |
+|--------|-------|--------------------|
+| drums  | 1     | orange-red         |
+| bass   | 2     | brown / mustard    |
+| vocals | 4     | lime               |
+| other  | 10    | light blue         |
+| mix    | 13    | white              |
 
-These match Live's "Color" palette in Session view. The TrackCard in the React UI uses a different color scheme (`STEM_TRACK_COLORS` in `osc/bridge.py:206`) — that's for the live "Push to Live" path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
+Live's 70-color palette is 7 cols × 10 rows; the indices above were chosen empirically by generating Sets and reading off Live. Edit `STEM_COLOR_INDEX` to taste.
+
+The TrackCard in the React UI uses a different scheme (`STEM_TRACK_COLORS` in `osc/bridge.py`) — that's for the live "Push to Live" path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
 
 ## Output location
 
@@ -66,31 +70,43 @@ Custom `--out`:
 dance export-als 42 --out ~/Music/Dance/Sets/PeakTime.als
 ```
 
-`out_path` must resolve inside `als_output_dir` — otherwise `AlsOutsideDirError` (`src/dance/als/generator.py:46`) / 403 over the API. This is a hard safety guard so the API endpoint can't be tricked into writing anywhere on disk.
+`out_path` must resolve inside `als_output_dir` — otherwise `AlsOutsideDirError` (`src/dance/als/generator.py`) / 403 over the API. This is a hard safety guard so the API endpoint can't be tricked into writing anywhere on disk.
 
-## File format — honest disclaimer
+## How it's built — template injection
 
-The `.als` format is **gzipped XML with a schema Ableton does not publish**. The structure in `src/dance/als/writer.py` was reverse-engineered from publicly archived sample Sets and community parsers (e.g. `kiddikai/ableton-parser`). We target Live 11.x's schema (`ABLETON_ROOT_ATTRS` at `writer.py:50`); Live 12 reads it transparently.
+The `.als` format is **gzipped XML with a schema Ableton does not publish**. Writing one from scratch is not viable: a blank Live 12 Set is ~189 KB of XML with 570+ distinct element types (Transport, GroovePool, ScaleInformation, MainTrack mixer chain, AutomationEnvelopes, ContentLanes, ...). Live's loader checks hundreds of required fields and enforces invariants like "MainTrack ClipSlotList size == Scenes count".
 
-We deliberately emit a **minimal** Set:
-- Root `<Ableton>` element, `<LiveSet>` wrapper.
-- One `<AudioTrack>` per stem, each with `<Name>`, `<ColorIndex>`, and a `<DeviceChain><MainSequencer><Sample><SampleRef><FileRef>` pointing at the absolute path on disk.
-- `<MasterTrack>` with a Manual Tempo.
-- `<Locators>` with our region markers.
+Instead we **ship a real blank Live 12 Set as a template** (`src/dance/als/templates/blank_live12.xml`, decompressed from a user-saved `Untitled.als`) and surgically inject our content:
 
-What we do **not** emit:
-- Mixer state, sends, routing, automation — Live fills these in with defaults on load.
-- Warp markers — `MarkersGenerated="false"` (`writer.py:263`), so Live auto-warps on first open. You may want to confirm BPM in Live and lock it.
-- View state, freeze data, device chains beyond the sample reference.
-- Embedded sample data — `FileRef` paths are **absolute**. Moving the stems folder breaks the Set.
+1. Load template via `lxml`.
+2. Clone the template's sole `<AudioTrack>` as a DOM template; deepcopy it 5 times.
+3. **Renumber Pointee IDs** on each clone (`AutomationTarget`, `ModulationTarget`, `Pointee`, ...) to fresh globally-unique values starting at 30000. Without this Live errors with "non-unique Pointee IDs" — the clones share the template's IDs otherwise.
+4. Set per-stem `Id`, `Name`, `Color`; inject `<AudioClip>` into the first session ClipSlot pointing at the stem file.
+5. Update master tempo in `MainTrack/.../Tempo/Manual` **and** the matching `AutomationEnvelope FloatEvent` anchor (the envelope overrides Manual if you only update one).
+6. Replace `Locators` inner content with our entries.
+7. Bump `LiveSet.NextPointeeId` above our high-water mark so Live's allocator doesn't collide on next edit.
+8. Re-gzip.
+
+Everything else — Transport state, GroovePool, view state, MainTrack mixer, ReturnTracks (A Reverb, B Delay), scenes 1-8 — comes verbatim from the template, so Live's loader sees exactly what it expects.
+
+### What we do **not** emit
+
+- Per-clip device chains (EQs, compressors) — drag in your own.
+- Automation envelopes on stem tracks — drawing automation is a manual step.
+- View state (zoom, scroll, selection) — Live opens to the default view.
+- Embedded sample data — `FileRef Path` is **absolute**. Moving the stems folder breaks the Set.
 
 ### If Live rejects the .als
 
-Possible — the schema is undocumented. If you see "This is not a valid Ableton Live Set" or similar:
+The schema is undocumented and Live's loader is strict. If you see a load error:
 
-1. Capture the exact error message Live shows.
-2. The .als is just gzipped XML — unzip it (`gunzip -c file.als > file.xml`) and diff against a Set Live wrote natively for the same audio.
-3. File the diff + error message. The fix is typically a missing element or attribute in `src/dance/als/writer.py`; this is additive — we add the missing field, the existing tests stay green.
+1. Capture the exact error — Live usually gives a line and column in the decompressed XML.
+2. Unzip and inspect:
+   ```bash
+   gunzip -c bad.als > bad.xml
+   ```
+3. Read the indicated line; cross-check against the bundled template (`src/dance/als/templates/blank_live12.xml`) for what shape Live expects.
+4. Fix in `writer.py` — typically an attribute mismatch on a class element (e.g. emitting `<TimeSignature Value=""/>` when Live wants `<TimeSignature>` with child elements).
 
 Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml` and asserts shape (track count, locator count, tempo, etc.). They don't and can't assert "Live will accept this" — only Live can.
 
@@ -99,22 +115,21 @@ Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml
 ```
 dance export-als 42
   -> writes ~/Music/Dance/Sets/Track Title - Artist.als
-  -> (or response from POST /tracks/42/als)
 
 open ~/Music/Dance/Sets/...
   -> Live launches, opens the Set
-  -> Live auto-warps each clip on first play
-  -> Save the Set inside Live to bake the warp markers
+  -> 5 stem tracks ready, mix track muted
+  -> click a clip to play, or launch scene 1 for all stems at once
 ```
 
 ## Limitations
 
 | Limitation                                | Workaround |
 |-------------------------------------------|------------|
-| No warp markers pre-baked                 | Live auto-warps on first open; save the Set to bake. |
-| No device chains (EQ, compression, etc.)  | Set up a template Set with your chains, drag clips in. |
+| Stems referenced by **absolute** path     | Don't move the stems folder. Regenerate the .als after a move. |
+| Mix track is muted by default             | Click the mute button to unmute and use the original as a reference. |
+| No device chains (EQ, compression, etc.)  | Set up a template Set with your chains; drag clips in. |
 | No automation envelopes                   | Drawing automation is a manual step in Live. |
-| No view state (zoom, scroll, selection)   | Live opens to the default arrangement view. |
-| Stems referenced by **absolute** path     | Don't move the stems folder. If you must, regenerate the .als after the move. |
-| Mix track is muted by default             | Click the mute button if you want the original mix as a reference layer. |
-| One Set per track                         | This is a stem-prep workflow, not a set-building one. For combined sets, drag the clips between Sets in Live. |
+| Locators land on the master timeline      | Per-stem regions are intentionally dropped — Live's locators are master-scoped. |
+| One Set per track                         | This is a stem-prep workflow, not a set-building one. For combined sets, drag clips between Sets in Live. |
+| Template is a Live 12.4 Set               | If you're on an older Live, the template may not load. Save your own blank Set as `src/dance/als/templates/blank_live12.xml` and the generator picks it up automatically. |
