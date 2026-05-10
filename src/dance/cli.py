@@ -369,6 +369,84 @@ def tag(
         session.close()
 
 
+@main.command("export-als")
+@click.argument("track_id", type=int, required=False)
+@click.option("--all", "all_tracks", is_flag=True, help="Export every COMPLETE track")
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path for a single-track export (must be inside als_output_dir).",
+)
+@click.pass_context
+def export_als(
+    ctx: click.Context,
+    track_id: Optional[int],
+    all_tracks: bool,
+    out_path: Optional[Path],
+) -> None:
+    """Generate Ableton Live Set (.als) file(s).
+
+    Either pass a TRACK_ID for a single export, or ``--all`` to export
+    every COMPLETE track in the library. All output goes under
+    ``settings.als_output_dir`` (default ``~/Music/Dance/Sets``).
+    """
+    settings: Settings = ctx.obj["settings"]
+
+    if not (all_tracks or track_id is not None):
+        console.print("[red]Pass either TRACK_ID or --all[/red]")
+        sys.exit(1)
+    if all_tracks and out_path is not None:
+        console.print("[red]--out is only valid for single-track exports[/red]")
+        sys.exit(1)
+
+    from dance.als import AlsGenerator
+    from dance.als.generator import AlsExportError
+
+    session = get_session(settings.db_url)
+    settings.ensure_directories()
+    gen = AlsGenerator(session, settings)
+
+    try:
+        if all_tracks:
+            tracks = (
+                session.query(Track)
+                .filter(Track.state == TrackState.COMPLETE.value)
+                .all()
+            )
+            if not tracks:
+                console.print("[yellow]No COMPLETE tracks to export[/yellow]")
+                return
+            console.print(f"[cyan]Exporting {len(tracks)} track(s)...[/cyan]")
+            ok = 0
+            errs = 0
+            for t in tracks:
+                try:
+                    written = gen.write(t, None)
+                    console.print(f"  [green]✓[/green] {written}")
+                    ok += 1
+                except AlsExportError as exc:
+                    console.print(f"  [red]✗[/red] track {t.id}: {exc}")
+                    errs += 1
+            console.print(
+                f"\n[green]Exported: {ok}[/green]  [red]Errors: {errs}[/red]"
+            )
+        else:
+            track = session.get(Track, track_id)
+            if track is None:
+                console.print(f"[red]Track {track_id} not found[/red]")
+                sys.exit(1)
+            try:
+                written = gen.write(track, out_path)
+                console.print(f"[green]✓ Wrote[/green] {written}")
+            except AlsExportError as exc:
+                console.print(f"[red]✗ {exc}[/red]")
+                sys.exit(1)
+    finally:
+        session.close()
+
+
 @main.command()
 @click.pass_context
 def status(ctx: click.Context) -> None:

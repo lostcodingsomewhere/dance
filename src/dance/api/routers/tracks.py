@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from dance.als import AlsGenerator
+from dance.als.generator import AlsExportError, AlsOutsideDirError
 from dance.api.deps import get_session, get_settings, track_to_out
-from dance.api.schemas import RegionOut, StemFileOut, TrackOut
+from dance.api.schemas import (
+    AlsExportRequest,
+    AlsExportResult,
+    RegionOut,
+    StemFileOut,
+    TrackOut,
+)
 from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
@@ -128,6 +137,63 @@ def tag_track(
         raise HTTPException(status_code=502, detail=f"tagger failed: {exc}") from exc
 
     return track_to_out(session, track)
+
+
+@router.post("/{track_id}/als", response_model=AlsExportResult)
+def export_als(
+    track_id: int,
+    body: AlsExportRequest | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> AlsExportResult:
+    """Generate an Ableton Live Set (.als) for a single track.
+
+    The Set contains:
+      - 4 audio tracks (drums/bass/vocals/other) pre-pointed at the stems
+      - 1 reference "mix" track (muted by default) pointing at the full mix
+      - Locators at every track-level Region
+      - Master tempo set to the track's BPM
+      - Track colors matching the kind palette
+
+    ``out_path`` is optional. If given, it must live inside
+    ``settings.als_output_dir`` (otherwise 403). If absent, the generator
+    picks a default file name in that directory.
+    """
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+
+    gen = AlsGenerator(session, settings)
+
+    target: Path | None = None
+    if body is not None and body.out_path:
+        target = Path(body.out_path)
+
+    try:
+        written = gen.write(track, target)
+    except AlsOutsideDirError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except AlsExportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Quick stats for the response. We re-derive these instead of plumbing
+    # them out of the generator, to keep the generator's signature simple.
+    stem_count = (
+        session.query(StemFile).filter(StemFile.track_id == track.id).count()
+    )
+    region_count = (
+        session.query(Region)
+        .filter(Region.track_id == track.id, Region.stem_file_id.is_(None))
+        .count()
+    )
+
+    return AlsExportResult(
+        ok=True,
+        out_path=str(written),
+        size_bytes=written.stat().st_size,
+        track_count=stem_count + 1,  # stems + mix
+        locator_count=region_count,
+    )
 
 
 @router.get("/{track_id}/stems", response_model=list[StemFileOut])

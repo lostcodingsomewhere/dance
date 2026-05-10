@@ -24,12 +24,16 @@ router = APIRouter(prefix="/files", tags=["files"])
 
 
 def _is_allowed(path: Path, settings: Settings) -> bool:
-    """True if ``path`` lives inside library_dir or stems_dir."""
+    """True if ``path`` lives inside library_dir, stems_dir, or als_output_dir.
+
+    Wave 4 added ``als_output_dir`` to the allowlist so the UI can reveal
+    a freshly-exported Live Set after ``POST /tracks/{id}/als``.
+    """
     try:
         resolved = path.resolve(strict=False)
     except (OSError, RuntimeError):
         return False
-    for root in (settings.library_dir, settings.stems_dir):
+    for root in (settings.library_dir, settings.stems_dir, settings.als_output_dir):
         try:
             resolved.relative_to(root.resolve())
             return True

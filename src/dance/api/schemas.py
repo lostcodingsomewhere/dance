@@ -213,8 +213,37 @@ class LoadTrackResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Live Set export (.als)
+# ---------------------------------------------------------------------------
+
+
+class AlsExportRequest(BaseModel):
+    """Body for ``POST /api/v1/tracks/{id}/als``.
+
+    ``out_path``: optional override. If absent, the generator picks a name
+    under ``settings.als_output_dir`` based on the track title. If
+    provided, the path **must** be inside ``als_output_dir`` — otherwise
+    the API returns 403.
+    """
+
+    out_path: str | None = None
+
+
+class AlsExportResult(BaseModel):
+    """Response for ``POST /api/v1/tracks/{id}/als``."""
+
+    ok: bool
+    out_path: str
+    size_bytes: int
+    track_count: int
+    locator_count: int
+
+
 __all__ = [
     "AbletonStateOut",
+    "AlsExportRequest",
+    "AlsExportResult",
     "AnalysisOut",
     "FireClipRequest",
     "LoadTrackRequest",

@@ -859,3 +859,129 @@ def test_tag_endpoint_deep_disabled_by_default(client, app, make_track):
 
     r = client.post(f"/api/v1/tracks/{track_id}/tag?deep=true")
     assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# .als export endpoint
+# ---------------------------------------------------------------------------
+
+
+def _setup_exportable_track(session, make_track, tmp_path):
+    """Create a COMPLETE track with stems on disk under tmp_path."""
+    from tests.audio_fixtures import TrackSpec, write_track
+
+    spec = TrackSpec(bpm=128.0, bars=2)
+    lib = tmp_path / "library"
+    lib.mkdir(parents=True, exist_ok=True)
+    full = lib / "exp.wav"
+    write_track(full, spec)
+    stem_dir = tmp_path / "stems" / "exp"
+    stem_dir.mkdir(parents=True, exist_ok=True)
+    for kind in ("drums", "bass", "vocals", "other"):
+        p = stem_dir / f"{kind}.wav"
+        write_track(p, spec)
+
+    t = make_track(
+        title="ExportMe",
+        artist="Tester",
+        file_path=str(full),
+        duration_seconds=spec.duration_seconds,
+        state="complete",
+    )
+    session.add(
+        AudioAnalysis(
+            track_id=t.id,
+            stem_file_id=None,
+            bpm=spec.bpm,
+            key_camelot="8A",
+            floor_energy=6,
+            analyzed_at=now_utc(),
+        )
+    )
+    for kind in ("drums", "bass", "vocals", "other"):
+        session.add(
+            StemFile(track_id=t.id, kind=kind, path=str(stem_dir / f"{kind}.wav"))
+        )
+    session.commit()
+    return t
+
+
+def _set_als_output_dir(app, tmp_path):
+    """Point the app's Settings at a tmp als_output_dir."""
+    app.state.settings.als_output_dir = tmp_path / "sets"
+    (tmp_path / "sets").mkdir(parents=True, exist_ok=True)
+
+
+def test_export_als_happy_path(client, app, session, make_track, tmp_path):
+    """POST /tracks/{id}/als generates a .als file and returns its path."""
+    _set_als_output_dir(app, tmp_path)
+    t = _setup_exportable_track(session, make_track, tmp_path)
+
+    r = client.post(f"/api/v1/tracks/{t.id}/als", json={})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    out_path = body["out_path"]
+    assert out_path.endswith(".als")
+    assert body["size_bytes"] > 100
+    # 4 stems + mix = 5 audio tracks.
+    assert body["track_count"] == 5
+    # No regions added → 0 locators.
+    assert body["locator_count"] == 0
+
+    # File actually exists on disk and is gzipped XML.
+    import gzip
+    from pathlib import Path as _P
+
+    assert _P(out_path).exists()
+    raw = _P(out_path).read_bytes()
+    assert raw[:2] == b"\x1f\x8b"
+    xml = gzip.decompress(raw)
+    assert b"<Ableton" in xml
+    assert b"<LiveSet>" in xml
+
+
+def test_export_als_404_when_track_missing(client, app, tmp_path):
+    _set_als_output_dir(app, tmp_path)
+    r = client.post("/api/v1/tracks/9999/als", json={})
+    assert r.status_code == 404
+
+
+def test_export_als_400_when_not_complete(client, app, session, make_track, tmp_path):
+    _set_als_output_dir(app, tmp_path)
+    t = make_track(state="pending")
+    session.commit()
+    r = client.post(f"/api/v1/tracks/{t.id}/als", json={})
+    assert r.status_code == 400
+    assert "complete" in r.json()["detail"].lower()
+
+
+def test_export_als_403_when_out_path_outside_dir(
+    client, app, session, make_track, tmp_path
+):
+    _set_als_output_dir(app, tmp_path)
+    t = _setup_exportable_track(session, make_track, tmp_path)
+
+    outside = tmp_path / "escape.als"
+    r = client.post(
+        f"/api/v1/tracks/{t.id}/als", json={"out_path": str(outside)}
+    )
+    assert r.status_code == 403
+
+
+def test_export_als_accepts_custom_out_path_in_dir(
+    client, app, session, make_track, tmp_path
+):
+    _set_als_output_dir(app, tmp_path)
+    t = _setup_exportable_track(session, make_track, tmp_path)
+
+    target = tmp_path / "sets" / "subdir" / "custom.als"
+    r = client.post(
+        f"/api/v1/tracks/{t.id}/als", json={"out_path": str(target)}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    from pathlib import Path as _P
+
+    assert _P(body["out_path"]).resolve() == target.resolve()
+    assert target.exists()

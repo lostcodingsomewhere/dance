@@ -199,6 +199,26 @@ export function pushTrackToLive(
   });
 }
 
+// Live Set export (.als) ---------------------------------------------------
+export interface AlsExportResult {
+  ok: boolean;
+  out_path: string;
+  size_bytes: number;
+  track_count: number;
+  locator_count: number;
+}
+
+/** Generate a .als (Ableton Live Set) file for a track on the server. */
+export function exportAls(
+  trackId: number,
+  outPath?: string,
+): Promise<AlsExportResult> {
+  return request<AlsExportResult>(`/tracks/${trackId}/als`, {
+    method: "POST",
+    body: JSON.stringify(outPath ? { out_path: outPath } : {}),
+  });
+}
+
 // Files --------------------------------------------------------------------
 
 export function revealPath(path: string): Promise<{ ok: true }> {

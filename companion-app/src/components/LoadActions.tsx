@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { copyToClipboard, pushTrackToLive, revealPath } from "../api";
+import {
+  copyToClipboard,
+  exportAls,
+  pushTrackToLive,
+  revealPath,
+} from "../api";
 
 /**
  * "Get this into Ableton" affordances. AbletonOSC can prepare named/colored
@@ -21,6 +26,8 @@ export function LoadActions({
   const [error, setError] = useState<string | null>(null);
   const [pushing, setPushing] = useState(false);
   const [pushed, setPushed] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exported, setExported] = useState<string | null>(null);
 
   if (!path && trackId == null) return null;
 
@@ -43,6 +50,27 @@ export function LoadActions({
       await revealPath(path);
     } catch (e) {
       setError((e as Error).message);
+    }
+  };
+
+  const doExport = async () => {
+    if (trackId == null) return;
+    try {
+      setError(null);
+      setExporting(true);
+      const result = await exportAls(trackId);
+      setExported("✓ Live Set exported");
+      // Reveal in Finder so the user can double-click to open Live.
+      try {
+        await revealPath(result.out_path);
+      } catch {
+        // Best-effort — reveal failure shouldn't undo the export.
+      }
+      setTimeout(() => setExported(null), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -82,6 +110,17 @@ export function LoadActions({
           className="h-10 px-3 rounded-md text-xs font-semibold bg-purple-700 hover:bg-purple-600 disabled:bg-neutral-800 disabled:text-neutral-500 text-white active:scale-95"
         >
           {pushing ? "Pushing…" : pushed ?? "Push to Live"}
+        </button>
+      )}
+      {trackId != null && (
+        <button
+          type="button"
+          onClick={doExport}
+          disabled={exporting}
+          title="Generate an Ableton Live Set (.als) with the stems pre-loaded and reveal it in Finder"
+          className="h-10 px-3 rounded-md text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 disabled:bg-neutral-800 disabled:text-neutral-500 text-white active:scale-95"
+        >
+          {exporting ? "Exporting…" : exported ?? "Export .als"}
         </button>
       )}
       {path && (

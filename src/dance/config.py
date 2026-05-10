@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     library_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "library")
     stems_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "stems")
     data_dir: Path = Field(default=Path.home() / ".dance")
+    # Where generated Ableton Live Sets (.als) are written. Kept separate
+    # from library_dir so a user can sweep it without touching audio.
+    als_output_dir: Path = Field(default=Path.home() / "Music" / "Dance" / "Sets")
 
     # Database
     database_url: Optional[str] = Field(default=None)
@@ -82,7 +85,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = Field(default="INFO")
 
-    @field_validator("library_dir", "stems_dir", "data_dir", mode="before")
+    @field_validator(
+        "library_dir", "stems_dir", "data_dir", "als_output_dir", mode="before"
+    )
     @classmethod
     def expand_path(cls, v: str | Path) -> Path:
         if isinstance(v, str):
@@ -99,6 +104,7 @@ class Settings(BaseSettings):
         self.library_dir.mkdir(parents=True, exist_ok=True)
         self.stems_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.als_output_dir.mkdir(parents=True, exist_ok=True)
 
 
 _settings: Optional[Settings] = None
