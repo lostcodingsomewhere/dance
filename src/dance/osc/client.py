@@ -86,6 +86,82 @@ class AbletonOSCClient:
     def set_track_solo(self, track: int, soloed: bool) -> None:
         self._send("/live/track/set/solo", track, 1 if soloed else 0)
 
+    def set_track_name(self, track: int, name: str) -> None:
+        """Rename a track in Live's session view."""
+        self._send("/live/track/set/name", track, name)
+
+    def set_track_color(self, track: int, color: int) -> None:
+        """Set a track's color via Live's palette (32-bit RGB int)."""
+        self._send("/live/track/set/color", track, color)
+
+    # ------------------------------------------------------------------
+    # Song-level track/scene management
+    #
+    # AbletonOSC exposes ``/live/song/create_audio_track`` and friends. Pass
+    # ``index = -1`` to append (the AbletonOSC default). Note: AbletonOSC
+    # does *not* expose a programmatic "load sample into clip slot" command —
+    # Live's Python API doesn't support it. The best we can do over OSC is
+    # prepare empty named/colored audio tracks; the user still drags samples
+    # from Finder. See ``docs/abletonosc_setup.md`` for details.
+    # ------------------------------------------------------------------
+
+    def create_audio_track(self, index: int = -1) -> None:
+        """Insert a new audio track at ``index`` (default: append)."""
+        self._send("/live/song/create_audio_track", index)
+
+    def delete_track(self, index: int) -> None:
+        """Delete the track at ``index``."""
+        self._send("/live/song/delete_track", index)
+
+    def create_scene(self, index: int = -1) -> None:
+        """Insert a new scene at ``index`` (default: append)."""
+        self._send("/live/song/create_scene", index)
+
+    # ------------------------------------------------------------------
+    # Clip slot / clip — what AbletonOSC *does* support.
+    #
+    # ``create_clip`` creates an EMPTY MIDI clip — there is no
+    # ``load_sample`` equivalent for audio clips in the OSC API. The
+    # setters below operate on a clip that already exists in the slot
+    # (e.g. one the user dragged in).
+    # ------------------------------------------------------------------
+
+    def create_clip(self, track: int, slot: int, length: float) -> None:
+        """Create an empty (MIDI) clip of ``length`` beats."""
+        self._send("/live/clip_slot/create_clip", track, slot, length)
+
+    def delete_clip(self, track: int, slot: int) -> None:
+        self._send("/live/clip_slot/delete_clip", track, slot)
+
+    def set_clip_warp(self, track: int, slot: int, warp: bool) -> None:
+        self._send("/live/clip/set/warping", track, slot, 1 if warp else 0)
+
+    def set_clip_loop(
+        self, track: int, slot: int, start_beats: float, end_beats: float
+    ) -> None:
+        """Set loop start + end (in beats). Two messages — Live needs both."""
+        self._send("/live/clip/set/loop_start", track, slot, start_beats)
+        self._send("/live/clip/set/loop_end", track, slot, end_beats)
+
+    def set_clip_color(self, track: int, slot: int, color: int) -> None:
+        """Set clip color via Live's palette index (0-69)."""
+        self._send("/live/clip/set/color_index", track, slot, color)
+
+    def set_clip_name(self, track: int, slot: int, name: str) -> None:
+        self._send("/live/clip/set/name", track, slot, name)
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def get_num_tracks(self) -> None:
+        """Ask Live to push the current track count to the listener port."""
+        self._send("/live/song/get/num_tracks")
+
+    def show_message(self, message: str) -> None:
+        """Pop a status-bar message in Live (handy for user feedback)."""
+        self._send("/live/api/show_message", message)
+
     # ------------------------------------------------------------------
     # Subscriptions — ask AbletonOSC to push state changes
     # ------------------------------------------------------------------

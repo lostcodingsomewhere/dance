@@ -72,6 +72,11 @@ class FakeAbletonBridge:
         self._subscribers: list[Callable[[AbletonState], None]] = []
         self.started = False
         self.stopped = False
+        # Recorded push_track_to_live invocations.
+        self.push_calls: list[dict[str, Any]] = []
+        # Override-able return; default mimics a happy 5-stem push.
+        self.push_return: dict[str, Any] | None = None
+        self.push_raises: Exception | None = None
 
     def start(self) -> None:
         self.started = True
@@ -87,6 +92,29 @@ class FakeAbletonBridge:
             setattr(self.state, k, v)
         for sub in list(self._subscribers):
             sub(self.state)
+
+    def push_track_to_live(
+        self, track, stems, *, include_stems: bool = True, **kwargs: Any
+    ) -> dict[str, Any]:
+        self.push_calls.append(
+            {
+                "track_id": int(track.id),
+                "stem_count": len(stems),
+                "include_stems": include_stems,
+            }
+        )
+        if self.push_raises is not None:
+            raise self.push_raises
+        if self.push_return is not None:
+            return self.push_return
+        # Default: mix + (drums/bass/vocals/other when include_stems).
+        indices: dict[str, int] = {"mix": 0}
+        if include_stems:
+            for i, kind in enumerate(("drums", "bass", "vocals", "other"), start=1):
+                # Only include stems we were actually handed (let callers control this).
+                if any(str(s.kind).lower() == kind for s in stems):
+                    indices[kind] = i
+        return {"scene_index": 0, "track_indices": indices, "warnings": []}
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +461,102 @@ def test_ableton_endpoints_call_client(
     assert fake_bridge.client.calls[2] == ("set_tempo", (124.0,))
     assert fake_bridge.client.calls[3] == ("fire_clip", (2, 1))
     assert fake_bridge.client.calls[4] == ("set_track_volume", (3, 0.8))
+
+
+def test_load_track_404_when_missing(client: TestClient) -> None:
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": 999_999, "include_stems": True},
+    )
+    assert r.status_code == 404
+
+
+def test_load_track_with_stems_creates_five_tracks(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    t = make_track(title="Anthem")
+    # Attach one stem per kind so the bridge's default return creates 5 indices.
+    for kind in ("drums", "bass", "vocals", "other"):
+        session.add(StemFile(track_id=t.id, kind=kind, path=f"/tmp/{kind}.wav"))
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": t.id, "include_stems": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["scene_index"] == 0
+    # Five logical tracks: mix + 4 stems.
+    assert set(body["track_indices"].keys()) == {
+        "mix",
+        "drums",
+        "bass",
+        "vocals",
+        "other",
+    }
+    # Bridge actually invoked with the right track.
+    assert fake_bridge.push_calls[-1] == {
+        "track_id": t.id,
+        "stem_count": 4,
+        "include_stems": True,
+    }
+
+
+def test_load_track_without_stems_creates_one_track(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    t = make_track(title="Solo")
+    # Add a stem on disk — but we ask for include_stems=False so it's ignored.
+    session.add(StemFile(track_id=t.id, kind="drums", path="/tmp/d.wav"))
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": t.id, "include_stems": False},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["track_indices"] == {"mix": 0}
+    # The bridge was passed an empty stems list.
+    assert fake_bridge.push_calls[-1]["stem_count"] == 0
+    assert fake_bridge.push_calls[-1]["include_stems"] is False
+
+
+def test_load_track_returns_warnings_for_missing_files(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    t = make_track(title="Broken")
+    session.commit()
+    fake_bridge.push_return = {
+        "scene_index": 0,
+        "track_indices": {"mix": 0},
+        "warnings": ["Full-mix file missing on disk: '/tmp/missing.wav'"],
+    }
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": t.id, "include_stems": False},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["warnings"] and "missing" in body["warnings"][0]
+
+
+def test_load_track_503_when_osc_unreachable(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    t = make_track(title="Offline")
+    session.commit()
+    fake_bridge.push_raises = OSError("connection refused")
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": t.id, "include_stems": False},
+    )
+    assert r.status_code == 503
 
 
 def test_ableton_state(client: TestClient, fake_bridge: FakeAbletonBridge) -> None:

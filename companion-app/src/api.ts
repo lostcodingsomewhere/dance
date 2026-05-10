@@ -177,6 +177,28 @@ export function abletonGetState(): Promise<AbletonState> {
   return request<AbletonState>("/ableton/state");
 }
 
+// "Push to Live" — creates audio tracks in Live for a (track, stems) bundle.
+// AbletonOSC can't load samples programmatically, so this only prepares the
+// empty tracks; the React caller typically also reveals the stems folder in
+// Finder so the user can drag the files onto the prepared slots.
+export interface LoadTrackResult {
+  ok: boolean;
+  scene_index: number;
+  track_indices: Record<string, number>;
+  message: string | null;
+  warnings: string[];
+}
+
+export function pushTrackToLive(
+  trackId: number,
+  includeStems = true,
+): Promise<LoadTrackResult> {
+  return request<LoadTrackResult>("/ableton/load-track", {
+    method: "POST",
+    body: JSON.stringify({ track_id: trackId, include_stems: includeStems }),
+  });
+}
+
 // Files --------------------------------------------------------------------
 
 export function revealPath(path: string): Promise<{ ok: true }> {

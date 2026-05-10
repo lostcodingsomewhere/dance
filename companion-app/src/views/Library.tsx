@@ -185,7 +185,7 @@ export function Library() {
                 badge={`✦ ${r.score.toFixed(2)}`}
                 actions={
                   <>
-                    <LoadActions path={r.file_path} />
+                    <LoadActions path={r.file_path} trackId={r.track_id} />
                     <PinButton trackId={r.track_id} />
                   </>
                 }
@@ -205,7 +205,7 @@ export function Library() {
                 }}
                 actions={
                   <>
-                    <LoadActions path={t.file_path} />
+                    <LoadActions path={t.file_path} trackId={t.id} />
                     <PinButton trackId={t.id} />
                   </>
                 }

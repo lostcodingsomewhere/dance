@@ -189,10 +189,36 @@ class VolumeRequest(BaseModel):
     volume: float
 
 
+class LoadTrackRequest(BaseModel):
+    """Request body for ``POST /api/v1/ableton/load-track``."""
+
+    track_id: int
+    include_stems: bool = True
+
+
+class LoadTrackResult(BaseModel):
+    """Response from ``POST /api/v1/ableton/load-track``.
+
+    AbletonOSC can't actually *load* the audio file into the clip slot
+    (Live's Python API doesn't expose it), so this returns the indices of
+    the empty audio tracks we created in Live, plus the scene the user
+    should drop the stems onto. The backend also reveals the stems folder
+    in Finder to make the drag one motion.
+    """
+
+    ok: bool
+    scene_index: int
+    track_indices: dict[str, int] = Field(default_factory=dict)
+    message: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 __all__ = [
     "AbletonStateOut",
     "AnalysisOut",
     "FireClipRequest",
+    "LoadTrackRequest",
+    "LoadTrackResult",
     "RecommendRequest",
     "RecommendationOut",
     "TextRecommendRequest",

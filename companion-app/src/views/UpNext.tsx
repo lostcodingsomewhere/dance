@@ -1,6 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
 import { useMemo } from "react";
-import * as api from "../api";
 import { LoadActions } from "../components/LoadActions";
 import { TrackCard } from "../components/TrackCard";
 import { useRecommend } from "../hooks/useRecommend";
@@ -21,10 +19,6 @@ export function UpNext() {
 
   const recs = useRecommend(seeds, 12);
   const addPlay = useAddPlay(session.data?.id ?? null);
-  const fireClip = useMutation({
-    mutationFn: ({ track, scene }: { track: number; scene: number }) =>
-      api.abletonFireClip(track, scene),
-  });
 
   return (
     <div className="flex-1 flex flex-col gap-4 p-6 overflow-auto">
@@ -93,16 +87,7 @@ export function UpNext() {
             }}
             actions={
               <>
-                <LoadActions path={rec.file_path} />
-                <button
-                  type="button"
-                  onClick={() =>
-                    fireClip.mutate({ track: rec.track_id, scene: 0 })
-                  }
-                  className="min-h-[44px] min-w-[64px] px-4 rounded-lg bg-emerald-500 text-neutral-950 font-semibold hover:bg-emerald-400"
-                >
-                  Play
-                </button>
+                <LoadActions path={rec.file_path} trackId={rec.track_id} />
                 <button
                   type="button"
                   onClick={() => store.pin(rec.track_id)}
