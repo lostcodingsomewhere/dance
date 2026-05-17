@@ -2,6 +2,8 @@ import type {
   AbletonState,
   AddPlayBody,
   DjSession,
+  PipelineRecentTrack,
+  PipelineStatus,
   Recommendation,
   RecommendRequest,
   Region,
@@ -137,6 +139,16 @@ export function addPlay(
 
 export function endSession(sessionId: number): Promise<DjSession> {
   return request<DjSession>(`/sessions/${sessionId}/end`, { method: "POST" });
+}
+
+// Pipeline ops --------------------------------------------------------------
+
+export function getPipelineStatus(): Promise<PipelineStatus> {
+  return request<PipelineStatus>("/pipeline/status");
+}
+
+export function getPipelineRecent(limit = 20): Promise<PipelineRecentTrack[]> {
+  return request<PipelineRecentTrack[]>(`/pipeline/recent?limit=${limit}`);
 }
 
 // Ableton -------------------------------------------------------------------

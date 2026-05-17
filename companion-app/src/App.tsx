@@ -2,6 +2,7 @@ import { TopBar } from "./components/TopBar";
 import { useAppStore } from "./store";
 import { Library } from "./views/Library";
 import { NowPlaying } from "./views/NowPlaying";
+import { PipelineOps } from "./views/PipelineOps";
 import { SessionHistory } from "./views/SessionHistory";
 import { UpNext } from "./views/UpNext";
 
@@ -15,6 +16,7 @@ export function App() {
         {view === "next" && <UpNext />}
         {view === "library" && <Library />}
         {view === "session" && <SessionHistory />}
+        {view === "ops" && <PipelineOps />}
       </main>
     </div>
   );

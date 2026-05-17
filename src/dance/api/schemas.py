@@ -240,6 +240,52 @@ class AlsExportResult(BaseModel):
     locator_count: int
 
 
+# ---------------------------------------------------------------------------
+# Pipeline ops
+# ---------------------------------------------------------------------------
+
+
+class PipelineStatusOut(BaseModel):
+    """Snapshot of the pipeline state. Mirrors ``dance status`` at the CLI.
+
+    Returned by ``GET /api/v1/pipeline/status``. The UI polls this on a
+    short interval (e.g. every 3 s) for a glanceable view of what's left.
+    """
+
+    counts: dict[str, int]
+    """Number of tracks in each ``TrackState`` (every state always present,
+    zero-padded so the UI can render a stable grid)."""
+
+    total: int
+    """Sum of counts across all states."""
+
+    in_progress: int | bool
+    """True iff any track is in an active stage (analyzing / separating /
+    analyzing_stems / detecting_regions / embedding)."""
+
+    errors: int
+    """Convenience: tracks currently in the ``error`` state."""
+
+    complete: int
+    """Convenience: tracks currently in the ``complete`` state."""
+
+
+class PipelineRecentTrackOut(BaseModel):
+    """One row in the "recently changed" pipeline feed.
+
+    Returned by ``GET /api/v1/pipeline/recent``. The UI renders this as a
+    scrolling activity list so it's obvious which tracks the dispatcher is
+    working on.
+    """
+
+    id: int
+    title: str | None
+    artist: str | None
+    state: str
+    updated_at: datetime | None
+    error_message: str | None
+
+
 __all__ = [
     "AbletonStateOut",
     "AlsExportRequest",
@@ -248,6 +294,8 @@ __all__ = [
     "FireClipRequest",
     "LoadTrackRequest",
     "LoadTrackResult",
+    "PipelineRecentTrackOut",
+    "PipelineStatusOut",
     "RecommendRequest",
     "RecommendationOut",
     "TextRecommendRequest",

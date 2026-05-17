@@ -125,4 +125,41 @@ export interface TrackFilters {
   state?: string;
 }
 
-export type ViewName = "now" | "next" | "library" | "session";
+export type ViewName = "now" | "next" | "library" | "session" | "ops";
+
+// Pipeline-ops mirror of `src/dance/api/schemas.py:PipelineStatusOut`.
+export interface PipelineStatus {
+  counts: Record<string, number>; // keyed by TrackState enum value
+  total: number;
+  in_progress: boolean;
+  errors: number;
+  complete: number;
+}
+
+// Pipeline-ops mirror of `src/dance/api/schemas.py:PipelineRecentTrackOut`.
+export interface PipelineRecentTrack {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  state: string;
+  updated_at: string | null; // ISO datetime
+  error_message: string | null;
+}
+
+// Ordered stages — the UI renders the count grid left-to-right in this order
+// so the eye can read pipeline progress like a Gantt chart.
+export const PIPELINE_STAGES: { key: string; label: string }[] = [
+  { key: "pending", label: "Pending" },
+  { key: "analyzing", label: "Analyzing" },
+  { key: "analyzed", label: "Analyzed" },
+  { key: "separating", label: "Separating" },
+  { key: "separated", label: "Separated" },
+  { key: "analyzing_stems", label: "Stem analyze" },
+  { key: "stems_analyzed", label: "Stems done" },
+  { key: "detecting_regions", label: "Regions…" },
+  { key: "regions_detected", label: "Regions ✓" },
+  { key: "embedding", label: "Embedding" },
+  { key: "embedded", label: "Embedded" },
+  { key: "complete", label: "Complete" },
+  { key: "error", label: "Error" },
+];

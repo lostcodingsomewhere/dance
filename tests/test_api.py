@@ -985,3 +985,114 @@ def test_export_als_accepts_custom_out_path_in_dir(
 
     assert _P(body["out_path"]).resolve() == target.resolve()
     assert target.exists()
+
+
+# ---------------------------------------------------------------------------
+# Pipeline ops endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_status_empty(client: TestClient) -> None:
+    """With no tracks: every state present with count 0, in_progress False."""
+    r = client.get("/api/v1/pipeline/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 0
+    assert body["in_progress"] is False
+    assert body["errors"] == 0
+    assert body["complete"] == 0
+    # Every TrackState value must be present (UI relies on this for a stable grid)
+    counts = body["counts"]
+    for state in (
+        "pending", "analyzing", "analyzed", "separating", "separated",
+        "analyzing_stems", "stems_analyzed", "detecting_regions",
+        "regions_detected", "embedding", "embedded", "complete", "error",
+    ):
+        assert state in counts
+        assert counts[state] == 0
+
+
+def test_pipeline_status_counts_per_state(
+    client: TestClient, session, make_track
+) -> None:
+    make_track(state="pending")
+    make_track(state="analyzing")
+    make_track(state="separated")
+    make_track(state="separated")
+    make_track(state="complete")
+    make_track(state="error")
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/status")
+    body = r.json()
+    assert body["total"] == 6
+    assert body["counts"]["pending"] == 1
+    assert body["counts"]["analyzing"] == 1
+    assert body["counts"]["separated"] == 2
+    assert body["counts"]["complete"] == 1
+    assert body["counts"]["error"] == 1
+    assert body["in_progress"] is True  # analyzing is an active stage
+    assert body["errors"] == 1
+    assert body["complete"] == 1
+
+
+def test_pipeline_status_in_progress_false_when_only_terminal_states(
+    client: TestClient, session, make_track
+) -> None:
+    make_track(state="complete")
+    make_track(state="error")
+    make_track(state="pending")  # pending is not "in progress" (no stage running on it)
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/status")
+    assert r.json()["in_progress"] is False
+
+
+def test_pipeline_recent_ordered_by_updated_at_desc(
+    client: TestClient, session, make_track
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    older = make_track(title="older", state="analyzed")
+    older.updated_at = base
+    newer = make_track(title="newer", state="separated")
+    newer.updated_at = base + timedelta(seconds=10)
+    middle = make_track(title="middle", state="analyzing")
+    middle.updated_at = base + timedelta(seconds=5)
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/recent")
+    assert r.status_code == 200
+    body = r.json()
+    titles = [row["title"] for row in body]
+    assert titles == ["newer", "middle", "older"]
+    # Shape check on one row
+    row = body[0]
+    assert row["state"] == "separated"
+    assert row["error_message"] is None
+    assert "id" in row and "updated_at" in row
+
+
+def test_pipeline_recent_respects_limit(
+    client: TestClient, session, make_track
+) -> None:
+    for i in range(25):
+        make_track(title=f"t{i}", state="analyzed")
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/recent?limit=5")
+    assert r.status_code == 200
+    assert len(r.json()) == 5
+
+
+def test_pipeline_recent_surfaces_error_message(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="broken", state="error")
+    t.error_message = "separate: System error."
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/recent?limit=1")
+    body = r.json()
+    assert body[0]["error_message"] == "separate: System error."

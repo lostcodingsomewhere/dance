@@ -9,6 +9,7 @@ const VIEWS: { id: ViewName; label: string }[] = [
   { id: "next", label: "Next" },
   { id: "library", label: "Library" },
   { id: "session", label: "Session" },
+  { id: "ops", label: "Ops" },
 ];
 
 export function TopBar() {
