@@ -7,6 +7,7 @@ import {
   STAGE_GROUPS,
   TERMINAL_GROUPS,
   computeStageCounts,
+  describeFilterState,
   type IngestPreviewResponse,
   type IngestPreviewRow,
   type Job,
@@ -510,15 +511,14 @@ function ConsolidatedStageGrid({
       {TERMINAL_GROUPS.map((group) => {
         const total = group.states.reduce((s, st) => s + (counts[st] ?? 0), 0);
         const dim = total === 0 ? "opacity-40" : "";
-        // Use the first state as the filter key on click.
-        const selectedKey = group.states.find((s) => filterState === s);
+        const isSelected = filterState === group.filter_state;
         return (
           <button
             type="button"
             key={group.key}
-            onClick={() => onTileClick(group.states[0])}
+            onClick={() => onTileClick(group.filter_state)}
             className={`text-left rounded-lg ${group.color} ${dim} px-3 py-2 hover:ring-1 hover:ring-neutral-600 ${
-              selectedKey ? "ring-2 ring-neutral-100" : ""
+              isSelected ? "ring-2 ring-neutral-100" : ""
             }`}
             title={`${total} ${group.label.toLowerCase()} tracks`}
           >
@@ -832,7 +832,7 @@ export function PipelineOps() {
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider">
               {filterState
-                ? `Tracks in “${filterState}”`
+                ? describeFilterState(filterState)
                 : "Recent activity"}
             </h2>
             {filterState && (

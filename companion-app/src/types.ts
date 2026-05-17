@@ -227,23 +227,34 @@ export const STAGE_GROUPS: StageGroup[] = [
   },
 ];
 
-/** Terminal buckets, rendered at the end of the row. */
+/** Terminal buckets, rendered at the end of the row.
+ *
+ * ``states`` is the set of TrackState values whose counts roll up into this
+ * tile. ``filter_state`` is the single state used when the tile is clicked —
+ * the activity table can only filter on one state at a time, and we want
+ * clicking to surface the bucket the user expects. (The ``embed`` stage's
+ * output_state is COMPLETE directly — EMBEDDED is unused in the current
+ * pipeline, so a "Done" click that filters on EMBEDDED would show an empty
+ * table.) */
 export const TERMINAL_GROUPS: {
   key: string;
   label: string;
   states: string[];
+  filter_state: string;
   color: string;
 }[] = [
   {
     key: "done",
     label: "Done",
-    states: ["embedded", "complete"],
+    states: ["embedded", "complete"], // sum counts (embedded is 0 in practice)
+    filter_state: "complete", // click → show the actually-populated state
     color: "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30",
   },
   {
     key: "error",
     label: "Error",
     states: ["error"],
+    filter_state: "error",
     color: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
   },
 ];
@@ -262,6 +273,21 @@ export function computeStageCounts(
   const waiting = group.waiting_state ? counts[group.waiting_state] ?? 0 : 0;
   const active = group.active_state ? counts[group.active_state] ?? 0 : 0;
   return { waiting, active, total: waiting + active };
+}
+
+/** Map a raw TrackState value to a user-readable filter description, so the
+ * activity panel header reads "Waiting for Separate" instead of
+ * "Tracks in 'analyzed'". The state-key naming is internal pipeline
+ * vocabulary; users think in stage names. */
+export function describeFilterState(stateKey: string): string {
+  for (const g of STAGE_GROUPS) {
+    if (g.waiting_state === stateKey) return `Waiting for ${g.label}`;
+    if (g.active_state === stateKey) return `In ${g.label}`;
+  }
+  if (stateKey === "complete") return "Complete";
+  if (stateKey === "embedded") return "Embedded";
+  if (stateKey === "error") return "Errored";
+  return stateKey;
 }
 
 export type OpsViewMode = "grid" | "board";
