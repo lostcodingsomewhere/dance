@@ -1,19 +1,27 @@
 """Pipeline-ops endpoints.
 
 Read endpoints: ``GET /status`` and ``GET /recent`` for live progress.
-Write endpoints: ``POST /ingest/preview`` and ``POST /ingest/commit`` for
-queueing yt-dlp downloads from an Exportify CSV; ``GET /jobs`` and
-``GET /jobs/{id}`` for download-job status.
+Write endpoints:
 
-Cross-process note: the dispatcher (a ``dance process`` invocation) runs
-in a separate shell and the API can't see its EventBus directly. Status
-endpoints derive everything from the SQLite DB (``tracks.updated_at``
-moves on every state transition). Job endpoints are in-process — the API
-itself runs the yt-dlp threads, so they emit events in real time.
+- ``POST /ingest/preview`` and ``POST /ingest/commit`` for queueing
+  yt-dlp downloads from an Exportify CSV.
+- ``POST /process`` for kicking off the dispatcher (ingest + all stages)
+  from the UI. Equivalent to running ``dance process`` at the CLI.
+- ``GET /jobs`` and ``GET /jobs/{id}`` for download / pipeline-run job
+  status.
+
+Cross-process note: the dispatcher also runs as a CLI subprocess
+(``dance process``). The API has no IPC into that shell. To prevent two
+dispatchers thrashing the DB, ``POST /process`` rejects with 409 if a
+``pipeline_run`` Job is already active in our in-process registry. It
+does NOT detect an externally-launched ``dance process`` — if the user
+has one running in another terminal, the second run will race. Same
+DB-row semantics keep things consistent; it's just wasteful CPU.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -35,7 +43,8 @@ from dance.api.schemas import (
     PipelineStatusOut,
 )
 from dance.config import Settings
-from dance.core.database import Track, TrackState
+from dance.core.database import Track, TrackState, get_session_factory
+from dance.pipeline.events import StageEvent
 from dance.spotify.csv_importer import (
     CsvRow,
     download_track,
@@ -43,9 +52,15 @@ from dance.spotify.csv_importer import (
     parse_csv,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 _INGEST_WORKERS = 4
+
+# Module-level lock so two API requests can't race to start ``dance process``.
+# (External CLI runs are still possible; see module docstring.)
+_PROCESS_LOCK = threading.Lock()
 
 
 @router.get("/status", response_model=PipelineStatusOut)
@@ -226,16 +241,25 @@ def ingest_commit(
             detail={"error": "No valid rows in CSV", "parse_errors": parse_errors},
         )
 
-    if not body.include_duplicates:
+    if body.selected_keys is not None:
+        # Per-row toggle mode: download exactly the rows the UI chose.
+        # ``|`` separator never appears in sanitized artist/title.
+        wanted = set(body.selected_keys)
+        rows = [r for r in rows if f"{r.artist}|{r.title}" in wanted]
+    elif not body.include_duplicates:
+        # Bulk mode, skip dupes: re-classify and keep only new rows.
         new, _ = _classify_rows(rows, session, settings.library_dir)
-        # Re-derive CsvRow from preview output (keep field parity)
         keep_keys = {(r.artist, r.title) for r in new}
         rows = [r for r in rows if (r.artist, r.title) in keep_keys]
+    # else: bulk mode + include_duplicates → keep everything
 
     if not rows:
         raise HTTPException(
             status_code=400,
-            detail="Every row was flagged as duplicate. Pass include_duplicates=true to download anyway.",
+            detail=(
+                "No rows to download. Either every row was a duplicate "
+                "(pass include_duplicates=true) or selected_keys matched none."
+            ),
         )
 
     registry = get_job_registry()
@@ -265,4 +289,162 @@ def get_job(job_id: str) -> JobOut:
     job = registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    return JobOut(**job.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-run trigger ("Process now" from the UI)
+# ---------------------------------------------------------------------------
+
+# Stage names a fresh Dispatcher registers. Used as the JobItem layout for
+# pipeline-run jobs so the UI can render a stage-level progress bar before
+# any events fire.
+_DISPATCH_STAGES = (
+    "ingest",
+    "analyze",
+    "separate",
+    "analyze_stems",
+    "detect_regions",
+    "embed",
+)
+
+
+def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
+    """Background worker: build a Dispatcher in this thread, run it,
+    pipe its events into the JobRegistry."""
+    registry = get_job_registry()
+    registry.set_status(job_id, "running")
+
+    # Each worker thread gets its own SQLAlchemy session (sessions are not
+    # threadsafe to share). The dispatcher uses this session to query and
+    # commit transitions.
+    SessionLocal = get_session_factory(settings.db_url)
+    session = SessionLocal()
+    try:
+        # Late import — keeps API startup snappy when the dispatcher's heavy
+        # deps (Demucs / CLAP) aren't needed.
+        from dance.pipeline.dispatcher import Dispatcher
+
+        dispatcher = Dispatcher(settings, session)
+
+        # Live counters per stage. Updated on every event; flushed to the
+        # JobRegistry as a "X/Y done" message.
+        stage_index = {name: i for i, name in enumerate(_DISPATCH_STAGES)}
+        live: dict[str, dict[str, int]] = {
+            name: {"done": 0, "fail": 0} for name in _DISPATCH_STAGES
+        }
+
+        def _on_event(event: StageEvent) -> None:
+            idx = stage_index.get(event.stage_name)
+            if idx is None:
+                return
+            counters = live[event.stage_name]
+            if event.kind == "completed":
+                counters["done"] += 1
+            elif event.kind == "failed":
+                counters["fail"] += 1
+            msg = (
+                f"{counters['done']} done"
+                + (f" · {counters['fail']} failed" if counters["fail"] else "")
+            )
+            # Items stay "pending" until we finalize at the end; the message
+            # is what the UI displays per stage.
+            registry.update_item(job_id, idx, "pending", msg)
+
+        dispatcher.events.subscribe(_on_event)
+
+        # Ingest first — surface its counts on item 0.
+        ingest_counts = dispatcher.ingest()
+        registry.update_item(
+            job_id,
+            stage_index["ingest"],
+            "ok",
+            (
+                f"new={ingest_counts.get('new', 0)} "
+                f"updated={ingest_counts.get('updated', 0)} "
+                f"unchanged={ingest_counts.get('unchanged', 0)}"
+            ),
+        )
+
+        result = dispatcher.run()
+
+        # Finalize: flip each stage item to ok / fail based on totals.
+        for name, counts in result.items():
+            idx = stage_index.get(name)
+            if idx is None:
+                continue
+            processed = counts.get("processed", 0)
+            errors = counts.get("errors", 0)
+            skipped = counts.get("skipped", 0)
+            status = "fail" if errors and processed == 0 else "ok"
+            registry.update_item(
+                job_id,
+                idx,
+                status,
+                f"processed={processed} errors={errors} skipped={skipped}",
+            )
+
+        registry.set_status(job_id, "done")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("pipeline_run job %s crashed", job_id)
+        registry.set_status(job_id, "error", error=str(e)[:300])
+    finally:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        # Drop the global lock so the next /process can fire.
+        if _PROCESS_LOCK.locked():
+            try:
+                _PROCESS_LOCK.release()
+            except RuntimeError:
+                # Thread that acquired it isn't this one — shouldn't happen but
+                # be defensive.
+                pass
+
+
+@router.post("/process", response_model=JobOut)
+def trigger_process(
+    settings: Settings = Depends(get_settings),
+) -> JobOut:
+    """Kick off ``dance process`` in a background thread.
+
+    Equivalent to the CLI ``dance process``: ingests new files in
+    ``library_dir``, then runs every registered stage (analyze, separate,
+    analyze_stems, detect_regions, embed) until nothing advances.
+
+    Returns 409 if a pipeline run kicked off through this endpoint is
+    still active. (An externally-launched ``dance process`` in another
+    shell is not detected; the run will start anyway and they will race.)
+    """
+    registry = get_job_registry()
+    if registry.active(kind="pipeline_run"):
+        raise HTTPException(
+            status_code=409,
+            detail="A pipeline run is already in flight. Wait for it to finish, or restart the API to clear it.",
+        )
+
+    if not _PROCESS_LOCK.acquire(blocking=False):
+        # Defensive: lock without an active job means a previous run crashed
+        # without releasing. Clear and re-acquire.
+        logger.warning(
+            "PROCESS_LOCK was held without an active job; force-acquiring."
+        )
+        try:
+            _PROCESS_LOCK.release()
+        except RuntimeError:
+            pass
+        _PROCESS_LOCK.acquire(blocking=False)
+
+    # Pre-populate items so the UI can render a 6-row progress bar from t=0.
+    job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
+
+    thread = threading.Thread(
+        target=_run_dispatcher_job,
+        args=(job.id, settings),
+        daemon=True,
+        name=f"pipeline-run-{job.id}",
+    )
+    thread.start()
+
     return JobOut(**job.to_dict())

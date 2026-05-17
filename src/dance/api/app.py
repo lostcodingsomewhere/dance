@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import sessionmaker
 
+from dance.api.jobs import init_persisted_registry
 from dance.api.routers import ableton, files, pipeline, recommend, sessions, tracks, ws
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
@@ -41,6 +42,11 @@ def create_app(
     own_bridge = bridge is None
     bridge = bridge or AbletonBridge()
     session_factory = session_factory or get_session_factory(settings.db_url)
+
+    # Swap the global JobRegistry for one that persists to data_dir.
+    # Order matters: this MUST happen before PipelineWSManager() so the
+    # manager subscribes to the persisted instance.
+    init_persisted_registry(settings.data_dir / "jobs.json")
 
     ws_manager = ws.WSManager()
     pipeline_ws_manager = ws.PipelineWSManager()

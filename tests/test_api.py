@@ -1251,3 +1251,188 @@ def test_ingest_commit_rejects_bad_csv(client: TestClient) -> None:
 def test_get_job_404(client: TestClient) -> None:
     r = client.get("/api/v1/pipeline/jobs/nonexistent")
     assert r.status_code == 404
+
+
+def test_ingest_commit_per_row_selection(
+    client: TestClient, app, tmp_path, monkeypatch
+) -> None:
+    """Per-row toggle: caller passes selected_keys, only those download."""
+    import time
+    from dance.api.routers import pipeline as pipeline_router
+    from dance.spotify import csv_importer
+
+    app.state.settings.library_dir = tmp_path
+    downloaded: list[str] = []
+
+    def _fake_download(row, library, *args, **kwargs):  # noqa: ANN001
+        downloaded.append(f"{row.artist}|{row.title}")
+        return ("ok", "fake")
+
+    monkeypatch.setattr(csv_importer, "download_track", _fake_download)
+    monkeypatch.setattr(pipeline_router, "download_track", _fake_download)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/commit",
+        json={
+            "csv_text": _MINI_CSV,
+            "selected_keys": ["Daft Punk|One More Time"],
+        },
+    )
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+
+    for _ in range(50):
+        time.sleep(0.05)
+        body = client.get(f"/api/v1/pipeline/jobs/{job_id}").json()
+        if body["status"] == "done":
+            break
+    assert body["total"] == 1
+    assert downloaded == ["Daft Punk|One More Time"]
+
+
+def test_ingest_commit_per_row_empty_selection(client: TestClient, app, tmp_path) -> None:
+    """selected_keys=[] is treated as 'select nothing' → 400."""
+    app.state.settings.library_dir = tmp_path
+    r = client.post(
+        "/api/v1/pipeline/ingest/commit",
+        json={"csv_text": _MINI_CSV, "selected_keys": []},
+    )
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# JobRegistry persistence
+# ---------------------------------------------------------------------------
+
+
+def test_job_registry_round_trips_to_disk(tmp_path) -> None:
+    """A registry with persist_path saves on mutation and reloads on init."""
+    from dance.api.jobs import Job, JobRegistry
+
+    persist = tmp_path / "jobs.json"
+    reg = JobRegistry(persist_path=persist)
+    job = reg.create("test_kind", ["a", "b", "c"])
+    reg.update_item(job.id, 0, "ok", "first")
+    reg.update_item(job.id, 1, "fail", "oops")
+    reg.set_status(job.id, "done")
+
+    assert persist.exists()
+
+    # Fresh registry should see the same job
+    reg2 = JobRegistry(persist_path=persist)
+    loaded = reg2.get(job.id)
+    assert loaded is not None
+    assert loaded.kind == "test_kind"
+    assert loaded.status == "done"
+    assert loaded.items[0].status == "ok"
+    assert loaded.items[0].message == "first"
+    assert loaded.items[1].status == "fail"
+
+
+def test_job_registry_heals_orphaned_running_jobs(tmp_path) -> None:
+    """A job left as 'running' from a crashed previous process is moved to 'error'."""
+    from dance.api.jobs import JobRegistry
+
+    persist = tmp_path / "jobs.json"
+    reg = JobRegistry(persist_path=persist)
+    job = reg.create("crashy", ["x"])
+    reg.set_status(job.id, "running")
+
+    # Simulate API restart: new registry reads the persisted file
+    reg2 = JobRegistry(persist_path=persist)
+    healed = reg2.get(job.id)
+    assert healed is not None
+    assert healed.status == "error"
+    assert healed.error is not None
+    assert "restart" in healed.error.lower()
+
+
+def test_job_registry_caps_history(tmp_path) -> None:
+    """Old jobs beyond MAX_PERSISTED are dropped."""
+    from dance.api import jobs as jobs_mod
+    from dance.api.jobs import JobRegistry
+
+    persist = tmp_path / "jobs.json"
+    reg = JobRegistry(persist_path=persist)
+    # _MAX_PERSISTED_JOBS = 50; create 52 to confirm the oldest 2 get dropped.
+    cap = jobs_mod._MAX_PERSISTED_JOBS
+    for i in range(cap + 2):
+        reg.create("bulk", [f"item_{i}"])
+
+    reg2 = JobRegistry(persist_path=persist)
+    assert len(reg2.list(limit=200)) == cap
+
+
+# ---------------------------------------------------------------------------
+# /pipeline/process endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_process_creates_job_with_stage_items(
+    client: TestClient, monkeypatch
+) -> None:
+    """The endpoint pre-populates 6 stage items so the UI has a layout from t=0."""
+    import time
+    from dance.api.routers import pipeline as pipeline_router
+
+    # Stub the dispatcher path: don't actually load Demucs / CLAP in tests.
+    class _FakeDispatcher:
+        def __init__(self, *args, **kwargs):  # noqa: ANN001
+            from dance.pipeline.events import EventBus
+
+            self.events = EventBus()
+
+        def ingest(self):
+            return {"new": 0, "updated": 0, "unchanged": 0, "errors": 0}
+
+        def run(self):
+            return {
+                "analyze": {"processed": 0, "errors": 0, "skipped": 0},
+                "separate": {"processed": 0, "errors": 0, "skipped": 0},
+                "analyze_stems": {"processed": 0, "errors": 0, "skipped": 0},
+                "detect_regions": {"processed": 0, "errors": 0, "skipped": 0},
+                "embed": {"processed": 0, "errors": 0, "skipped": 0},
+            }
+
+    import dance.pipeline.dispatcher as dispatcher_mod
+    monkeypatch.setattr(dispatcher_mod, "Dispatcher", _FakeDispatcher)
+
+    r = client.post("/api/v1/pipeline/process")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "pipeline_run"
+    assert body["total"] == 6
+    labels = [it["label"] for it in body["items"]]
+    assert labels == [
+        "ingest",
+        "analyze",
+        "separate",
+        "analyze_stems",
+        "detect_regions",
+        "embed",
+    ]
+
+    # Wait for the (fast, stubbed) dispatcher to finish
+    job_id = body["id"]
+    for _ in range(60):
+        time.sleep(0.05)
+        body = client.get(f"/api/v1/pipeline/jobs/{job_id}").json()
+        if body["status"] == "done":
+            break
+    assert body["status"] == "done"
+    assert body["counts"]["ok"] == 6
+
+
+def test_pipeline_process_returns_409_when_already_running(
+    client: TestClient,
+) -> None:
+    """Two concurrent /process calls must not both run."""
+    from dance.api.jobs import get_job_registry
+
+    reg = get_job_registry()
+    # Manually plant an active pipeline_run job
+    reg.create("pipeline_run", ["x"])
+
+    r = client.post("/api/v1/pipeline/process")
+    assert r.status_code == 409
+    assert "already" in r.json()["detail"].lower()

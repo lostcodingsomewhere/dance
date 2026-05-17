@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as api from "../api";
 import { usePipelineJobs } from "../hooks/usePipelineJobs";
 import {
   PIPELINE_STAGES,
   type IngestPreviewResponse,
+  type IngestPreviewRow,
   type Job,
   type PipelineRecentTrack,
 } from "../types";
@@ -34,6 +35,10 @@ const ITEM_STATUS_COLOR: Record<string, string> = {
   fail: "text-rose-400",
 };
 
+function rowKey(row: IngestPreviewRow): string {
+  return `${row.artist}|${row.title}`;
+}
+
 function formatRelative(iso: string | null): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();
@@ -44,18 +49,79 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+function RowList({
+  rows,
+  selected,
+  onToggle,
+  emptyLabel,
+}: {
+  rows: IngestPreviewRow[];
+  selected: Set<string>;
+  onToggle: (key: string) => void;
+  emptyLabel: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="text-xs text-neutral-600 italic py-2">{emptyLabel}</div>
+    );
+  }
+  return (
+    <ul className="text-xs max-h-48 overflow-y-auto divide-y divide-neutral-800/40">
+      {rows.map((r) => {
+        const key = rowKey(r);
+        const isSelected = selected.has(key);
+        return (
+          <li
+            key={key}
+            className="flex items-center gap-2 py-1 px-1 hover:bg-neutral-900/60"
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggle(key)}
+              className="accent-emerald-500"
+            />
+            <div className="flex-1 min-w-0">
+              <span
+                className={`truncate ${
+                  isSelected ? "text-neutral-200" : "text-neutral-500"
+                }`}
+              >
+                <span className="text-neutral-500">{r.artist}</span> —{" "}
+                {r.title}
+              </span>
+              {r.duplicate_of != null && (
+                <span className="ml-2 text-neutral-600">
+                  ↺ track #{r.duplicate_of}
+                </span>
+              )}
+              {r.target_exists && (
+                <span className="ml-2 text-neutral-600">↺ file on disk</span>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function IngestPanel() {
   const qc = useQueryClient();
   const [csvText, setCsvText] = useState("");
   const [preview, setPreview] = useState<IngestPreviewResponse | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
-  const [includeDupes, setIncludeDupes] = useState(false);
+  // Selected row keys (artist|title). Default = all new selected, no dupes.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const previewMutation = useMutation({
     mutationFn: () => api.ingestPreview(csvText),
     onSuccess: (data) => {
       setPreview(data);
       setPreviewErr(null);
+      // Default: pre-select every new row, leave dupes unchecked.
+      const initial = new Set(data.new_rows.map(rowKey));
+      setSelected(initial);
     },
     onError: (err: Error) => {
       setPreviewErr(err.message);
@@ -64,12 +130,12 @@ function IngestPanel() {
   });
 
   const commitMutation = useMutation({
-    mutationFn: () => api.ingestCommit(csvText, includeDupes),
+    mutationFn: () =>
+      api.ingestCommit(csvText, { selected_keys: Array.from(selected) }),
     onSuccess: () => {
-      // Job is now ticking on the WebSocket. Clear the local form so
-      // the user moves on to watching progress.
       setCsvText("");
       setPreview(null);
+      setSelected(new Set());
       qc.invalidateQueries({ queryKey: ["pipeline-status"] });
     },
     onError: (err: Error) => {
@@ -77,12 +143,40 @@ function IngestPanel() {
     },
   });
 
-  async function handleFile(file: File) {
+  function toggle(key: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function selectAll(rows: IngestPreviewRow[]): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const r of rows) next.add(rowKey(r));
+      return next;
+    });
+  }
+
+  function deselectAll(rows: IngestPreviewRow[]): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const r of rows) next.delete(rowKey(r));
+      return next;
+    });
+  }
+
+  async function handleFile(file: File): Promise<void> {
     const text = await file.text();
     setCsvText(text);
-    // Trigger preview immediately
     setTimeout(() => previewMutation.mutate(), 0);
   }
+
+  const selectedCount = selected.size;
+  const canCommit =
+    !!preview && selectedCount > 0 && !commitMutation.isPending;
 
   return (
     <div className="rounded-lg border border-neutral-800 p-4 bg-neutral-950">
@@ -91,7 +185,7 @@ function IngestPanel() {
           Ingest from CSV
         </h2>
         <span className="text-xs text-neutral-500">
-          Exportify ({" "}
+          Exportify (
           <a
             href="https://exportify.net"
             target="_blank"
@@ -159,8 +253,8 @@ function IngestPanel() {
             <span className="rounded bg-amber-500/20 text-amber-200 px-2 py-1">
               {preview.parse_errors.length} parse error
             </span>
-            <span className="rounded bg-neutral-800 text-neutral-300 px-2 py-1">
-              {preview.total_rows} valid rows
+            <span className="rounded bg-cyan-500/20 text-cyan-200 px-2 py-1">
+              {selectedCount} selected
             </span>
           </div>
 
@@ -177,76 +271,86 @@ function IngestPanel() {
             </details>
           )}
 
-          {preview.duplicates.length > 0 && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-neutral-400">
-                Show duplicates ({preview.duplicates.length}) — already in library
-              </summary>
-              <ul className="mt-1 ml-4 text-neutral-500 max-h-40 overflow-y-auto">
-                {preview.duplicates.map((r, i) => (
-                  <li key={i} className="truncate py-0.5">
-                    {r.artist} — {r.title}
-                    {r.duplicate_of != null && (
-                      <span className="ml-2 text-neutral-600">
-                        (track #{r.duplicate_of})
-                      </span>
-                    )}
-                    {r.target_exists && (
-                      <span className="ml-2 text-neutral-600">(file on disk)</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-emerald-300">
+                New ({preview.new_rows.length})
+              </span>
+              <span className="text-xs text-neutral-500 space-x-2">
+                <button
+                  type="button"
+                  onClick={() => selectAll(preview.new_rows)}
+                  className="hover:text-neutral-200"
+                >
+                  all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deselectAll(preview.new_rows)}
+                  className="hover:text-neutral-200"
+                >
+                  none
+                </button>
+              </span>
+            </div>
+            <RowList
+              rows={preview.new_rows}
+              selected={selected}
+              onToggle={toggle}
+              emptyLabel="No new rows — everything is a duplicate."
+            />
+          </div>
 
-          {preview.new_rows.length > 0 && (
-            <details className="text-xs" open>
-              <summary className="cursor-pointer text-emerald-300">
-                Show new ({preview.new_rows.length})
-              </summary>
-              <ul className="mt-1 ml-4 text-neutral-300 max-h-40 overflow-y-auto">
-                {preview.new_rows.map((r, i) => (
-                  <li key={i} className="truncate py-0.5">
-                    <span className="text-neutral-500">{r.artist}</span> —{" "}
-                    {r.title}
-                  </li>
-                ))}
-              </ul>
-            </details>
+          {preview.duplicates.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-neutral-400">
+                  Duplicates ({preview.duplicates.length})
+                </span>
+                <span className="text-xs text-neutral-500 space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => selectAll(preview.duplicates)}
+                    className="hover:text-neutral-200"
+                  >
+                    all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deselectAll(preview.duplicates)}
+                    className="hover:text-neutral-200"
+                  >
+                    none
+                  </button>
+                </span>
+              </div>
+              <RowList
+                rows={preview.duplicates}
+                selected={selected}
+                onToggle={toggle}
+                emptyLabel=""
+              />
+            </div>
           )}
 
           <div className="flex items-center gap-3 pt-2 border-t border-neutral-800">
-            <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeDupes}
-                onChange={(e) => setIncludeDupes(e.target.checked)}
-              />
-              Include duplicates ({preview.duplicates.length})
-            </label>
             <button
               type="button"
-              disabled={
-                preview.new_rows.length === 0 && !includeDupes ||
-                commitMutation.isPending
-              }
+              disabled={!canCommit}
               onClick={() => commitMutation.mutate()}
               className="ml-auto px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {commitMutation.isPending
                 ? "Starting…"
-                : `Download ${
-                    includeDupes
-                      ? preview.total_rows
-                      : preview.new_rows.length
-                  } tracks`}
+                : `Download ${selectedCount} track${
+                    selectedCount === 1 ? "" : "s"
+                  }`}
             </button>
           </div>
           <p className="text-xs text-neutral-500 pt-1">
-            Files land in <code>~/Music/DJ/library/</code>. Run{" "}
-            <code>dance process</code> in the terminal afterward (or wait for
-            the next pipeline pass) to ingest them.
+            Files land in <code>~/Music/DJ/library/</code>. Hit the{" "}
+            <em>Process now</em> button at the top after downloads finish to
+            ingest them (or run <code>dance process</code> in the terminal).
           </p>
         </div>
       )}
@@ -255,9 +359,16 @@ function IngestPanel() {
 }
 
 function JobCard({ job }: { job: Job }) {
-  const pct = job.total > 0 ? Math.round(((job.counts.ok + job.counts.skip + job.counts.fail) / job.total) * 100) : 0;
+  const finished = job.counts.ok + job.counts.skip + job.counts.fail;
+  const pct = job.total > 0 ? Math.round((finished / job.total) * 100) : 0;
   const isActive = job.status === "queued" || job.status === "running";
-  const recentItems = job.items.filter((it) => it.status !== "pending").slice(-8).reverse();
+
+  // Pipeline-run jobs: show stage layout (all items, not just "recent done").
+  // Other jobs (csv_ingest): show last few completed items.
+  const showAllItems = job.kind === "pipeline_run";
+  const itemsToShow = showAllItems
+    ? job.items
+    : job.items.filter((it) => it.status !== "pending").slice(-8).reverse();
 
   return (
     <div className="rounded-lg border border-neutral-800 p-3 bg-neutral-950">
@@ -285,14 +396,20 @@ function JobCard({ job }: { job: Job }) {
           </div>
         </div>
         <div className="text-right">
-          <div className="font-mono text-2xl text-neutral-100 tabular-nums">{pct}%</div>
+          <div className="font-mono text-2xl text-neutral-100 tabular-nums">
+            {pct}%
+          </div>
         </div>
       </div>
 
       <div className="h-1.5 rounded bg-neutral-800 overflow-hidden mt-2">
         <div
           className={`h-full transition-all duration-500 ${
-            isActive ? "bg-amber-400" : job.status === "error" ? "bg-rose-500" : "bg-emerald-500"
+            isActive
+              ? "bg-amber-400"
+              : job.status === "error"
+              ? "bg-rose-500"
+              : "bg-emerald-500"
           }`}
           style={{ width: `${pct}%` }}
         />
@@ -302,12 +419,20 @@ function JobCard({ job }: { job: Job }) {
         <div className="text-xs text-rose-400 mt-2">{job.error}</div>
       )}
 
-      {recentItems.length > 0 && (
+      {itemsToShow.length > 0 && (
         <ul className="mt-2 text-xs space-y-0.5">
-          {recentItems.map((it, i) => (
+          {itemsToShow.map((it, i) => (
             <li key={i} className="truncate">
-              <span className={`${ITEM_STATUS_COLOR[it.status]} font-mono mr-2`}>
-                {it.status === "ok" ? "✓" : it.status === "fail" ? "✗" : it.status === "skip" ? "—" : "·"}
+              <span
+                className={`${ITEM_STATUS_COLOR[it.status]} font-mono mr-2`}
+              >
+                {it.status === "ok"
+                  ? "✓"
+                  : it.status === "fail"
+                  ? "✗"
+                  : it.status === "skip"
+                  ? "—"
+                  : "·"}
               </span>
               <span className="text-neutral-300">{it.label}</span>
               {it.message && (
@@ -322,6 +447,7 @@ function JobCard({ job }: { job: Job }) {
 }
 
 export function PipelineOps() {
+  const qc = useQueryClient();
   const status = useQuery({
     queryKey: ["pipeline-status"],
     queryFn: api.getPipelineStatus,
@@ -339,19 +465,52 @@ export function PipelineOps() {
   const jobs = usePipelineJobs();
   const sortedJobs = useMemo(
     () =>
-      Object.values(jobs).sort((a, b) => b.created_at - a.created_at).slice(0, 5),
+      Object.values(jobs)
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, 5),
+    [jobs],
+  );
+  const activePipelineRun = useMemo(
+    () =>
+      Object.values(jobs).find(
+        (j) =>
+          j.kind === "pipeline_run" &&
+          (j.status === "queued" || j.status === "running"),
+      ),
     [jobs],
   );
 
+  const processMutation = useMutation({
+    mutationFn: api.triggerPipelineProcess,
+    onSuccess: () => {
+      // The job arrives via WebSocket; nothing to do here besides refresh
+      // the status counters now that ingest may have created Track rows.
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+    },
+  });
+
+  // When a pipeline_run job is active, refresh the status counters faster
+  // (track states are moving) so the grid feels live.
+  useEffect(() => {
+    if (activePipelineRun) {
+      const id = setInterval(() => {
+        qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+        qc.invalidateQueries({ queryKey: ["pipeline-recent"] });
+      }, 1000);
+      return () => clearInterval(id);
+    }
+  }, [activePipelineRun, qc]);
+
   const counts = status.data?.counts ?? {};
   const total = status.data?.total ?? 0;
-  const completePct = total > 0 ? Math.round(((counts.complete ?? 0) / total) * 100) : 0;
+  const completePct =
+    total > 0 ? Math.round(((counts.complete ?? 0) / total) * 100) : 0;
   const inProgress = !!status.data?.in_progress;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
+      <div className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
           <p className="text-neutral-500 text-sm">
@@ -359,13 +518,38 @@ export function PipelineOps() {
             {completePct}% complete
           </p>
         </div>
-        <div className="flex items-center gap-3 text-xs text-neutral-400">
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${
-              status.isFetching ? "bg-emerald-400 animate-pulse" : "bg-neutral-600"
-            }`}
-          />
-          Auto-refresh {POLL_MS / 1000}s
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => processMutation.mutate()}
+            disabled={!!activePipelineRun || processMutation.isPending}
+            className={`px-4 py-2 rounded-lg font-semibold text-sm ${
+              activePipelineRun
+                ? "bg-amber-500/30 text-amber-200 ring-1 ring-amber-400/50 cursor-not-allowed"
+                : "bg-emerald-500 hover:bg-emerald-400 text-neutral-950"
+            } disabled:opacity-70`}
+            title={
+              activePipelineRun
+                ? "A pipeline run is already in flight"
+                : "Run dance process (ingest + every stage)"
+            }
+          >
+            {activePipelineRun
+              ? "Pipeline running…"
+              : processMutation.isPending
+              ? "Starting…"
+              : "Process now"}
+          </button>
+          <div className="flex items-center gap-2 text-xs text-neutral-400">
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${
+                status.isFetching
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-neutral-600"
+              }`}
+            />
+            Auto-refresh {POLL_MS / 1000}s
+          </div>
         </div>
       </div>
 
@@ -387,7 +571,9 @@ export function PipelineOps() {
           return (
             <div
               key={key}
-              className={`rounded-lg px-3 py-2 ${STAGE_COLOR[key] ?? "bg-neutral-800"} ${dim}`}
+              className={`rounded-lg px-3 py-2 ${
+                STAGE_COLOR[key] ?? "bg-neutral-800"
+              } ${dim}`}
             >
               <div className="text-[10px] uppercase tracking-wider opacity-80">
                 {label}
@@ -405,7 +591,7 @@ export function PipelineOps() {
           {sortedJobs.length > 0 && (
             <div>
               <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-2">
-                Download jobs
+                Jobs
               </h2>
               <div className="space-y-2">
                 {sortedJobs.map((job) => (
@@ -431,8 +617,8 @@ export function PipelineOps() {
             )}
             {recent.data && recent.data.length === 0 && (
               <div className="p-4 text-neutral-500 text-sm">
-                No tracks yet. Drop audio in <code>~/Music/DJ/library/</code> and
-                run <code>dance process</code>.
+                No tracks yet. Drop audio in <code>~/Music/DJ/library/</code>{" "}
+                and click <em>Process now</em>.
               </div>
             )}
             {recent.data && recent.data.length > 0 && (

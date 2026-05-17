@@ -162,12 +162,22 @@ export function ingestPreview(csv_text: string): Promise<IngestPreviewResponse> 
 
 export function ingestCommit(
   csv_text: string,
-  include_duplicates: boolean,
+  opts: { include_duplicates?: boolean; selected_keys?: string[] } = {},
 ): Promise<Job> {
   return request<Job>("/pipeline/ingest/commit", {
     method: "POST",
-    body: JSON.stringify({ csv_text, include_duplicates }),
+    body: JSON.stringify({
+      csv_text,
+      include_duplicates: opts.include_duplicates ?? false,
+      // null lets the backend distinguish "no list provided"
+      // (use include_duplicates) from "empty list" (download nothing → 400).
+      selected_keys: opts.selected_keys ?? null,
+    }),
   });
+}
+
+export function triggerPipelineProcess(): Promise<Job> {
+  return request<Job>("/pipeline/process", { method: "POST" });
 }
 
 export function getJob(jobId: string): Promise<Job> {

@@ -328,13 +328,24 @@ class IngestPreviewResponse(BaseModel):
 class IngestCommitRequest(BaseModel):
     """Body for ``POST /api/v1/pipeline/ingest/commit``.
 
-    ``csv_text``: same CSV the preview was generated from.
-    ``include_duplicates``: if True, also download tracks flagged as
-        duplicates (user override). Defaults to False (skip them).
+    Two selection modes:
+
+    1. **Bulk** (legacy): pass ``include_duplicates=True/False`` and the
+       server downloads either all new rows, or new + duplicate rows.
+       Used by callers that don't want a row-by-row UI.
+
+    2. **Explicit per-row** (UI uses this): pass ``selected_keys`` as a
+       list of ``"artist|title"`` strings. The server downloads exactly
+       those rows from the CSV. ``include_duplicates`` is ignored when
+       ``selected_keys`` is non-empty.
+
+    The ``|`` separator is chosen because it never appears in real
+    artist/title fields (they'd be stripped by the filesystem-sanitizer).
     """
 
     csv_text: str
     include_duplicates: bool = False
+    selected_keys: list[str] | None = None
 
 
 class JobItemOut(BaseModel):

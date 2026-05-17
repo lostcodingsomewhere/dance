@@ -1,21 +1,37 @@
-"""In-memory job tracker for background work kicked off by the API.
+"""Job tracker for background work kicked off by the API.
 
-Used by the CSV ingest endpoint to run yt-dlp downloads off the request
-thread while letting the UI poll (or subscribe via WebSocket) for status.
+Used by:
 
-Deliberately minimal — no persistence, no cancellation, no priorities.
-A job lives in the process that started it; if the API restarts, all jobs
-are lost. This is fine for hobbyist ops where the user is in the room and
-can re-trigger.
+- ``POST /pipeline/ingest/commit`` for yt-dlp download jobs (kind="csv_ingest").
+- ``POST /pipeline/process`` for in-process dispatcher runs (kind="pipeline_run").
+
+Each :class:`Job` owns a list of :class:`JobItem` units (one per CSV row,
+one per pipeline stage, etc.). Updates flow through the registry under
+a lock and are then broadcast to subscribers — the ``/ws/pipeline``
+WebSocket pushes the full snapshot to UI clients on every mutation.
+
+Persistence: jobs are serialized to ``<data_dir>/jobs.json`` after every
+mutation (atomic write via tempfile rename). On startup the registry
+loads the last 50 jobs. This is a JSON file rather than a SQLAlchemy
+table on purpose: jobs are operational state, not analytical, and we
+don't want to churn the schema or Alembic migrations for them.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Callable, Literal
+
+
+logger = logging.getLogger(__name__)
 
 
 JobStatus = Literal["queued", "running", "done", "error"]
@@ -33,7 +49,7 @@ class JobItem:
 @dataclass
 class Job:
     id: str
-    kind: str  # e.g. "csv_ingest"
+    kind: str  # e.g. "csv_ingest" or "pipeline_run"
     status: JobStatus = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -68,14 +84,96 @@ class Job:
             ],
         }
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "Job":
+        items = [JobItem(**it) for it in d.get("items", [])]
+        # ``counts`` and ``total`` are derived properties — drop if persisted.
+        return cls(
+            id=d["id"],
+            kind=d["kind"],
+            status=d.get("status", "done"),
+            created_at=float(d.get("created_at", time.time())),
+            started_at=d.get("started_at"),
+            finished_at=d.get("finished_at"),
+            items=items,
+            error=d.get("error"),
+            revision=int(d.get("revision", 0)),
+        )
+
+
+# Cap on persisted history. Older jobs get dropped on each save to keep the
+# file from growing unbounded.
+_MAX_PERSISTED_JOBS = 50
+
 
 class JobRegistry:
-    """Thread-safe in-memory job store + change broadcast."""
+    """Thread-safe job store + change broadcast + optional disk persistence."""
 
-    def __init__(self) -> None:
+    def __init__(self, persist_path: Path | None = None) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[Job], None]] = []
+        self._persist_path = persist_path
+        if persist_path is not None:
+            self._load_from_disk()
+
+    # ---- persistence ----
+
+    def _load_from_disk(self) -> None:
+        """Best-effort load. Missing or corrupt files are tolerated silently."""
+        if self._persist_path is None or not self._persist_path.exists():
+            return
+        try:
+            data = json.loads(self._persist_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Could not load jobs from %s: %s", self._persist_path, e)
+            return
+        if not isinstance(data, list):
+            return
+        for entry in data:
+            try:
+                job = Job.from_dict(entry)
+                # Heal: any job left in ``running`` or ``queued`` from a previous
+                # API process is dead. Move it to ``error`` so the UI can tell.
+                if job.status in ("running", "queued"):
+                    job.status = "error"
+                    job.error = "API restarted while job was active"
+                    job.finished_at = job.finished_at or time.time()
+                self._jobs[job.id] = job
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skipping corrupt job entry: %s", e)
+
+    def _save_to_disk(self) -> None:
+        """Atomic write: dump to a tempfile then rename. Lock held by caller."""
+        if self._persist_path is None:
+            return
+        # Order: newest first, capped.
+        ordered = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)[
+            :_MAX_PERSISTED_JOBS
+        ]
+        # Rebuild dict so future ``list()`` calls don't see dropped jobs either.
+        self._jobs = {j.id: j for j in ordered}
+
+        payload = [j.to_dict() for j in ordered]
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(
+                prefix=".jobs.", suffix=".json", dir=str(self._persist_path.parent)
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                os.replace(tmp, self._persist_path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
+            logger.warning("Could not persist jobs to %s: %s", self._persist_path, e)
+
+    # ---- mutation ----
 
     def create(self, kind: str, item_labels: list[str]) -> Job:
         job = Job(
@@ -85,6 +183,7 @@ class JobRegistry:
         )
         with self._lock:
             self._jobs[job.id] = job
+            self._save_to_disk()
         self._broadcast(job)
         return job
 
@@ -98,6 +197,16 @@ class JobRegistry:
                 self._jobs.values(), key=lambda j: j.created_at, reverse=True
             )[:limit]
 
+    def active(self, kind: str | None = None) -> list[Job]:
+        """Jobs currently in ``queued`` or ``running``, optionally filtered by kind."""
+        with self._lock:
+            return [
+                j
+                for j in self._jobs.values()
+                if j.status in ("queued", "running")
+                and (kind is None or j.kind == kind)
+            ]
+
     def update_item(
         self, job_id: str, index: int, status: str, message: str = ""
     ) -> None:
@@ -109,6 +218,7 @@ class JobRegistry:
             job.items[index].message = message
             job.revision += 1
             snapshot = job
+            self._save_to_disk()
         self._broadcast(snapshot)
 
     def set_status(
@@ -129,7 +239,10 @@ class JobRegistry:
                 job.finished_at = time.time()
             job.revision += 1
             snapshot = job
+            self._save_to_disk()
         self._broadcast(snapshot)
+
+    # ---- subscribers ----
 
     def subscribe(self, callback: Callable[[Job], None]) -> Callable[[], None]:
         """Register a callback. Returns an ``unsubscribe()`` closure."""
@@ -156,7 +269,8 @@ class JobRegistry:
                 pass
 
 
-# Process-wide singleton. The API stashes it on app.state.job_registry too.
+# Process-wide singleton. Created without persistence here; the API replaces
+# it via ``init_persisted_registry`` once settings are available.
 _REGISTRY = JobRegistry()
 
 
@@ -164,4 +278,23 @@ def get_job_registry() -> JobRegistry:
     return _REGISTRY
 
 
-__all__ = ["Job", "JobItem", "JobRegistry", "JobStatus", "get_job_registry"]
+def init_persisted_registry(persist_path: Path) -> JobRegistry:
+    """Swap the global registry for one that writes to ``persist_path``.
+
+    Called from ``create_app`` so subscribers (PipelineWSManager) attach to
+    the same instance the API endpoints use. Idempotent: calling twice with
+    the same path is fine.
+    """
+    global _REGISTRY
+    _REGISTRY = JobRegistry(persist_path=persist_path)
+    return _REGISTRY
+
+
+__all__ = [
+    "Job",
+    "JobItem",
+    "JobRegistry",
+    "JobStatus",
+    "get_job_registry",
+    "init_persisted_registry",
+]
