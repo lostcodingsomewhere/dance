@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from dance.als import AlsGenerator
@@ -22,8 +22,10 @@ from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
     Region,
+    SessionPlay,
     StemFile,
     Track,
+    TrackEdge,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,42 @@ def export_als(
         track_count=stem_count + 1,  # stems + mix
         locator_count=region_count,
     )
+
+
+@router.delete("/{track_id}")
+def delete_track(
+    track_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Remove a track and everything that references it.
+
+    Cascades cover ``stem_files``, ``regions``, ``embeddings``, ``tags``,
+    ``analysis``, ``beats``, ``phrases`` (declared on the Track ORM).
+    SessionPlay and TrackEdge don't cascade — they get explicit deletes
+    here so the FK constraints don't fire.
+
+    Files on disk are NOT touched. The audio file in ``library_dir`` and
+    any stems under ``stems_dir/<hash>/`` are left in place; if you re-
+    ingest the same file later it'll come back with a fresh track_id.
+    Stems orphaned by deletes can be swept manually — that's a deliberate
+    trade-off so a misclick doesn't destroy audio.
+    """
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+
+    # Non-cascading refs first.
+    session.query(SessionPlay).filter(SessionPlay.track_id == track_id).delete(
+        synchronize_session=False
+    )
+    session.query(TrackEdge).filter(
+        (TrackEdge.from_track_id == track_id)
+        | (TrackEdge.to_track_id == track_id)
+    ).delete(synchronize_session=False)
+
+    session.delete(track)
+    session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{track_id}/stems", response_model=list[StemFileOut])

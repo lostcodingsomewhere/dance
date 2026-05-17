@@ -186,6 +186,37 @@ export function triggerPipelineProcess(): Promise<Job> {
   return request<Job>("/pipeline/process", { method: "POST" });
 }
 
+export interface ScanResult {
+  new: number;
+  updated: number;
+  unchanged: number;
+  errors: number;
+}
+
+export function scanLibrary(): Promise<ScanResult> {
+  return request<ScanResult>("/pipeline/scan", { method: "POST" });
+}
+
+export interface WatchState {
+  enabled: boolean;
+  interval_seconds: number;
+}
+
+export function getWatchState(): Promise<WatchState> {
+  return request<WatchState>("/pipeline/watch");
+}
+
+export function setWatchState(enabled: boolean): Promise<WatchState> {
+  return request<WatchState>("/pipeline/watch", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function deleteTrack(id: number): Promise<void> {
+  return request<void>(`/tracks/${id}`, { method: "DELETE" });
+}
+
 export function getJob(jobId: string): Promise<Job> {
   return request<Job>(`/pipeline/jobs/${jobId}`);
 }

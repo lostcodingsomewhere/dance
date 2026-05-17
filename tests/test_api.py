@@ -1483,3 +1483,159 @@ def test_pipeline_process_returns_409_when_already_running(
     r = client.post("/api/v1/pipeline/process")
     assert r.status_code == 409
     assert "already" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# DELETE /tracks/{id}
+# ---------------------------------------------------------------------------
+
+
+def test_delete_track_cascades(
+    client: TestClient, session, make_track
+) -> None:
+    """Delete a track and verify it's gone along with its stems / regions / tags."""
+    t = make_track(title="goner", state="complete")
+    _add_fullmix_analysis(session, t, bpm=120.0)
+    _add_tag(session, t, "doomed")
+    # A stem with its own analysis row
+    sf = StemFile(track_id=t.id, kind="drums", path="/tmp/x.wav")
+    session.add(sf)
+    session.commit()
+    session.add(
+        AudioAnalysis(
+            track_id=t.id, stem_file_id=sf.id, bpm=120.0, analyzed_at=now_utc()
+        )
+    )
+    session.add(
+        Region(
+            track_id=t.id,
+            position_ms=0,
+            length_ms=1000,
+            region_type="cue",
+            source="auto",
+        )
+    )
+    session.commit()
+
+    track_id = t.id
+    sf_id = sf.id
+
+    r = client.delete(f"/api/v1/tracks/{track_id}")
+    assert r.status_code == 204
+
+    # The endpoint used a different session; expire ours so we re-query.
+    session.expire_all()
+
+    # Everything related is gone
+    assert session.get(Track, track_id) is None
+    assert session.get(StemFile, sf_id) is None
+    assert (
+        session.query(Region).filter(Region.track_id == track_id).count() == 0
+    )
+    assert (
+        session.query(AudioAnalysis)
+        .filter(AudioAnalysis.track_id == track_id)
+        .count()
+        == 0
+    )
+    assert (
+        session.query(TrackTag).filter(TrackTag.track_id == track_id).count() == 0
+    )
+
+
+def test_delete_track_404(client: TestClient) -> None:
+    r = client.delete("/api/v1/tracks/99999")
+    assert r.status_code == 404
+
+
+def test_delete_track_with_session_play_does_not_fk_violate(
+    client: TestClient, session, make_track
+) -> None:
+    """SessionPlay refs a track but doesn't cascade. Delete must clean up."""
+    from datetime import datetime, timezone
+
+    t = make_track(title="played and deleted")
+    sess = DjSession(name="set 1", started_at=datetime.now(timezone.utc))
+    session.add(sess)
+    session.commit()
+    play = SessionPlay(
+        session_id=sess.id,
+        track_id=t.id,
+        played_at=datetime.now(timezone.utc),
+        position_in_set=1,
+    )
+    session.add(play)
+    session.commit()
+
+    track_id = t.id
+    sess_id = sess.id
+    r = client.delete(f"/api/v1/tracks/{track_id}")
+    assert r.status_code == 204
+    session.expire_all()
+    # SessionPlay row gone, session still there
+    assert (
+        session.query(SessionPlay)
+        .filter(SessionPlay.track_id == track_id)
+        .count()
+        == 0
+    )
+    assert session.get(DjSession, sess_id) is not None
+
+
+# ---------------------------------------------------------------------------
+# /pipeline/scan and /pipeline/watch
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_scan_returns_counts(client: TestClient, tmp_path, app) -> None:
+    """Empty library: 0 new, 0 errors. Verifies the endpoint plumbing without
+    needing the heavy ML deps."""
+    app.state.settings.library_dir = tmp_path / "empty"
+    (tmp_path / "empty").mkdir()
+    r = client.post("/api/v1/pipeline/scan")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["new"] == 0
+    assert body["errors"] == 0
+
+
+def test_pipeline_watch_get_defaults_disabled(client: TestClient) -> None:
+    r = client.get("/api/v1/pipeline/watch")
+    assert r.status_code == 200
+    body = r.json()
+    assert "enabled" in body
+    assert "interval_seconds" in body
+    assert isinstance(body["enabled"], bool)
+
+
+def test_pipeline_watch_post_toggles(client: TestClient) -> None:
+    r = client.post("/api/v1/pipeline/watch", json={"enabled": True})
+    assert r.status_code == 200
+    assert r.json()["enabled"] is True
+
+    r = client.post("/api/v1/pipeline/watch", json={"enabled": False})
+    assert r.json()["enabled"] is False
+
+
+def test_pipeline_watch_post_invalid_400(client: TestClient) -> None:
+    r = client.post("/api/v1/pipeline/watch", json={"enabled": "yes"})
+    assert r.status_code == 400
+
+
+def test_pipeline_watch_persists_across_init(client: TestClient, tmp_path) -> None:
+    """Flag round-trips through watch.json."""
+    from dance.api.routers import pipeline as pipeline_router
+
+    # Toggle ON via the endpoint
+    client.post("/api/v1/pipeline/watch", json={"enabled": True})
+    # Force-reload as a new "init" would
+    settings = get_settings()
+    pipeline_router._WATCH_STATE["enabled"] = False  # pretend fresh process
+    pipeline_router._load_watch_state(settings)
+    assert pipeline_router._WATCH_STATE["enabled"] is True
+
+    # Toggle OFF and verify
+    client.post("/api/v1/pipeline/watch", json={"enabled": False})
+    pipeline_router._WATCH_STATE["enabled"] = True
+    pipeline_router._load_watch_state(settings)
+    assert pipeline_router._WATCH_STATE["enabled"] is False

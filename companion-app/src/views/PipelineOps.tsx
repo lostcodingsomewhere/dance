@@ -11,6 +11,11 @@ import {
   type PipelineRecentTrack,
 } from "../types";
 
+interface ScanToast {
+  text: string;
+  tone: "ok" | "err";
+}
+
 const POLL_MS = 3000;
 const RECENT_LIMIT = 30;
 const FILTERED_LIMIT = 200;
@@ -435,6 +440,7 @@ export function PipelineOps() {
   const [ingestOpen, setIngestOpen] = useState(false);
   /** When set, the activity table filters to this state. Driven by tile clicks. */
   const [filterState, setFilterState] = useState<string | null>(null);
+  const [scanToast, setScanToast] = useState<ScanToast | null>(null);
 
   const status = useQuery({
     queryKey: ["pipeline-status"],
@@ -450,6 +456,51 @@ export function PipelineOps() {
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
   });
+
+  const watch = useQuery({
+    queryKey: ["pipeline-watch"],
+    queryFn: api.getWatchState,
+    refetchInterval: 30000,
+  });
+
+  const watchMutation = useMutation({
+    mutationFn: api.setWatchState,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-watch"] }),
+  });
+
+  const scanMutation = useMutation({
+    mutationFn: api.scanLibrary,
+    onSuccess: (data) => {
+      setScanToast({
+        text: `Scanned: ${data.new} new · ${data.updated} updated · ${data.unchanged} unchanged${
+          data.errors ? ` · ${data.errors} errors` : ""
+        }`,
+        tone: data.errors ? "err" : "ok",
+      });
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      qc.invalidateQueries({ queryKey: ["pipeline-recent", filterState] });
+      setTimeout(() => setScanToast(null), 5000);
+    },
+    onError: (err: Error) => {
+      setScanToast({ text: err.message, tone: "err" });
+      setTimeout(() => setScanToast(null), 5000);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: api.deleteTrack,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      qc.invalidateQueries({ queryKey: ["pipeline-recent", filterState] });
+    },
+  });
+
+  function confirmDelete(track: PipelineRecentTrack): void {
+    const label = `${track.title ?? `(untitled)`} — ${track.artist ?? "?"}`;
+    if (window.confirm(`Delete track #${track.id} (${label})?\n\nThis removes the row from the DB and any stems/analysis. The audio file in your library stays on disk.`)) {
+      deleteMutation.mutate(track.id);
+    }
+  }
 
   const jobs = usePipelineJobs();
   const sortedJobs = useMemo(
@@ -509,11 +560,43 @@ export function PipelineOps() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <label
+            className={`px-3 py-2 rounded-lg text-sm font-semibold cursor-pointer flex items-center gap-2 ${
+              watch.data?.enabled
+                ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/40"
+                : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+            }`}
+            title={
+              watch.data?.enabled
+                ? `Watching — auto-triggers Process every ${watch.data.interval_seconds}s if work is pending`
+                : "Auto-run pipeline when there's work to do"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={!!watch.data?.enabled}
+              onChange={(e) => watchMutation.mutate(e.target.checked)}
+              disabled={watchMutation.isPending}
+              className="accent-emerald-500"
+            />
+            <span>
+              Watch{watch.data?.enabled ? ` · ${watch.data.interval_seconds}s` : ""}
+            </span>
+          </label>
+          <button
+            type="button"
+            onClick={() => scanMutation.mutate()}
+            disabled={scanMutation.isPending}
+            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm font-semibold disabled:opacity-40"
+            title="Scan library_dir for new files. Doesn't run stages — use Process now after."
+          >
+            {scanMutation.isPending ? "Scanning…" : "Scan"}
+          </button>
           <button
             type="button"
             onClick={() => setIngestOpen(true)}
-            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm font-semibold"
+            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm font-semibold"
           >
             Ingest CSV…
           </button>
@@ -538,7 +621,7 @@ export function PipelineOps() {
                 ? "Starting…"
                 : "Process now"}
           </button>
-          <div className="flex items-center gap-2 text-xs text-neutral-400">
+          <div className="flex items-center gap-2 text-xs text-neutral-400 ml-2">
             <span
               className={`inline-block w-2 h-2 rounded-full ${
                 status.isFetching
@@ -550,6 +633,18 @@ export function PipelineOps() {
           </div>
         </div>
       </div>
+
+      {scanToast && (
+        <div
+          className={`px-6 py-2 text-sm ${
+            scanToast.tone === "ok"
+              ? "bg-emerald-500/10 text-emerald-200"
+              : "bg-rose-500/10 text-rose-200"
+          }`}
+        >
+          {scanToast.text}
+        </div>
+      )}
 
       {/* Weighted progress bar */}
       <div className="px-6 pt-4">
@@ -657,13 +752,14 @@ export function PipelineOps() {
                       <th className="text-left px-3 py-2">Track</th>
                       <th className="text-left px-3 py-2 w-32">State</th>
                       <th className="text-right px-3 py-2 w-20">Updated</th>
+                      <th className="w-8"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {recent.data.map((t: PipelineRecentTrack) => (
                       <tr
                         key={t.id}
-                        className="border-t border-neutral-800/50 hover:bg-neutral-900"
+                        className="border-t border-neutral-800/50 hover:bg-neutral-900 group"
                       >
                         <td className="px-3 py-2 text-neutral-500 font-mono">
                           {t.id}
@@ -697,6 +793,21 @@ export function PipelineOps() {
                         </td>
                         <td className="px-3 py-2 text-right text-neutral-500 text-xs tabular-nums">
                           {formatRelative(t.updated_at)}
+                        </td>
+                        <td className="pr-3">
+                          <button
+                            type="button"
+                            onClick={() => confirmDelete(t)}
+                            disabled={
+                              deleteMutation.isPending &&
+                              deleteMutation.variables === t.id
+                            }
+                            className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-rose-400 text-lg leading-none transition-opacity disabled:opacity-40"
+                            title="Delete this track from the DB (audio file stays on disk)"
+                            aria-label={`Delete track ${t.id}`}
+                          >
+                            ×
+                          </button>
                         </td>
                       </tr>
                     ))}

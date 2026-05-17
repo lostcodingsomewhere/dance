@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from dance.api.jobs import init_persisted_registry
 from dance.api.routers import ableton, files, pipeline, recommend, sessions, tracks, ws
+from dance.api.routers.pipeline import start_watch_thread
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
 from dance.osc.bridge import AbletonBridge, AbletonState
@@ -47,6 +48,10 @@ def create_app(
     # Order matters: this MUST happen before PipelineWSManager() so the
     # manager subscribes to the persisted instance.
     init_persisted_registry(settings.data_dir / "jobs.json")
+
+    # Start the watch-mode polling thread. Reads its persisted
+    # enabled flag from data_dir/watch.json. Idempotent.
+    start_watch_thread(settings)
 
     ws_manager = ws.WSManager()
     pipeline_ws_manager = ws.PipelineWSManager()

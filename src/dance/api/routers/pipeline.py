@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -61,6 +62,118 @@ _INGEST_WORKERS = 4
 # Module-level lock so two API requests can't race to start ``dance process``.
 # (External CLI runs are still possible; see module docstring.)
 _PROCESS_LOCK = threading.Lock()
+
+# Watch mode: a background thread polls every _WATCH_INTERVAL_S and, when
+# enabled, auto-triggers a pipeline_run if there's pending work and no
+# active job. State is persisted to <data_dir>/watch.json across restarts.
+_WATCH_STATE = {"enabled": False}
+_WATCH_INTERVAL_S = 60
+_WATCH_STARTED = False
+_WATCH_LOCK = threading.Lock()
+
+
+def _watch_state_path(settings: Settings) -> Path:
+    return settings.data_dir / "watch.json"
+
+
+def _load_watch_state(settings: Settings) -> None:
+    """Best-effort load of persisted watch state. Quietly tolerates a missing
+    or corrupt file — defaults to disabled."""
+    import json as _json
+
+    path = _watch_state_path(settings)
+    if not path.exists():
+        return
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("enabled"), bool):
+            _WATCH_STATE["enabled"] = data["enabled"]
+    except (OSError, ValueError):
+        pass
+
+
+def _save_watch_state(settings: Settings) -> None:
+    import json as _json
+
+    path = _watch_state_path(settings)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps(_WATCH_STATE), encoding="utf-8")
+    except OSError as e:
+        logger.warning("Could not persist watch state to %s: %s", path, e)
+
+
+# These states mean "this track still has work to do." Used by both the
+# /status endpoint's ``in_progress`` flag and the watch loop's
+# pending-work check.
+_TERMINAL_STATES: frozenset[str] = frozenset(
+    {TrackState.COMPLETE.value, TrackState.ERROR.value}
+)
+
+
+def _pending_track_count(settings: Settings) -> int:
+    """Count tracks not yet at a terminal state. Best-effort; opens its own
+    session because the watch thread doesn't have one injected."""
+    SessionLocal = get_session_factory(settings.db_url)
+    session = SessionLocal()
+    try:
+        return int(
+            session.query(func.count(Track.id))
+            .filter(~Track.state.in_(_TERMINAL_STATES))
+            .scalar()
+            or 0
+        )
+    finally:
+        session.close()
+
+
+def _watch_loop(settings: Settings) -> None:
+    """Daemon loop: every _WATCH_INTERVAL_S, if enabled + pending work + no
+    active pipeline_run job, kick off a pipeline_run. Idempotent and safe
+    to leave running forever — does nothing when ``enabled=False``."""
+    registry = get_job_registry()
+    while True:
+        try:
+            time.sleep(_WATCH_INTERVAL_S)
+            if not _WATCH_STATE["enabled"]:
+                continue
+            if registry.active(kind="pipeline_run"):
+                continue
+            if _pending_track_count(settings) == 0:
+                continue
+            # Replicate the /process endpoint's locking behavior: skip
+            # cleanly if some other path beat us to it.
+            if not _PROCESS_LOCK.acquire(blocking=False):
+                continue
+            job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
+            t = threading.Thread(
+                target=_run_dispatcher_job,
+                args=(job.id, settings),
+                daemon=True,
+                name=f"watch-pipeline-{job.id}",
+            )
+            t.start()
+        except Exception:  # noqa: BLE001
+            logger.exception("watch loop iteration failed; continuing")
+
+
+def start_watch_thread(settings: Settings) -> None:
+    """Start the watch thread once per process. Called from ``create_app``."""
+    global _WATCH_STARTED
+    with _WATCH_LOCK:
+        if _WATCH_STARTED:
+            return
+        _load_watch_state(settings)
+        t = threading.Thread(
+            target=_watch_loop, args=(settings,), daemon=True, name="watch-loop"
+        )
+        t.start()
+        _WATCH_STARTED = True
+        logger.info(
+            "watch loop started (enabled=%s, interval=%ds)",
+            _WATCH_STATE["enabled"],
+            _WATCH_INTERVAL_S,
+        )
 
 
 @router.get("/status", response_model=PipelineStatusOut)
@@ -442,6 +555,59 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
                 # Thread that acquired it isn't this one — shouldn't happen but
                 # be defensive.
                 pass
+
+
+@router.post("/scan")
+def trigger_scan(
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Run ingest only — scan ``library_dir`` for new audio files, hash
+    them, create Track rows in ``pending``. **Does not** advance any
+    stages. Use this to preview "what's new on disk" before deciding to
+    commit a full Process run.
+
+    Returns the per-bucket counts directly (no Job tracking — scan is
+    synchronous and fast, typically < 1 s for hundreds of files).
+    """
+    # Import here so the heavy pipeline deps don't load on every API request.
+    from dance.pipeline.dispatcher import Dispatcher
+
+    SessionLocal = get_session_factory(settings.db_url)
+    session = SessionLocal()
+    try:
+        dispatcher = Dispatcher(settings, session)
+        return dispatcher.ingest()
+    finally:
+        session.close()
+
+
+@router.get("/watch")
+def get_watch() -> dict:
+    """Current watch-mode state. ``interval_seconds`` is the poll cadence."""
+    return {
+        "enabled": _WATCH_STATE["enabled"],
+        "interval_seconds": _WATCH_INTERVAL_S,
+    }
+
+
+@router.post("/watch")
+def set_watch(
+    body: dict,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Toggle watch mode. ``{enabled: bool}``. The background thread is
+    always running; this flag controls whether it actually triggers
+    pipeline runs."""
+    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+        raise HTTPException(
+            status_code=400, detail="body must be {enabled: bool}"
+        )
+    _WATCH_STATE["enabled"] = body["enabled"]
+    _save_watch_state(settings)
+    return {
+        "enabled": _WATCH_STATE["enabled"],
+        "interval_seconds": _WATCH_INTERVAL_S,
+    }
 
 
 @router.post("/process", response_model=JobOut)
