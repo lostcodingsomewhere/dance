@@ -85,20 +85,49 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 **Workaround in this repo:** `dance ingest-csv` — bypass Spotify entirely. Export the playlist to CSV via https://exportify.net (which uses an old grandfathered Spotify app and still works), then feed the CSV to `yt-dlp` for the actual audio download from YouTube Music. The library dir ends up populated the same way `dance sync` would have done, and the rest of the pipeline runs unchanged.
 
-> ⚠️ **YouTube has its own anti-bot wall (2025-2026).** Even after exportify gives you a clean track list, the `yt-dlp` side requires substantial setup:
+> ⚠️ **YouTube has its own anti-bot wall (2025-2026) — but it's solvable.** Confirmed working on 2026-05-16. All five pieces below are required; missing any one returns "Only storyboard images are available" or HTTP 403 from googlevideo.com.
 >
-> - **Latest yt-dlp** (`pip install -U yt-dlp` — needs 2026.03+ at minimum, refreshes weekly).
-> - **Node.js on PATH** for the n-challenge JS solver (`brew install node` or nvm).
-> - **`yt-dlp-ejs`** plugin: `pip install yt-dlp-ejs`.
-> - **bgutil PO Token server** running in Docker:
->   ```bash
->   docker run --name bgutil-provider -d --restart unless-stopped \
->     -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest
->   pip install bgutil-ytdlp-pot-provider
->   ```
-> - **Chrome cookies** for the actual download (`--cookies-from-browser "chrome:Profile 2"` — match your profile dir under `~/Library/Application Support/Google/Chrome/`).
+> **One-time setup:**
 >
-> Even with **all** the above, YouTube periodically rotates its anti-bot in ways that briefly disable yt-dlp. As of 2026-05, the chain above can return "Only storyboard images are available" when the signature solver fails — which it does intermittently. **Do not build a production audio pipeline on yt-dlp alone.** For tracks you intend to mix repeatedly, buy them on Beatport / Bandcamp (the legal, stable path) or use a real DJ-music subscription (Beatport Streaming, Beatsource). Save yt-dlp for "demo / one-off / can't-find-it-anywhere" tracks.
+> 1. Latest yt-dlp: `pip install -U yt-dlp` (needs 2026.03+).
+> 2. Node.js on a brew-installed path (NOT just nvm — yt-dlp's PATH lookup at process-spawn time misses nvm dirs): `brew install node`.
+> 3. EJS challenge solver: `pip install yt-dlp-ejs`.
+> 4. bgutil PO Token plugin + server:
+>    ```bash
+>    pip install bgutil-ytdlp-pot-provider
+>    docker run --name bgutil-provider -d --restart unless-stopped \
+>      -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest
+>    # verify: curl http://127.0.0.1:4416/ping  →  {"server_uptime":...,"version":"1.3.1"}
+>    ```
+> 5. Be logged in to YouTube on Chrome (any profile works; pick the freshest).
+>
+> **The working command** — every flag is load-bearing:
+>
+> ```bash
+> yt-dlp \
+>   --cookies-from-browser "chrome:Profile 2" \
+>   --js-runtimes node \
+>   --ffmpeg-location ~/.spotdl/ffmpeg \
+>   --extract-audio --audio-format mp3 --audio-quality 0 \
+>   --postprocessor-args "ffmpeg:-b:a 320k" \
+>   --no-playlist \
+>   -o "/Users/arya/Music/DJ/library/%(uploader)s - %(title)s.%(ext)s" \
+>   "ytsearch1:Artist Title"
+> ```
+>
+> **The one non-obvious flag is `--js-runtimes node`.** yt-dlp 2026 does NOT auto-discover JS runtimes — `YoutubeDL.py:876` only enables runtimes present in `params['js_runtimes']`, which defaults to empty. Without this flag, debug shows `JS runtimes: none` and `node (unavailable)` even when `node` is on PATH and `yt-dlp-ejs` is installed.
+>
+> **Verify the chain is healthy** — debug log should show:
+>
+> ```
+> [debug] JS runtimes: node-X.Y.Z
+> [debug] [youtube] [pot] PO Token Providers: bgutil:http-1.3.1 (external), ...
+> [debug] [youtube] [jsc] JS Challenge Providers: ..., node, ...   ← no "(unavailable)" on node
+> [youtube] [pot:bgutil:http] Generating a gvs PO Token for web_safari client via bgutil HTTP server
+> [youtube] [jsc:node] Solving JS challenges using node
+> ```
+>
+> YouTube rotates its anti-bot every few months. When it breaks: `pip install -U yt-dlp bgutil-ytdlp-pot-provider yt-dlp-ejs && docker pull brainicism/bgutil-ytdlp-pot-provider:latest && docker restart bgutil-provider`. For tracks you intend to mix repeatedly, buy them on Beatport / Bandcamp (stable + legal) — save yt-dlp for "fill out the long-tail library" use.
 
 ## Loading audio from a local folder (no Spotify needed)
 
