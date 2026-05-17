@@ -7,14 +7,28 @@ differ. ``from_attributes=True`` lets us pass SQLAlchemy rows directly.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class _Base(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+def _as_utc_iso(dt: datetime | None) -> str | None:
+    """Tag naive datetimes as UTC before serialization.
+
+    The DB stores ``now_utc()`` values without a tzinfo (SQLAlchemy + SQLite
+    drops the offset). Without a marker the JS ``new Date()`` parser treats
+    them as *local time* and "Xs ago" calculations get a 7-hour skew on the
+    West Coast. Stamping ``Z`` makes the contract unambiguous."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +304,10 @@ class PipelineRecentTrackOut(BaseModel):
     state: str
     updated_at: datetime | None
     error_message: str | None
+
+    @field_serializer("updated_at")
+    def _ser_updated_at(self, v: datetime | None) -> str | None:
+        return _as_utc_iso(v)
 
 
 # ---------------------------------------------------------------------------
