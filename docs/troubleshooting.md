@@ -47,21 +47,80 @@ Click **Allow**. If you missed the dialog or accidentally clicked Deny, open **S
 
 Symptom: the backend starts cleanly, `/api/v1/ableton/state` returns all `null`s, and AbletonOSC's status panel in Live shows no incoming/outgoing traffic. Check the firewall first.
 
-## `spotdl` rate limiting / auth
+## `spotdl` rate limiting / Spotify Web API restrictions (Nov 2024+)
 
-`dance sync` uses spotDL, which authenticates against Spotify using a shared default app token. Under load (rapid syncs, large playlists), Spotify rate-limits that token aggressively:
+`dance sync` uses spotDL, which calls Spotify's Web API to enumerate playlist tracks. Two failure modes, in escalating severity:
 
-```
-spotdl.utils.spotify.SpotifyError: HTTP Error for GET ... 401 Unauthorized
-```
+**1. Shared-default-token hangs** (mild — fixable by registering your own app).
 
-Fix: register your own Spotify app at https://developer.spotify.com/dashboard and configure spotDL with your client ID/secret:
+The spotDL default `client_id = 5f573c9620494bae87890c0f08a60293` is shared by every spotDL install in the world. Spotify rate-limits it aggressively. Symptom: `dance sync` runs for 30+ minutes with zero log output and 0.1% CPU — spotDL is hung waiting on retries that never succeed. `lsof -p <pid>` shows many TCP connections in `CLOSE_WAIT`.
+
+Fix: create your own Spotify dev app (https://developer.spotify.com/dashboard) and put your `client_id` / `client_secret` in `~/.spotdl/config.json`. Restart sync.
+
+**2. Spotify deprecated `/v1/playlists/{id}/tracks` for new apps (CATASTROPHIC — no fix within spotDL).**
+
+On **2024-11-27** Spotify restricted dozens of Web API endpoints to apps with "Extended Quota Mode" approval. New apps are stuck in Development Mode by default and the following endpoints return **HTTP 403 Forbidden, reason: None** regardless of auth flow (client-credentials OR user-auth with `playlist-read-private` scope):
+
+- `Get a Playlist's Items` (the one spotDL calls on every sync)
+- `Get Recommendations`
+- `Get Audio Features / Audio Analysis`
+- `Get Featured Playlists`
+- Related-Artists / category playlists / etc.
+
+Extended Quota Mode requires a formal Spotify review with stated commercial intent. Hobbyist requests have been routinely rejected since the policy change. **There is currently no way to make a new spotDL install talk to a new Spotify dev app.**
+
+Diagnostic: direct curl against the API isolates the block.
 
 ```bash
-spotdl --client-id <id> --client-secret <secret> ...
+TOKEN=$(curl -sS -X POST "https://accounts.spotify.com/api/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -u "<your_id>:<your_secret>" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# /playlists/{id}        -> HTTP 200 (works on new apps)
+# /playlists/{id}/tracks -> HTTP 403 (broken on new apps since 2024-11-27)
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://api.spotify.com/v1/playlists/<id>/tracks?limit=5"
 ```
 
-Or set them globally for spotDL via its `~/.spotdl/config.json`. The `dance sync` wrapper does not currently surface these flags — set them on the spotDL config file and they're picked up.
+**Workaround in this repo:** `dance ingest-csv` — bypass Spotify entirely. Export the playlist to CSV via https://exportify.net (which uses an old grandfathered Spotify app and still works), then feed the CSV to `yt-dlp` for the actual audio download from YouTube Music. The library dir ends up populated the same way `dance sync` would have done, and the rest of the pipeline runs unchanged.
+
+> ⚠️ **YouTube has its own anti-bot wall (2025-2026).** Even after exportify gives you a clean track list, the `yt-dlp` side requires substantial setup:
+>
+> - **Latest yt-dlp** (`pip install -U yt-dlp` — needs 2026.03+ at minimum, refreshes weekly).
+> - **Node.js on PATH** for the n-challenge JS solver (`brew install node` or nvm).
+> - **`yt-dlp-ejs`** plugin: `pip install yt-dlp-ejs`.
+> - **bgutil PO Token server** running in Docker:
+>   ```bash
+>   docker run --name bgutil-provider -d --restart unless-stopped \
+>     -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest
+>   pip install bgutil-ytdlp-pot-provider
+>   ```
+> - **Chrome cookies** for the actual download (`--cookies-from-browser "chrome:Profile 2"` — match your profile dir under `~/Library/Application Support/Google/Chrome/`).
+>
+> Even with **all** the above, YouTube periodically rotates its anti-bot in ways that briefly disable yt-dlp. As of 2026-05, the chain above can return "Only storyboard images are available" when the signature solver fails — which it does intermittently. **Do not build a production audio pipeline on yt-dlp alone.** For tracks you intend to mix repeatedly, buy them on Beatport / Bandcamp (the legal, stable path) or use a real DJ-music subscription (Beatport Streaming, Beatsource). Save yt-dlp for "demo / one-off / can't-find-it-anywhere" tracks.
+
+## Loading audio from a local folder (no Spotify needed)
+
+For tracks you already own (purchased downloads, ripped CDs, existing library):
+
+```bash
+# Drop or symlink files into the library dir
+ln -sf "/Users/arya/Music/Music/My Music/Daft Punk - One More Time.mp3" \
+       "/Users/arya/Music/DJ/library/"
+
+# Or, en masse:
+cd "/Users/arya/Music/Music/My Music" && \
+  find . -maxdepth 1 \( -name "*.mp3" -o -name "*.m4a" -o -name "*.flac" \) \
+  -print0 | while IFS= read -r -d '' f; do
+    ln -sf "$(pwd)/${f#./}" "/Users/arya/Music/DJ/library/${f#./}"
+  done
+
+# Now run the pipeline — dance process auto-ingests new files via dispatcher.ingest()
+dance process
+```
+
+`IngestStage` (`src/dance/pipeline/stages/ingest.py`) is content-hash based (file size + first 1 MB + last 1 MB SHA256), so symlinks and renames don't cause duplicate rows. Files inside `library_dir` are tracked; files anywhere else are ignored.
 
 ## `Maximum allowed size exceeded` / `OverflowError` in librosa
 
