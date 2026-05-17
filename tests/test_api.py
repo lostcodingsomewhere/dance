@@ -1001,6 +1001,7 @@ def test_pipeline_status_empty(client: TestClient) -> None:
     assert body["in_progress"] is False
     assert body["errors"] == 0
     assert body["complete"] == 0
+    assert body["weighted_progress"] == 0.0
     # Every TrackState value must be present (UI relies on this for a stable grid)
     counts = body["counts"]
     for state in (
@@ -1096,6 +1097,52 @@ def test_pipeline_recent_surfaces_error_message(
     r = client.get("/api/v1/pipeline/recent?limit=1")
     body = r.json()
     assert body[0]["error_message"] == "separate: System error."
+
+
+def test_pipeline_recent_filters_by_state(
+    client: TestClient, session, make_track
+) -> None:
+    """?state=separated returns only tracks in that state."""
+    make_track(title="a", state="separated")
+    make_track(title="b", state="separated")
+    make_track(title="c", state="analyzed")
+    session.commit()
+
+    r = client.get("/api/v1/pipeline/recent?state=separated&limit=100")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    assert all(row["state"] == "separated" for row in body)
+
+
+def test_pipeline_status_weighted_progress(
+    client: TestClient, session, make_track
+) -> None:
+    """4 tracks: 1 complete (6/6), 1 separated (2/6), 2 pending (0/6).
+    Total stages: 8, max possible: 24, => 33.3%."""
+    make_track(state="complete")
+    make_track(state="separated")
+    make_track(state="pending")
+    make_track(state="pending")
+    session.commit()
+
+    body = client.get("/api/v1/pipeline/status").json()
+    # 6 + 2 + 0 + 0 = 8 stages of 24 = 33.333% rounded to 33.3
+    assert body["weighted_progress"] == 33.3
+    assert body["complete"] == 1
+
+
+def test_pipeline_status_weighted_progress_ignores_errors(
+    client: TestClient, session, make_track
+) -> None:
+    """Errored tracks contribute 0 to progress (they need re-running)."""
+    make_track(state="error")
+    make_track(state="embedded")  # 5/6
+    session.commit()
+
+    body = client.get("/api/v1/pipeline/status").json()
+    # (0 + 5) / (2 * 6) = 41.666… → 41.7
+    assert body["weighted_progress"] == 41.7
 
 
 # ---------------------------------------------------------------------------

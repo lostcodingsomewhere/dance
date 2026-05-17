@@ -134,6 +134,7 @@ export interface PipelineStatus {
   in_progress: boolean;
   errors: number;
   complete: number;
+  weighted_progress: number; // 0-100, stage-weighted
 }
 
 // Pipeline-ops mirror of `src/dance/api/schemas.py:PipelineRecentTrackOut`.

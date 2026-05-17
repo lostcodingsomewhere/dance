@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "../api";
+import { Modal } from "../components/Modal";
 import { usePipelineJobs } from "../hooks/usePipelineJobs";
 import {
   PIPELINE_STAGES,
@@ -11,6 +12,8 @@ import {
 } from "../types";
 
 const POLL_MS = 3000;
+const RECENT_LIMIT = 30;
+const FILTERED_LIMIT = 200;
 
 const STAGE_COLOR: Record<string, string> = {
   pending: "bg-neutral-800 text-neutral-400",
@@ -49,6 +52,10 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+// =============================================================================
+// Ingest panel (lives inside the modal)
+// =============================================================================
+
 function RowList({
   rows,
   selected,
@@ -61,19 +68,17 @@ function RowList({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return (
-      <div className="text-xs text-neutral-600 italic py-2">{emptyLabel}</div>
-    );
+    return <div className="text-xs text-neutral-600 italic py-2">{emptyLabel}</div>;
   }
   return (
-    <ul className="text-xs max-h-48 overflow-y-auto divide-y divide-neutral-800/40">
+    <ul className="text-xs max-h-56 overflow-y-auto divide-y divide-neutral-800/40 rounded border border-neutral-800/60">
       {rows.map((r) => {
         const key = rowKey(r);
         const isSelected = selected.has(key);
         return (
           <li
             key={key}
-            className="flex items-center gap-2 py-1 px-1 hover:bg-neutral-900/60"
+            className="flex items-center gap-2 py-1.5 px-2 hover:bg-neutral-900/60"
           >
             <input
               type="checkbox"
@@ -83,17 +88,12 @@ function RowList({
             />
             <div className="flex-1 min-w-0">
               <span
-                className={`truncate ${
-                  isSelected ? "text-neutral-200" : "text-neutral-500"
-                }`}
+                className={`truncate ${isSelected ? "text-neutral-200" : "text-neutral-500"}`}
               >
-                <span className="text-neutral-500">{r.artist}</span> —{" "}
-                {r.title}
+                <span className="text-neutral-500">{r.artist}</span> — {r.title}
               </span>
               {r.duplicate_of != null && (
-                <span className="ml-2 text-neutral-600">
-                  ↺ track #{r.duplicate_of}
-                </span>
+                <span className="ml-2 text-neutral-600">↺ track #{r.duplicate_of}</span>
               )}
               {r.target_exists && (
                 <span className="ml-2 text-neutral-600">↺ file on disk</span>
@@ -106,12 +106,11 @@ function RowList({
   );
 }
 
-function IngestPanel() {
+function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
   const qc = useQueryClient();
   const [csvText, setCsvText] = useState("");
   const [preview, setPreview] = useState<IngestPreviewResponse | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
-  // Selected row keys (artist|title). Default = all new selected, no dupes.
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const previewMutation = useMutation({
@@ -119,9 +118,7 @@ function IngestPanel() {
     onSuccess: (data) => {
       setPreview(data);
       setPreviewErr(null);
-      // Default: pre-select every new row, leave dupes unchecked.
-      const initial = new Set(data.new_rows.map(rowKey));
-      setSelected(initial);
+      setSelected(new Set(data.new_rows.map(rowKey)));
     },
     onError: (err: Error) => {
       setPreviewErr(err.message);
@@ -137,10 +134,9 @@ function IngestPanel() {
       setPreview(null);
       setSelected(new Set());
       qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      onCommitted();
     },
-    onError: (err: Error) => {
-      setPreviewErr(err.message);
-    },
+    onError: (err: Error) => setPreviewErr(err.message),
   });
 
   function toggle(key: string): void {
@@ -151,7 +147,6 @@ function IngestPanel() {
       return next;
     });
   }
-
   function selectAll(rows: IngestPreviewRow[]): void {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -159,7 +154,6 @@ function IngestPanel() {
       return next;
     });
   }
-
   function deselectAll(rows: IngestPreviewRow[]): void {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -167,7 +161,6 @@ function IngestPanel() {
       return next;
     });
   }
-
   async function handleFile(file: File): Promise<void> {
     const text = await file.text();
     setCsvText(text);
@@ -175,28 +168,22 @@ function IngestPanel() {
   }
 
   const selectedCount = selected.size;
-  const canCommit =
-    !!preview && selectedCount > 0 && !commitMutation.isPending;
+  const canCommit = !!preview && selectedCount > 0 && !commitMutation.isPending;
 
   return (
-    <div className="rounded-lg border border-neutral-800 p-4 bg-neutral-950">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wider">
-          Ingest from CSV
-        </h2>
-        <span className="text-xs text-neutral-500">
-          Exportify (
-          <a
-            href="https://exportify.net"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-neutral-400 underline hover:text-neutral-200"
-          >
-            exportify.net
-          </a>
-          ) → paste / drop CSV
-        </span>
-      </div>
+    <div>
+      <p className="text-xs text-neutral-500 mb-2">
+        Export a Spotify playlist via{" "}
+        <a
+          href="https://exportify.net"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-neutral-400 underline hover:text-neutral-200"
+        >
+          exportify.net
+        </a>
+        , then paste or drop the CSV here.
+      </p>
 
       <textarea
         value={csvText}
@@ -236,9 +223,7 @@ function IngestPanel() {
             }}
           />
         </label>
-        {previewErr && (
-          <span className="text-rose-400 text-xs">{previewErr}</span>
-        )}
+        {previewErr && <span className="text-rose-400 text-xs">{previewErr}</span>}
       </div>
 
       {preview && (
@@ -342,15 +327,13 @@ function IngestPanel() {
             >
               {commitMutation.isPending
                 ? "Starting…"
-                : `Download ${selectedCount} track${
-                    selectedCount === 1 ? "" : "s"
-                  }`}
+                : `Download ${selectedCount} track${selectedCount === 1 ? "" : "s"}`}
             </button>
           </div>
           <p className="text-xs text-neutral-500 pt-1">
-            Files land in <code>~/Music/DJ/library/</code>. Hit the{" "}
-            <em>Process now</em> button at the top after downloads finish to
-            ingest them (or run <code>dance process</code> in the terminal).
+            Files land in <code>~/Music/DJ/library/</code>. After downloads
+            finish, click <em>Process now</em> in the Pipeline header to
+            ingest them.
           </p>
         </div>
       )}
@@ -358,13 +341,14 @@ function IngestPanel() {
   );
 }
 
+// =============================================================================
+// Job card
+// =============================================================================
+
 function JobCard({ job }: { job: Job }) {
   const finished = job.counts.ok + job.counts.skip + job.counts.fail;
   const pct = job.total > 0 ? Math.round((finished / job.total) * 100) : 0;
   const isActive = job.status === "queued" || job.status === "running";
-
-  // Pipeline-run jobs: show stage layout (all items, not just "recent done").
-  // Other jobs (csv_ingest): show last few completed items.
   const showAllItems = job.kind === "pipeline_run";
   const itemsToShow = showAllItems
     ? job.items
@@ -381,8 +365,8 @@ function JobCard({ job }: { job: Job }) {
                 job.status === "done"
                   ? "bg-emerald-500/20 text-emerald-300"
                   : job.status === "error"
-                  ? "bg-rose-500/20 text-rose-300"
-                  : "bg-amber-500/30 text-amber-200 ring-1 ring-amber-400/50"
+                    ? "bg-rose-500/20 text-rose-300"
+                    : "bg-amber-500/30 text-amber-200 ring-1 ring-amber-400/50"
               }`}
             >
               {job.status}
@@ -408,31 +392,27 @@ function JobCard({ job }: { job: Job }) {
             isActive
               ? "bg-amber-400"
               : job.status === "error"
-              ? "bg-rose-500"
-              : "bg-emerald-500"
+                ? "bg-rose-500"
+                : "bg-emerald-500"
           }`}
           style={{ width: `${pct}%` }}
         />
       </div>
 
-      {job.error && (
-        <div className="text-xs text-rose-400 mt-2">{job.error}</div>
-      )}
+      {job.error && <div className="text-xs text-rose-400 mt-2">{job.error}</div>}
 
       {itemsToShow.length > 0 && (
         <ul className="mt-2 text-xs space-y-0.5">
           {itemsToShow.map((it, i) => (
             <li key={i} className="truncate">
-              <span
-                className={`${ITEM_STATUS_COLOR[it.status]} font-mono mr-2`}
-              >
+              <span className={`${ITEM_STATUS_COLOR[it.status]} font-mono mr-2`}>
                 {it.status === "ok"
                   ? "✓"
                   : it.status === "fail"
-                  ? "✗"
-                  : it.status === "skip"
-                  ? "—"
-                  : "·"}
+                    ? "✗"
+                    : it.status === "skip"
+                      ? "—"
+                      : "·"}
               </span>
               <span className="text-neutral-300">{it.label}</span>
               {it.message && (
@@ -446,8 +426,16 @@ function JobCard({ job }: { job: Job }) {
   );
 }
 
+// =============================================================================
+// Main view
+// =============================================================================
+
 export function PipelineOps() {
   const qc = useQueryClient();
+  const [ingestOpen, setIngestOpen] = useState(false);
+  /** When set, the activity table filters to this state. Driven by tile clicks. */
+  const [filterState, setFilterState] = useState<string | null>(null);
+
   const status = useQuery({
     queryKey: ["pipeline-status"],
     queryFn: api.getPipelineStatus,
@@ -456,8 +444,9 @@ export function PipelineOps() {
   });
 
   const recent = useQuery({
-    queryKey: ["pipeline-recent"],
-    queryFn: () => api.getPipelineRecent(30),
+    queryKey: ["pipeline-recent", filterState],
+    queryFn: () =>
+      api.getPipelineRecent(filterState ? FILTERED_LIMIT : RECENT_LIMIT, filterState),
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
   });
@@ -482,29 +471,23 @@ export function PipelineOps() {
 
   const processMutation = useMutation({
     mutationFn: api.triggerPipelineProcess,
-    onSuccess: () => {
-      // The job arrives via WebSocket; nothing to do here besides refresh
-      // the status counters now that ingest may have created Track rows.
-      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-status"] }),
   });
 
-  // When a pipeline_run job is active, refresh the status counters faster
-  // (track states are moving) so the grid feels live.
+  // While a pipeline run is in flight, refresh faster.
   useEffect(() => {
     if (activePipelineRun) {
       const id = setInterval(() => {
         qc.invalidateQueries({ queryKey: ["pipeline-status"] });
-        qc.invalidateQueries({ queryKey: ["pipeline-recent"] });
+        qc.invalidateQueries({ queryKey: ["pipeline-recent", filterState] });
       }, 1000);
       return () => clearInterval(id);
     }
-  }, [activePipelineRun, qc]);
+  }, [activePipelineRun, filterState, qc]);
 
   const counts = status.data?.counts ?? {};
   const total = status.data?.total ?? 0;
-  const completePct =
-    total > 0 ? Math.round(((counts.complete ?? 0) / total) * 100) : 0;
+  const weighted = status.data?.weighted_progress ?? 0;
   const inProgress = !!status.data?.in_progress;
 
   return (
@@ -515,10 +498,25 @@ export function PipelineOps() {
           <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
           <p className="text-neutral-500 text-sm">
             {inProgress ? "Processing…" : "Idle"} · {total} tracks ·{" "}
-            {completePct}% complete
+            <span className="text-neutral-300">
+              {weighted.toFixed(1)}% through pipeline
+            </span>
+            {status.data && status.data.complete > 0 && (
+              <span className="text-neutral-500">
+                {" "}
+                · {status.data.complete} fully complete
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIngestOpen(true)}
+            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm font-semibold"
+          >
+            Ingest CSV…
+          </button>
           <button
             type="button"
             onClick={() => processMutation.mutate()}
@@ -537,8 +535,8 @@ export function PipelineOps() {
             {activePipelineRun
               ? "Pipeline running…"
               : processMutation.isPending
-              ? "Starting…"
-              : "Process now"}
+                ? "Starting…"
+                : "Process now"}
           </button>
           <div className="flex items-center gap-2 text-xs text-neutral-400">
             <span
@@ -553,128 +551,180 @@ export function PipelineOps() {
         </div>
       </div>
 
-      {/* Progress bar */}
+      {/* Weighted progress bar */}
       <div className="px-6 pt-4">
         <div className="h-2 rounded bg-neutral-800 overflow-hidden">
           <div
             className="h-full bg-emerald-500 transition-all duration-500"
-            style={{ width: `${completePct}%` }}
+            style={{ width: `${weighted}%` }}
           />
         </div>
       </div>
 
-      {/* State grid */}
+      {/* State grid — clickable tiles */}
       <div className="px-6 py-4 grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2">
         {PIPELINE_STAGES.map(({ key, label }) => {
           const count = counts[key] ?? 0;
           const dim = count === 0 ? "opacity-40" : "";
+          const isSelected = filterState === key;
           return (
-            <div
+            <button
+              type="button"
               key={key}
-              className={`rounded-lg px-3 py-2 ${
+              onClick={() =>
+                setFilterState((prev) => (prev === key ? null : key))
+              }
+              className={`text-left rounded-lg px-3 py-2 transition-all ${
                 STAGE_COLOR[key] ?? "bg-neutral-800"
-              } ${dim}`}
+              } ${dim} ${
+                isSelected
+                  ? "ring-2 ring-neutral-100 scale-[1.02]"
+                  : "hover:ring-1 hover:ring-neutral-600 cursor-pointer"
+              }`}
+              title={
+                count > 0
+                  ? `Click to ${isSelected ? "clear filter" : `show all ${count} ${key} tracks`}`
+                  : "0 tracks"
+              }
             >
               <div className="text-[10px] uppercase tracking-wider opacity-80">
                 {label}
               </div>
               <div className="font-mono text-2xl tabular-nums">{count}</div>
-            </div>
+            </button>
           );
         })}
       </div>
 
-      {/* Two columns: left = ingest + jobs, right = recent activity */}
-      <div className="px-6 pb-4 flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="flex flex-col gap-3 min-h-0 overflow-y-auto">
-          <IngestPanel />
-          {sortedJobs.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-2">
-                Jobs
-              </h2>
-              <div className="space-y-2">
-                {sortedJobs.map((job) => (
-                  <JobCard key={job.id} job={job} />
-                ))}
-              </div>
+      {/* Two columns: left = jobs, right = activity (full width when no jobs) */}
+      <div
+        className={`px-6 pb-4 flex-1 min-h-0 grid grid-cols-1 ${
+          sortedJobs.length > 0 ? "lg:grid-cols-2" : ""
+        } gap-4`}
+      >
+        {sortedJobs.length > 0 && (
+          <div className="flex flex-col gap-3 min-h-0 overflow-y-auto">
+            <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider">
+              Jobs
+            </h2>
+            <div className="space-y-2">
+              {sortedJobs.map((job) => (
+                <JobCard key={job.id} job={job} />
+              ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="flex flex-col min-h-0">
-          <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-2">
-            Recent activity
-          </h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider">
+              {filterState
+                ? `Tracks in “${filterState}”`
+                : "Recent activity"}
+            </h2>
+            {filterState && (
+              <button
+                type="button"
+                onClick={() => setFilterState(null)}
+                className="text-xs text-neutral-500 hover:text-neutral-200"
+              >
+                clear filter ×
+              </button>
+            )}
+          </div>
           <div className="flex-1 overflow-y-auto rounded-lg border border-neutral-800">
             {recent.isLoading && (
               <div className="p-4 text-neutral-500 text-sm">Loading…</div>
             )}
             {recent.error && (
               <div className="p-4 text-rose-400 text-sm">
-                Failed to load recent activity. Backend up?
+                Failed to load. Backend up?
               </div>
             )}
             {recent.data && recent.data.length === 0 && (
               <div className="p-4 text-neutral-500 text-sm">
-                No tracks yet. Drop audio in <code>~/Music/DJ/library/</code>{" "}
-                and click <em>Process now</em>.
+                {filterState
+                  ? `No tracks in “${filterState}”.`
+                  : "No tracks yet. Drop audio in ~/Music/DJ/library/ and click Process now."}
               </div>
             )}
             {recent.data && recent.data.length > 0 && (
-              <table className="w-full text-sm">
-                <thead className="text-xs text-neutral-500 uppercase tracking-wider">
-                  <tr>
-                    <th className="text-left px-3 py-2 w-12">#</th>
-                    <th className="text-left px-3 py-2">Track</th>
-                    <th className="text-left px-3 py-2 w-32">State</th>
-                    <th className="text-right px-3 py-2 w-20">Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recent.data.map((t: PipelineRecentTrack) => (
-                    <tr
-                      key={t.id}
-                      className="border-t border-neutral-800/50 hover:bg-neutral-900"
-                    >
-                      <td className="px-3 py-2 text-neutral-500 font-mono">
-                        {t.id}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="truncate max-w-md">
-                          <span className="font-medium text-neutral-100">
-                            {t.title ?? "(untitled)"}
-                          </span>{" "}
-                          <span className="text-neutral-500">
-                            — {t.artist ?? "?"}
-                          </span>
-                        </div>
-                        {t.error_message && (
-                          <div className="text-rose-400 text-xs mt-0.5 truncate">
-                            {t.error_message}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded text-xs ${
-                            STAGE_COLOR[t.state] ?? "bg-neutral-800"
-                          }`}
-                        >
-                          {t.state}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right text-neutral-500 text-xs tabular-nums">
-                        {formatRelative(t.updated_at)}
-                      </td>
+              <>
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-neutral-500 uppercase tracking-wider sticky top-0 bg-neutral-950">
+                    <tr>
+                      <th className="text-left px-3 py-2 w-12">#</th>
+                      <th className="text-left px-3 py-2">Track</th>
+                      <th className="text-left px-3 py-2 w-32">State</th>
+                      <th className="text-right px-3 py-2 w-20">Updated</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {recent.data.map((t: PipelineRecentTrack) => (
+                      <tr
+                        key={t.id}
+                        className="border-t border-neutral-800/50 hover:bg-neutral-900"
+                      >
+                        <td className="px-3 py-2 text-neutral-500 font-mono">
+                          {t.id}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="truncate max-w-md">
+                            <span className="font-medium text-neutral-100">
+                              {t.title ?? "(untitled)"}
+                            </span>{" "}
+                            <span className="text-neutral-500">
+                              — {t.artist ?? "?"}
+                            </span>
+                          </div>
+                          {t.error_message && (
+                            <div className="text-rose-400 text-xs mt-0.5 truncate">
+                              {t.error_message}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => setFilterState(t.state)}
+                            className={`inline-block px-2 py-0.5 rounded text-xs hover:ring-1 hover:ring-neutral-500 cursor-pointer ${
+                              STAGE_COLOR[t.state] ?? "bg-neutral-800"
+                            }`}
+                            title={`Filter to ${t.state}`}
+                          >
+                            {t.state}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right text-neutral-500 text-xs tabular-nums">
+                          {formatRelative(t.updated_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-xs text-neutral-500 text-center py-2 border-t border-neutral-800/50">
+                  Showing {recent.data.length}
+                  {filterState
+                    ? ` of ${counts[filterState] ?? "?"}`
+                    : " most recent"}
+                  {!filterState && total > RECENT_LIMIT && (
+                    <span> · click a tile above to see all of one state</span>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
       </div>
+
+      <Modal
+        open={ingestOpen}
+        onClose={() => setIngestOpen(false)}
+        title="Ingest from CSV"
+        widthClass="max-w-2xl"
+      >
+        <IngestPanel onCommitted={() => setIngestOpen(false)} />
+      </Modal>
     </div>
   );
 }

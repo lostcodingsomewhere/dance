@@ -65,15 +65,20 @@ _PROCESS_LOCK = threading.Lock()
 
 @router.get("/status", response_model=PipelineStatusOut)
 def get_pipeline_status(session: Session = Depends(get_session)) -> PipelineStatusOut:
-    """Track counts per state, plus total and a flag for "anything moving"."""
+    """Track counts per state, plus total and weighted progress.
+
+    ``weighted_progress`` (0-100) sums per-track stage progress so the UI
+    can show a meaningful percentage *during* a run. ``complete``-state
+    tracks alone don't tell the story — a library with everything at
+    "separated" is genuinely halfway done even though zero tracks have
+    reached the terminal state.
+    """
     rows = (
         session.query(Track.state, func.count(Track.id))
         .group_by(Track.state)
         .all()
     )
     by_state = {state: int(count) for state, count in rows}
-    # Ensure every enum value is present in the response, even if zero,
-    # so the UI can render a stable grid.
     counts = {s.value: by_state.get(s.value, 0) for s in TrackState}
     total = sum(counts.values())
 
@@ -86,29 +91,65 @@ def get_pipeline_status(session: Session = Depends(get_session)) -> PipelineStat
     }
     in_progress = any(counts[s] > 0 for s in in_progress_states)
 
+    # Stage-weighted progress. Order = the order tracks advance through
+    # the pipeline. Each "completed" state advances progress by 1/6.
+    # In-flight states count as the previous stage (partial credit
+    # would require sub-stage observability we don't have).
+    _STAGE_PROGRESS: dict[str, float] = {
+        TrackState.PENDING.value: 0,
+        TrackState.ANALYZING.value: 0,
+        TrackState.ANALYZED.value: 1,
+        TrackState.SEPARATING.value: 1,
+        TrackState.SEPARATED.value: 2,
+        TrackState.ANALYZING_STEMS.value: 2,
+        TrackState.STEMS_ANALYZED.value: 3,
+        TrackState.DETECTING_REGIONS.value: 3,
+        TrackState.REGIONS_DETECTED.value: 4,
+        TrackState.EMBEDDING.value: 4,
+        TrackState.EMBEDDED.value: 5,
+        TrackState.COMPLETE.value: 6,
+        # Errored tracks don't contribute progress — they need fixing /
+        # re-running before they advance.
+        TrackState.ERROR.value: 0,
+    }
+    weighted_total = sum(counts[s] * _STAGE_PROGRESS[s] for s in counts)
+    max_possible = total * 6
+    weighted_progress = (
+        round((weighted_total / max_possible) * 100, 1) if max_possible else 0.0
+    )
+
     return PipelineStatusOut(
         counts=counts,
         total=total,
         in_progress=in_progress,
         errors=counts[TrackState.ERROR.value],
         complete=counts[TrackState.COMPLETE.value],
+        weighted_progress=weighted_progress,
     )
 
 
 @router.get("/recent", response_model=list[PipelineRecentTrackOut])
 def get_pipeline_recent(
-    limit: int = Query(20, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=1000),
+    state: str | None = Query(None, description="Filter by TrackState value"),
     session: Session = Depends(get_session),
 ) -> list[PipelineRecentTrackOut]:
-    """Last N tracks ordered by ``updated_at`` desc.
+    """Tracks ordered by ``updated_at`` desc.
 
-    Useful as a low-rate activity feed during processing: every state
-    transition bumps ``updated_at``, so this surfaces "the dispatcher is
-    advancing X right now" without needing an event log.
+    - Unfiltered: surfaces "the dispatcher is advancing X right now" — a
+      glanceable live feed across all states.
+    - With ``state=<value>``: returns every track currently in that state,
+      newest-touched first. Used by the UI when the user clicks a
+      state-count tile to drill in.
+
+    ``limit`` caps at 1000 so the UI can offer "view all" without unbounded
+    queries — beyond that, the pagination story is "use ``/tracks``".
     """
+    q = session.query(Track)
+    if state is not None:
+        q = q.filter(Track.state == state)
     tracks = (
-        session.query(Track)
-        .order_by(desc(Track.updated_at), desc(Track.id))
+        q.order_by(desc(Track.updated_at), desc(Track.id))
         .limit(limit)
         .all()
     )

@@ -269,6 +269,12 @@ class PipelineStatusOut(BaseModel):
     complete: int
     """Convenience: tracks currently in the ``complete`` state."""
 
+    weighted_progress: float
+    """0-100 stage-weighted progress. Each track contributes 0-6 stages of
+    progress (analyze, separate, analyze_stems, detect_regions, embed,
+    complete). Summed across all tracks and normalized. Always > 0 once
+    any track has hit an "*ed" state, even if zero have reached ``complete``."""
+
 
 class PipelineRecentTrackOut(BaseModel):
     """One row in the "recently changed" pipeline feed.

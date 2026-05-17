@@ -149,8 +149,14 @@ export function getPipelineStatus(): Promise<PipelineStatus> {
   return request<PipelineStatus>("/pipeline/status");
 }
 
-export function getPipelineRecent(limit = 20): Promise<PipelineRecentTrack[]> {
-  return request<PipelineRecentTrack[]>(`/pipeline/recent?limit=${limit}`);
+export function getPipelineRecent(
+  limit = 20,
+  state?: string | null,
+): Promise<PipelineRecentTrack[]> {
+  const q = state
+    ? `?limit=${limit}&state=${encodeURIComponent(state)}`
+    : `?limit=${limit}`;
+  return request<PipelineRecentTrack[]>(`/pipeline/recent${q}`);
 }
 
 export function ingestPreview(csv_text: string): Promise<IngestPreviewResponse> {
