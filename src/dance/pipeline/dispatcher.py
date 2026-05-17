@@ -315,6 +315,17 @@ class Dispatcher:
         assert self.session_factory is not None
         skip_set = {s for s in (skip or []) if s}
 
+        # First: heal any tracks left stuck in *-ing states by a previous
+        # crashed / killed run. No stage uses *-ing as its input_state, so
+        # without this they'd sit there forever.
+        heal_session = self.session_factory()
+        try:
+            healed = self._heal_inflight_orphans(heal_session)
+        finally:
+            heal_session.close()
+        if healed:
+            logger.info("Healed %d inflight orphans: %s", sum(healed.values()), healed)
+
         # Auto-advance skipped stages once, up front, in a single session.
         if skip_set:
             session = self.session_factory()
@@ -495,6 +506,41 @@ class Dispatcher:
             # Lost the race; the next iteration will find the next candidate.
             return None
         return session.get(Track, cid)
+
+    def _heal_inflight_orphans(self, session: Session) -> dict[str, int]:
+        """Reset every track stuck in a stage's ``inflight_state`` back to
+        the stage's ``input_state`` so a fresh worker can claim it.
+
+        Tracks land in ``*-ing`` states when a worker claims them but then
+        crashes / is killed / loses its process before flipping to
+        ``output_state``. Without this heal, they're orphaned forever — no
+        stage uses ``*-ing`` as its input. The heal is idempotent: a clean
+        DB returns an empty dict and writes nothing.
+
+        Stages without an ``inflight_state`` declaration are skipped (they
+        can't have produced orphans in the parallel claim model).
+
+        Returns: dict of stage_name -> number of tracks reset, for caller
+        logging. Empty dict if there was nothing to heal.
+        """
+        healed: dict[str, int] = {}
+        for stage in self._stages:
+            inflight = getattr(stage, "inflight_state", None)
+            if inflight is None:
+                continue
+            rowcount = (
+                session.query(Track)
+                .filter(Track.state == inflight.value)
+                .update(
+                    {Track.state: stage.input_state.value, Track.error_message: None},
+                    synchronize_session=False,
+                )
+            )
+            if rowcount:
+                healed[stage.name] = int(rowcount)
+        if healed:
+            session.commit()
+        return healed
 
     def _auto_advance_par(
         self, stage: Stage, session: Session, track_id: int | None

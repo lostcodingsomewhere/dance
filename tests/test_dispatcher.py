@@ -407,3 +407,113 @@ def test_constructor_requires_session_xor_factory(settings, session, session_fac
         Dispatcher(settings)
     with pytest.raises(ValueError, match="exactly one"):
         Dispatcher(settings, session=session, session_factory=session_factory)
+
+
+# ---------------------------------------------------------------------------
+# Inflight orphan healing
+# ---------------------------------------------------------------------------
+
+
+def test_heal_inflight_orphans_resets_to_input_state(
+    settings, session_factory, session, make_track
+):
+    """A track stuck in *-ing flips back to the stage's input_state."""
+    # Use the default stage registry (real stages know their inflight_state).
+    d = Dispatcher(settings, session_factory=session_factory)
+    # Drop the heavy ML stages that might not be importable in the test env;
+    # ParallelFakeStage gives us full control.
+    d.clear()
+    d.register(
+        ParallelFakeStage(
+            "analyze",
+            TrackState.PENDING,
+            TrackState.ANALYZED,
+            TrackState.ANALYZING,
+        )
+    )
+    d.register(
+        ParallelFakeStage(
+            "separate",
+            TrackState.ANALYZED,
+            TrackState.SEPARATED,
+            TrackState.SEPARATING,
+        )
+    )
+
+    # Plant orphans in both *-ing states + give one an error_message.
+    stuck_analyzing = make_track(state="analyzing")
+    stuck_analyzing.error_message = "stale"
+    stuck_separating = make_track(state="separating")
+    fine_pending = make_track(state="pending")
+    session.commit()
+
+    heal_session = session_factory()
+    try:
+        healed = d._heal_inflight_orphans(heal_session)
+    finally:
+        heal_session.close()
+
+    assert healed == {"analyze": 1, "separate": 1}
+
+    session.expire_all()
+    assert session.get(Track, stuck_analyzing.id).state == "pending"
+    assert session.get(Track, stuck_analyzing.id).error_message is None
+    assert session.get(Track, stuck_separating.id).state == "analyzed"
+    assert session.get(Track, fine_pending.id).state == "pending"  # untouched
+
+
+def test_heal_inflight_orphans_idempotent_on_clean_db(
+    settings, session_factory, session, make_track
+):
+    """No *-ing tracks => empty dict, no commit churn."""
+    d = Dispatcher(settings, session_factory=session_factory)
+    d.clear()
+    d.register(
+        ParallelFakeStage(
+            "analyze",
+            TrackState.PENDING,
+            TrackState.ANALYZED,
+            TrackState.ANALYZING,
+        )
+    )
+    make_track(state="pending")
+    make_track(state="analyzed")
+    session.commit()
+
+    heal_session = session_factory()
+    try:
+        healed = d._heal_inflight_orphans(heal_session)
+    finally:
+        heal_session.close()
+
+    assert healed == {}
+
+
+def test_run_parallel_auto_heals_then_processes(
+    settings, session_factory, session, make_track, fast_idle_grace
+):
+    """End-to-end: an orphan in *-ing flows through after run() heals it."""
+    stuck = make_track(state="analyzing")
+    stuck.error_message = "from a crashed run"
+    session.commit()
+
+    d = Dispatcher(settings, session_factory=session_factory)
+    d.clear()
+    d.register(
+        ParallelFakeStage(
+            "analyze",
+            TrackState.PENDING,
+            TrackState.ANALYZED,
+            TrackState.ANALYZING,
+            concurrency=1,
+            sleep_s=0.02,
+        )
+    )
+
+    result = d.run()
+    assert result["analyze"]["processed"] == 1
+
+    session.expire_all()
+    track = session.get(Track, stuck.id)
+    assert track.state == "analyzed"
+    assert track.error_message is None
