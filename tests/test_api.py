@@ -128,9 +128,30 @@ def fake_bridge() -> FakeAbletonBridge:
 
 
 @pytest.fixture
-def app(session_factory: sessionmaker, fake_bridge: FakeAbletonBridge):
+def app(
+    session_factory: sessionmaker,
+    fake_bridge: FakeAbletonBridge,
+    tmp_path,
+):
+    """Build a fresh app with test-isolated paths.
+
+    ``data_dir`` is rooted at ``tmp_path`` so the JobRegistry's
+    ``jobs.json``, watch-mode flag, etc. don't write to the real
+    ``~/.dance/`` directory and pollute production. Library, stems and
+    als output dirs are also tmp so endpoints that touch the filesystem
+    leave nothing behind."""
+    from dance.config import Settings
+
+    test_settings = Settings(
+        library_dir=tmp_path / "library",
+        stems_dir=tmp_path / "stems",
+        data_dir=tmp_path / "data",
+        als_output_dir=tmp_path / "sets",
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+    )
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return create_app(
-        settings=get_settings(),
+        settings=test_settings,
         bridge=fake_bridge,
         session_factory=session_factory,
     )
@@ -1622,20 +1643,22 @@ def test_pipeline_watch_post_invalid_400(client: TestClient) -> None:
     assert r.status_code == 400
 
 
-def test_pipeline_watch_persists_across_init(client: TestClient, tmp_path) -> None:
-    """Flag round-trips through watch.json."""
+def test_pipeline_watch_persists_across_init(client: TestClient, app) -> None:
+    """Flag round-trips through watch.json. Uses the test app's data_dir
+    so we don't leak to the user's real ~/.dance/."""
     from dance.api.routers import pipeline as pipeline_router
+
+    test_settings = app.state.settings
 
     # Toggle ON via the endpoint
     client.post("/api/v1/pipeline/watch", json={"enabled": True})
     # Force-reload as a new "init" would
-    settings = get_settings()
     pipeline_router._WATCH_STATE["enabled"] = False  # pretend fresh process
-    pipeline_router._load_watch_state(settings)
+    pipeline_router._load_watch_state(test_settings)
     assert pipeline_router._WATCH_STATE["enabled"] is True
 
     # Toggle OFF and verify
     client.post("/api/v1/pipeline/watch", json={"enabled": False})
     pipeline_router._WATCH_STATE["enabled"] = True
-    pipeline_router._load_watch_state(settings)
+    pipeline_router._load_watch_state(test_settings)
     assert pipeline_router._WATCH_STATE["enabled"] is False
