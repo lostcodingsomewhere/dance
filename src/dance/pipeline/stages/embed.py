@@ -47,8 +47,12 @@ class EmbeddingStage:
 
     name = "embed"
     input_state = TrackState.REGIONS_DETECTED
+    inflight_state = TrackState.EMBEDDING
     output_state = TrackState.COMPLETE
     error_state = TrackState.ERROR
+    # 2 workers + GPU semaphore. Same MPS pool as separate.
+    concurrency = 2
+    uses_gpu = True
 
     def __init__(self) -> None:
         self._model = None

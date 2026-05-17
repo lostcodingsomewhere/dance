@@ -162,31 +162,35 @@ def process(
     skip_embeddings: bool,
     track_id: Optional[int],
 ) -> None:
-    """Run the pipeline on pending tracks."""
+    """Run the pipeline on pending tracks.
+
+    Uses the parallel dispatcher: each stage gets its own worker pool (size
+    from ``stage.concurrency``), stages run concurrently, and GPU-bound
+    stages share a semaphore (``DANCE_GPU_CONCURRENCY``, default 1).
+    """
     settings: Settings = ctx.obj["settings"]
-    session = get_session(settings.db_url)
+    from dance.core.database import get_session_factory
 
-    try:
-        from dance.pipeline.dispatcher import Dispatcher
+    SessionLocal = get_session_factory(settings.db_url)
 
-        dispatcher = Dispatcher(settings, session)
+    from dance.pipeline.dispatcher import Dispatcher
 
-        # Ingest first
-        console.print("[cyan]Scanning for new files...[/cyan]")
-        dispatcher.ingest()
+    dispatcher = Dispatcher(settings, session_factory=SessionLocal)
 
-        # Run all enabled stages
-        skip: set[str] = set()
-        if skip_stems:
-            skip.add("separate")
-        if skip_embeddings:
-            skip.add("embed")
-        result = dispatcher.run(limit=limit, skip=skip, track_id=track_id)
+    # Ingest first
+    console.print("[cyan]Scanning for new files...[/cyan]")
+    dispatcher.ingest()
 
-        for stage_name, counts in result.items():
-            console.print(f"[green]{stage_name}:[/green] {counts}")
-    finally:
-        session.close()
+    # Run all enabled stages
+    skip: set[str] = set()
+    if skip_stems:
+        skip.add("separate")
+    if skip_embeddings:
+        skip.add("embed")
+    result = dispatcher.run(limit=limit, skip=skip, track_id=track_id)
+
+    for stage_name, counts in result.items():
+        console.print(f"[green]{stage_name}:[/green] {counts}")
 
 
 @main.command("list")

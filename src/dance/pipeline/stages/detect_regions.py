@@ -67,8 +67,11 @@ class RegionDetectionStage:
 
     name = "detect_regions"
     input_state = TrackState.STEMS_ANALYZED
+    inflight_state = TrackState.DETECTING_REGIONS
     output_state = TrackState.REGIONS_DETECTED
     error_state = TrackState.ERROR
+    concurrency = 2
+    uses_gpu = False
 
     def __init__(self, sample_rate: int = 44100) -> None:
         self.sample_rate = sample_rate

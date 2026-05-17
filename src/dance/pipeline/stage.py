@@ -8,6 +8,22 @@ nothing about each other.
 
 This is deliberately tiny. Don't add complexity unless a real consumer
 requires it.
+
+Concurrency knobs (used only by the parallel dispatcher path; sequential mode
+ignores them):
+
+- ``concurrency`` — how many worker threads to run for this stage. Set higher
+  than 1 only for stages that release the GIL during compute (numpy / librosa /
+  torch / mutagen all do).
+- ``uses_gpu`` — when True, every ``process()`` call goes through a
+  module-level semaphore so MPS isn't oversubscribed. ``separate`` and
+  ``embed`` are the GPU stages today.
+- ``inflight_state`` — the *-ING TrackState a track sits in while a worker is
+  processing it. The dispatcher atomically flips ``input_state -> inflight_state``
+  at claim time so two workers can never grab the same track. ``None`` means
+  the legacy sequential dispatcher (no atomic claim — tracks stay in
+  input_state until ``process()`` writes output_state). The dispatcher's
+  parallel path requires this be non-None.
 """
 
 from __future__ import annotations
@@ -22,7 +38,29 @@ from dance.core.database import Track, TrackState
 
 @runtime_checkable
 class Stage(Protocol):
-    """A unit of pipeline work."""
+    """A unit of pipeline work.
+
+    Required surface (enforced by ``isinstance(x, Stage)``):
+
+    - ``name``: str
+    - ``input_state``: TrackState
+    - ``output_state``: TrackState
+    - ``error_state``: TrackState
+    - ``process(session, track, settings) -> bool``
+
+    Optional parallel-mode hints (read by the dispatcher via getattr with
+    defaults, so existing stage classes work unchanged):
+
+    - ``inflight_state: TrackState`` — the *-ING state a track sits in
+      while a worker is processing it. The parallel dispatcher uses this
+      to atomically claim tracks; without it, the stage falls back to
+      sequential-only behavior.
+    - ``concurrency: int`` — how many worker threads the parallel
+      dispatcher gives this stage. Default: 1.
+    - ``uses_gpu: bool`` — if True, the parallel dispatcher gates each
+      ``process()`` call on a module-level semaphore so MPS isn't
+      oversubscribed. Default: False.
+    """
 
     name: str
     input_state: TrackState

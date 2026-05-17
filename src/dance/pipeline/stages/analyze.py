@@ -51,8 +51,11 @@ class AnalysisStage:
 
     name = "analyze"
     input_state = TrackState.PENDING
+    inflight_state = TrackState.ANALYZING
     output_state = TrackState.ANALYZED
     error_state = TrackState.ERROR
+    concurrency = 2  # librosa releases GIL during numpy work
+    uses_gpu = False
 
     def __init__(self, sample_rate: int = 44100):
         self.sample_rate = sample_rate

@@ -47,8 +47,13 @@ class StemSeparationStage:
 
     name = "separate"
     input_state = TrackState.ANALYZED
+    inflight_state = TrackState.SEPARATING
     output_state = TrackState.SEPARATED
     error_state = TrackState.ERROR
+    # 2 workers + GPU semaphore lets two Demucs runs overlap on MPS.
+    # Bump down to 1 if you OOM, or DANCE_GPU_CONCURRENCY higher to widen.
+    concurrency = 2
+    uses_gpu = True
 
     def __init__(self) -> None:
         self._model = None

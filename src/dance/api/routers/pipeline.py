@@ -465,21 +465,22 @@ _DISPATCH_STAGES = (
 
 def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
     """Background worker: build a Dispatcher in this thread, run it,
-    pipe its events into the JobRegistry."""
+    pipe its events into the JobRegistry.
+
+    Uses the parallel dispatcher (session_factory) so stages run
+    concurrently and stages with ``concurrency>1`` get multiple
+    workers. GPU contention is bounded by the dispatcher's module-level
+    semaphore (``DANCE_GPU_CONCURRENCY``)."""
     registry = get_job_registry()
     registry.set_status(job_id, "running")
 
-    # Each worker thread gets its own SQLAlchemy session (sessions are not
-    # threadsafe to share). The dispatcher uses this session to query and
-    # commit transitions.
     SessionLocal = get_session_factory(settings.db_url)
-    session = SessionLocal()
     try:
         # Late import — keeps API startup snappy when the dispatcher's heavy
         # deps (Demucs / CLAP) aren't needed.
         from dance.pipeline.dispatcher import Dispatcher
 
-        dispatcher = Dispatcher(settings, session)
+        dispatcher = Dispatcher(settings, session_factory=SessionLocal)
 
         # Live counters per stage. Updated on every event; flushed to the
         # JobRegistry as a "X/Y done" message.
@@ -543,10 +544,6 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
         logger.exception("pipeline_run job %s crashed", job_id)
         registry.set_status(job_id, "error", error=str(e)[:300])
     finally:
-        try:
-            session.close()
-        except Exception:  # noqa: BLE001
-            pass
         # Drop the global lock so the next /process can fire.
         if _PROCESS_LOCK.locked():
             try:

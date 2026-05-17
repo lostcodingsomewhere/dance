@@ -51,8 +51,11 @@ class StemAnalysisStage:
 
     name = "analyze_stems"
     input_state = TrackState.SEPARATED
+    inflight_state = TrackState.ANALYZING_STEMS
     output_state = TrackState.STEMS_ANALYZED
     error_state = TrackState.ERROR
+    concurrency = 2
+    uses_gpu = False
 
     # ------------------------------------------------------------------
 
