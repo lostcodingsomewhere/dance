@@ -43,11 +43,14 @@ def create_app(
     session_factory = session_factory or get_session_factory(settings.db_url)
 
     ws_manager = ws.WSManager()
+    pipeline_ws_manager = ws.PipelineWSManager()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Capture the running loop so the OSC listener thread can hop back.
-        ws_manager.loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
+        ws_manager.loop = loop
+        pipeline_ws_manager.loop = loop
 
         def _on_state(state: AbletonState) -> None:
             ws_manager.broadcast_threadsafe(state.to_dict())
@@ -74,6 +77,7 @@ def create_app(
     app.state.bridge = bridge
     app.state.session_factory = session_factory
     app.state.ws_manager = ws_manager
+    app.state.pipeline_ws_manager = pipeline_ws_manager
     # CLAP text encoder is lazy — first call to /recommend/text loads the model.
     app.state.embedding_stage = None
 

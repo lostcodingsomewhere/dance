@@ -286,12 +286,89 @@ class PipelineRecentTrackOut(BaseModel):
     error_message: str | None
 
 
+# ---------------------------------------------------------------------------
+# Pipeline ingest (CSV → yt-dlp)
+# ---------------------------------------------------------------------------
+
+
+class IngestPreviewRequest(BaseModel):
+    """Body for ``POST /api/v1/pipeline/ingest/preview``.
+
+    ``csv_text``: full text content of an Exportify CSV export. The server
+    parses it, runs dedupe against the existing library, and returns a plan
+    the UI can render. **No downloads happen** at this stage — preview only.
+    """
+
+    csv_text: str
+
+
+class IngestPreviewRow(BaseModel):
+    artist: str
+    title: str
+    album: str = ""
+    duration_s: int = 0
+    target_path: str
+    """Where the file *would* land on disk if downloaded."""
+    target_exists: bool
+    """True iff a file already exists at ``target_path`` (size > 100 KB)."""
+    duplicate_of: int | None = None
+    """``track_id`` of an existing library track that looks like a duplicate,
+    if any. Determined by normalized artist+title fuzzy match."""
+
+
+class IngestPreviewResponse(BaseModel):
+    total_rows: int
+    new_rows: list[IngestPreviewRow]
+    duplicates: list[IngestPreviewRow]
+    """Already in the library (either same file on disk or a fuzzy match in
+    the DB). UI shows these grayed-out / checked-off by default."""
+    parse_errors: list[str]
+
+
+class IngestCommitRequest(BaseModel):
+    """Body for ``POST /api/v1/pipeline/ingest/commit``.
+
+    ``csv_text``: same CSV the preview was generated from.
+    ``include_duplicates``: if True, also download tracks flagged as
+        duplicates (user override). Defaults to False (skip them).
+    """
+
+    csv_text: str
+    include_duplicates: bool = False
+
+
+class JobItemOut(BaseModel):
+    label: str
+    status: str
+    message: str = ""
+
+
+class JobOut(BaseModel):
+    id: str
+    kind: str
+    status: str
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    error: str | None = None
+    revision: int
+    counts: dict[str, int]
+    total: int
+    items: list[JobItemOut]
+
+
 __all__ = [
     "AbletonStateOut",
     "AlsExportRequest",
     "AlsExportResult",
     "AnalysisOut",
     "FireClipRequest",
+    "IngestCommitRequest",
+    "IngestPreviewRequest",
+    "IngestPreviewResponse",
+    "IngestPreviewRow",
+    "JobItemOut",
+    "JobOut",
     "LoadTrackRequest",
     "LoadTrackResult",
     "PipelineRecentTrackOut",

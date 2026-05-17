@@ -2,6 +2,8 @@ import type {
   AbletonState,
   AddPlayBody,
   DjSession,
+  IngestPreviewResponse,
+  Job,
   PipelineRecentTrack,
   PipelineStatus,
   Recommendation,
@@ -149,6 +151,31 @@ export function getPipelineStatus(): Promise<PipelineStatus> {
 
 export function getPipelineRecent(limit = 20): Promise<PipelineRecentTrack[]> {
   return request<PipelineRecentTrack[]>(`/pipeline/recent?limit=${limit}`);
+}
+
+export function ingestPreview(csv_text: string): Promise<IngestPreviewResponse> {
+  return request<IngestPreviewResponse>("/pipeline/ingest/preview", {
+    method: "POST",
+    body: JSON.stringify({ csv_text }),
+  });
+}
+
+export function ingestCommit(
+  csv_text: string,
+  include_duplicates: boolean,
+): Promise<Job> {
+  return request<Job>("/pipeline/ingest/commit", {
+    method: "POST",
+    body: JSON.stringify({ csv_text, include_duplicates }),
+  });
+}
+
+export function getJob(jobId: string): Promise<Job> {
+  return request<Job>(`/pipeline/jobs/${jobId}`);
+}
+
+export function listJobs(limit = 20): Promise<Job[]> {
+  return request<Job[]>(`/pipeline/jobs?limit=${limit}`);
 }
 
 // Ableton -------------------------------------------------------------------

@@ -163,3 +163,42 @@ export const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "complete", label: "Complete" },
   { key: "error", label: "Error" },
 ];
+
+// CSV ingest types — mirror `src/dance/api/schemas.py` Ingest* classes.
+
+export interface IngestPreviewRow {
+  artist: string;
+  title: string;
+  album: string;
+  duration_s: number;
+  target_path: string;
+  target_exists: boolean;
+  duplicate_of: number | null;
+}
+
+export interface IngestPreviewResponse {
+  total_rows: number;
+  new_rows: IngestPreviewRow[];
+  duplicates: IngestPreviewRow[];
+  parse_errors: string[];
+}
+
+export interface JobItem {
+  label: string;
+  status: "pending" | "ok" | "skip" | "fail";
+  message: string;
+}
+
+export interface Job {
+  id: string;
+  kind: string;
+  status: "queued" | "running" | "done" | "error";
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+  revision: number;
+  total: number;
+  counts: { pending: number; ok: number; skip: number; fail: number };
+  items: JobItem[];
+}

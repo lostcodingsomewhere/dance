@@ -1096,3 +1096,158 @@ def test_pipeline_recent_surfaces_error_message(
     r = client.get("/api/v1/pipeline/recent?limit=1")
     body = r.json()
     assert body[0]["error_message"] == "separate: System error."
+
+
+# ---------------------------------------------------------------------------
+# CSV ingest dedup + endpoints
+# ---------------------------------------------------------------------------
+
+
+_MINI_CSV = """Track URI,Track Name,Album Name,Artist Name(s),Duration (ms)
+spotify:track:1,One More Time,Discovery,Daft Punk,320000
+spotify:track:2,Sunsleeper,When Will We Land,Barry Can't Swim,260000
+spotify:track:3,Faust,Faust EP,Argy;Son of Son,455000
+spotify:track:4,,No Artist,Mystery,180000
+"""
+
+
+def test_dedup_finds_token_reordered_match() -> None:
+    from dance.api.dedup import find_duplicate, index_existing
+
+    idx = index_existing([(1, "Argy;Son of Son", "Faust")])
+    # Incoming has reversed artist order
+    assert find_duplicate("Son of Son, Argy", "Faust", idx) == 1
+
+
+def test_dedup_distinguishes_versions() -> None:
+    """Different mixes must NOT be flagged as the same track."""
+    from dance.api.dedup import find_duplicate, index_existing
+
+    idx = index_existing([(1, "Daft Punk", "One More Time")])
+    assert find_duplicate("Daft Punk", "One More Time (Club Mix)", idx) is None
+    assert find_duplicate("Daft Punk", "One More Time - Extended", idx) is None
+
+
+def test_dedup_handles_diacritics() -> None:
+    from dance.api.dedup import find_duplicate, index_existing
+
+    idx = index_existing([(1, "Amélie", "Étoile")])
+    assert find_duplicate("Amelie", "Etoile", idx) == 1
+
+
+def test_ingest_preview_classifies_new_vs_duplicate(
+    client: TestClient, session, make_track, tmp_path, app
+) -> None:
+    # Pre-populate one matching track in the DB
+    make_track(title="One More Time", artist="Daft Punk", state="complete")
+    session.commit()
+
+    # Point library to an empty tmp dir
+    app.state.settings.library_dir = tmp_path
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/preview",
+        json={"csv_text": _MINI_CSV},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # 4 rows total: 3 valid (one is a dupe), 1 parse error (no title for row 4)
+    assert body["total_rows"] == 3
+    assert len(body["parse_errors"]) == 1
+    # Daft Punk should be flagged as duplicate; the other two are new
+    dup_titles = {r["title"] for r in body["duplicates"]}
+    new_titles = {r["title"] for r in body["new_rows"]}
+    assert "One More Time" in dup_titles
+    assert {"Sunsleeper", "Faust"} == new_titles
+
+
+def test_ingest_preview_detects_existing_file_on_disk(
+    client: TestClient, session, make_track, tmp_path, app
+) -> None:
+    app.state.settings.library_dir = tmp_path
+    # Drop a file matching what the importer would write
+    (tmp_path / "Daft Punk - One More Time.mp3").write_bytes(b"\x00" * 200_000)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/preview",
+        json={"csv_text": _MINI_CSV},
+    )
+    body = r.json()
+    # That row should be in duplicates even though no Track row exists
+    targets = {r["target_path"] for r in body["duplicates"]}
+    assert any("One More Time" in p for p in targets)
+
+
+def test_ingest_commit_creates_job_and_returns_pending_items(
+    client: TestClient, session, make_track, tmp_path, app, monkeypatch
+) -> None:
+    """Smoke-test commit endpoint without actually running yt-dlp.
+
+    We monkeypatch ``download_track`` so the background thread completes
+    immediately and we can assert the job goes from queued → done.
+    """
+    import time
+
+    from dance.spotify import csv_importer
+
+    app.state.settings.library_dir = tmp_path
+
+    def _fake_download(row, library, *args, **kwargs):  # noqa: ANN001
+        return ("ok", "fake 12 KB")
+
+    monkeypatch.setattr(csv_importer, "download_track", _fake_download)
+    # Re-import so the router's reference uses the patched function
+    from dance.api.routers import pipeline as pipeline_router
+    monkeypatch.setattr(pipeline_router, "download_track", _fake_download)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/commit",
+        json={"csv_text": _MINI_CSV, "include_duplicates": True},
+    )
+    assert r.status_code == 200
+    job = r.json()
+    assert job["status"] in ("queued", "running", "done")
+    assert job["total"] == 3
+    job_id = job["id"]
+
+    # Poll for completion (with a small budget)
+    for _ in range(50):
+        time.sleep(0.05)
+        r = client.get(f"/api/v1/pipeline/jobs/{job_id}")
+        body = r.json()
+        if body["status"] == "done":
+            break
+    assert body["status"] == "done"
+    assert body["counts"]["ok"] == 3
+    assert all(it["status"] == "ok" for it in body["items"])
+
+
+def test_ingest_commit_rejects_empty_after_dedup(
+    client: TestClient, session, make_track, tmp_path, app
+) -> None:
+    """If every CSV row is a duplicate, commit returns 400."""
+    app.state.settings.library_dir = tmp_path
+    # Make every CSV track look like an existing DB track
+    make_track(title="One More Time", artist="Daft Punk", state="complete")
+    make_track(title="Sunsleeper", artist="Barry Can't Swim", state="complete")
+    make_track(title="Faust", artist="Argy", state="complete")
+    session.commit()
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/commit",
+        json={"csv_text": _MINI_CSV, "include_duplicates": False},
+    )
+    assert r.status_code == 400
+
+
+def test_ingest_commit_rejects_bad_csv(client: TestClient) -> None:
+    r = client.post(
+        "/api/v1/pipeline/ingest/commit",
+        json={"csv_text": "not,a,real,header\nfoo,bar,baz,qux"},
+    )
+    assert r.status_code == 400
+
+
+def test_get_job_404(client: TestClient) -> None:
+    r = client.get("/api/v1/pipeline/jobs/nonexistent")
+    assert r.status_code == 404
