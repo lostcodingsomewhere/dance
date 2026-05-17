@@ -24,7 +24,6 @@ declare ``concurrency``, ``uses_gpu``, and ``inflight_state``.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Iterable
@@ -35,18 +34,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from dance.config import Settings
 from dance.core.database import Track, TrackState
+from dance.pipeline._gpu import GPU_SEMAPHORE
 from dance.pipeline.events import EventBus, StageEvent
 from dance.pipeline.stage import Stage
 
 logger = logging.getLogger(__name__)
 
 
-# Module-level semaphore: caps how many uses_gpu=True processes are mid-flight
-# at once. Default 1 = serial GPU. Set DANCE_GPU_CONCURRENCY=2 to allow two
-# Demucs runs (or one Demucs + one CLAP) at the same time on M2 Pro 16 GB.
-# Bump higher with caution — MPS OOM is silent and ugly.
-_DEFAULT_GPU_CONCURRENCY = int(os.environ.get("DANCE_GPU_CONCURRENCY", "1"))
-_GPU_SEMAPHORE = threading.Semaphore(_DEFAULT_GPU_CONCURRENCY)
+# Re-export under the legacy private name so existing call sites work.
+# All GPU-bound code (dispatcher workers, text-search endpoint, etc.) should
+# acquire this before touching MPS.
+_GPU_SEMAPHORE = GPU_SEMAPHORE
 
 
 # How long a worker keeps polling for new work after its stage queue

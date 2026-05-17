@@ -111,7 +111,16 @@ def recommend_by_seed(
 
 
 def _get_text_encoder(request: Request, settings: Settings):
-    """Lazy-load the EmbeddingStage on first text query; reuse it after."""
+    """Lazy-load the EmbeddingStage on first text query; reuse it after.
+
+    Returns a callable ``encode_text(query) -> np.ndarray`` that acquires
+    the process-wide GPU semaphore before running. Without this gate,
+    text queries get starved when the dispatcher is also doing CLAP /
+    Demucs work on MPS — the small fast text encode never wins a window
+    in the queue.
+    """
+    from dance.pipeline._gpu import GPU_SEMAPHORE
+
     stage = request.app.state.embedding_stage
     if stage is None:
         with _clap_lock:
@@ -121,14 +130,22 @@ def _get_text_encoder(request: Request, settings: Settings):
 
                 stage = EmbeddingStage()
                 try:
-                    stage._ensure_model(settings)
+                    # Gate the model load too — first-call ~12-30s on MPS is
+                    # painful but at least bounded with respect to dispatcher.
+                    with GPU_SEMAPHORE:
+                        stage._ensure_model(settings)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("CLAP load failed")
                     raise HTTPException(
                         status_code=503, detail=f"CLAP model unavailable: {exc}"
                     ) from exc
                 request.app.state.embedding_stage = stage
-    return stage.encode_text
+
+    def _gated_encode(query: str):
+        with GPU_SEMAPHORE:
+            return stage.encode_text(query)
+
+    return _gated_encode
 
 
 @router.post("/text", response_model=list[RecommendationOut])
