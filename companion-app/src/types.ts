@@ -149,6 +149,9 @@ export interface PipelineRecentTrack {
 
 // Ordered stages — the UI renders the count grid left-to-right in this order
 // so the eye can read pipeline progress like a Gantt chart.
+//
+// LEGACY: kept for backward-compat references in other components. The Ops
+// view uses the consolidated STAGE_GROUPS below.
 export const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "pending", label: "Pending" },
   { key: "analyzing", label: "Analyzing" },
@@ -164,6 +167,104 @@ export const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "complete", label: "Complete" },
   { key: "error", label: "Error" },
 ];
+
+/**
+ * Pipeline stages, consolidated. The DB has 13 ``TrackState`` values that
+ * encode (waiting-for-stage, in-flight-in-stage) pairs; the UI wants to think
+ * about 5 stages + done + error, each with two sub-counts:
+ *
+ * - ``waiting_state`` — tracks queued for the stage but not yet picked up.
+ * - ``active_state`` — tracks a worker is currently processing.
+ *
+ * The "done" bucket folds ``embedded`` and ``complete`` together: in the
+ * current pipeline both mean "finished embed, no work left" — the
+ * distinction is just that ``embedded`` is the embed stage's output_state
+ * and ``complete`` is what advances later if there's a follow-up step.
+ */
+export interface StageGroup {
+  key: string;
+  label: string;
+  waiting_state: string | null; // null for done/error
+  active_state: string | null;
+  color: string; // tailwind classes for the tile
+}
+
+export const STAGE_GROUPS: StageGroup[] = [
+  {
+    key: "analyze",
+    label: "Analyze",
+    waiting_state: "pending",
+    active_state: "analyzing",
+    color: "bg-amber-500/10 text-amber-200 ring-1 ring-amber-500/20",
+  },
+  {
+    key: "separate",
+    label: "Separate",
+    waiting_state: "analyzed",
+    active_state: "separating",
+    color: "bg-orange-500/10 text-orange-200 ring-1 ring-orange-500/20",
+  },
+  {
+    key: "analyze_stems",
+    label: "Stems",
+    waiting_state: "separated",
+    active_state: "analyzing_stems",
+    color: "bg-blue-500/10 text-blue-200 ring-1 ring-blue-500/20",
+  },
+  {
+    key: "detect_regions",
+    label: "Regions",
+    waiting_state: "stems_analyzed",
+    active_state: "detecting_regions",
+    color: "bg-purple-500/10 text-purple-200 ring-1 ring-purple-500/20",
+  },
+  {
+    key: "embed",
+    label: "Embed",
+    waiting_state: "regions_detected",
+    active_state: "embedding",
+    color: "bg-cyan-500/10 text-cyan-200 ring-1 ring-cyan-500/20",
+  },
+];
+
+/** Terminal buckets, rendered at the end of the row. */
+export const TERMINAL_GROUPS: {
+  key: string;
+  label: string;
+  states: string[];
+  color: string;
+}[] = [
+  {
+    key: "done",
+    label: "Done",
+    states: ["embedded", "complete"],
+    color: "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30",
+  },
+  {
+    key: "error",
+    label: "Error",
+    states: ["error"],
+    color: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
+  },
+];
+
+/** Computed view of a stage group given the raw counts dict. */
+export interface StageGroupCounts {
+  waiting: number;
+  active: number;
+  total: number;
+}
+
+export function computeStageCounts(
+  group: StageGroup,
+  counts: Record<string, number>,
+): StageGroupCounts {
+  const waiting = group.waiting_state ? counts[group.waiting_state] ?? 0 : 0;
+  const active = group.active_state ? counts[group.active_state] ?? 0 : 0;
+  return { waiting, active, total: waiting + active };
+}
+
+export type OpsViewMode = "grid" | "board";
 
 // CSV ingest types — mirror `src/dance/api/schemas.py` Ingest* classes.
 

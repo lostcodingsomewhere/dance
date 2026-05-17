@@ -4,12 +4,16 @@ import * as api from "../api";
 import { Modal } from "../components/Modal";
 import { usePipelineJobs } from "../hooks/usePipelineJobs";
 import {
-  PIPELINE_STAGES,
+  STAGE_GROUPS,
+  TERMINAL_GROUPS,
+  computeStageCounts,
   type IngestPreviewResponse,
   type IngestPreviewRow,
   type Job,
+  type OpsViewMode,
   type PipelineRecentTrack,
 } from "../types";
+import { PipelineBoard } from "./PipelineBoard";
 
 interface ScanToast {
   text: string;
@@ -432,6 +436,104 @@ function JobCard({ job }: { job: Job }) {
 }
 
 // =============================================================================
+// Consolidated stage grid — one tile per logical stage, two sub-counts per tile
+// =============================================================================
+
+function ConsolidatedStageGrid({
+  counts,
+  filterState,
+  onTileClick,
+}: {
+  counts: Record<string, number>;
+  filterState: string | null;
+  onTileClick: (state: string) => void;
+}) {
+  return (
+    <div className="px-6 py-4 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-2">
+      {STAGE_GROUPS.map((group) => {
+        const { waiting, active, total } = computeStageCounts(group, counts);
+        const dim = total === 0 ? "opacity-40" : "";
+        const activeStateSelected =
+          group.active_state != null && filterState === group.active_state;
+        const waitingStateSelected =
+          group.waiting_state != null && filterState === group.waiting_state;
+        const eitherSelected = activeStateSelected || waitingStateSelected;
+        return (
+          <div
+            key={group.key}
+            className={`rounded-lg ${group.color} ${dim} ${
+              eitherSelected ? "ring-2 ring-neutral-100" : ""
+            }`}
+          >
+            <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider opacity-80">
+              {group.label}
+            </div>
+            <div className="flex">
+              {group.waiting_state && (
+                <button
+                  type="button"
+                  onClick={() => onTileClick(group.waiting_state!)}
+                  className={`flex-1 px-3 pb-2 text-left hover:bg-black/20 rounded-bl-lg ${
+                    waitingStateSelected ? "bg-black/30" : ""
+                  }`}
+                  title={`${waiting} tracks waiting for ${group.label.toLowerCase()}`}
+                >
+                  <div className="text-[10px] uppercase tracking-wider opacity-60">
+                    Waiting
+                  </div>
+                  <div className="font-mono text-xl tabular-nums">{waiting}</div>
+                </button>
+              )}
+              {group.active_state && (
+                <button
+                  type="button"
+                  onClick={() => onTileClick(group.active_state!)}
+                  className={`flex-1 px-3 pb-2 text-left hover:bg-black/20 rounded-br-lg border-l border-black/20 ${
+                    activeStateSelected
+                      ? "bg-black/30"
+                      : active > 0
+                        ? "bg-emerald-500/10"
+                        : ""
+                  }`}
+                  title={`${active} tracks actively in ${group.label.toLowerCase()}`}
+                >
+                  <div className="text-[10px] uppercase tracking-wider opacity-60">
+                    Active {active > 0 && <span className="text-emerald-300">●</span>}
+                  </div>
+                  <div className="font-mono text-xl tabular-nums">{active}</div>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {TERMINAL_GROUPS.map((group) => {
+        const total = group.states.reduce((s, st) => s + (counts[st] ?? 0), 0);
+        const dim = total === 0 ? "opacity-40" : "";
+        // Use the first state as the filter key on click.
+        const selectedKey = group.states.find((s) => filterState === s);
+        return (
+          <button
+            type="button"
+            key={group.key}
+            onClick={() => onTileClick(group.states[0])}
+            className={`text-left rounded-lg ${group.color} ${dim} px-3 py-2 hover:ring-1 hover:ring-neutral-600 ${
+              selectedKey ? "ring-2 ring-neutral-100" : ""
+            }`}
+            title={`${total} ${group.label.toLowerCase()} tracks`}
+          >
+            <div className="text-[10px] uppercase tracking-wider opacity-80">
+              {group.label}
+            </div>
+            <div className="font-mono text-2xl tabular-nums">{total}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
 // Main view
 // =============================================================================
 
@@ -441,6 +543,16 @@ export function PipelineOps() {
   /** When set, the activity table filters to this state. Driven by tile clicks. */
   const [filterState, setFilterState] = useState<string | null>(null);
   const [scanToast, setScanToast] = useState<ScanToast | null>(null);
+  const [viewMode, setViewMode] = useState<OpsViewMode>(() => {
+    if (typeof window === "undefined") return "grid";
+    return (
+      (window.localStorage.getItem("dance.ops.viewMode") as OpsViewMode) ?? "grid"
+    );
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem("dance.ops.viewMode", viewMode);
+  }, [viewMode]);
 
   const status = useQuery({
     queryKey: ["pipeline-status"],
@@ -656,40 +768,46 @@ export function PipelineOps() {
         </div>
       </div>
 
-      {/* State grid — clickable tiles */}
-      <div className="px-6 py-4 grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2">
-        {PIPELINE_STAGES.map(({ key, label }) => {
-          const count = counts[key] ?? 0;
-          const dim = count === 0 ? "opacity-40" : "";
-          const isSelected = filterState === key;
-          return (
+      {/* View toggle */}
+      <div className="px-6 pt-3 flex items-center gap-2">
+        <div className="inline-flex rounded-lg bg-neutral-900 border border-neutral-800 p-0.5">
+          {(["grid", "board"] as OpsViewMode[]).map((m) => (
             <button
+              key={m}
               type="button"
-              key={key}
-              onClick={() =>
-                setFilterState((prev) => (prev === key ? null : key))
-              }
-              className={`text-left rounded-lg px-3 py-2 transition-all ${
-                STAGE_COLOR[key] ?? "bg-neutral-800"
-              } ${dim} ${
-                isSelected
-                  ? "ring-2 ring-neutral-100 scale-[1.02]"
-                  : "hover:ring-1 hover:ring-neutral-600 cursor-pointer"
+              onClick={() => setViewMode(m)}
+              className={`px-3 py-1 rounded text-xs font-semibold ${
+                viewMode === m
+                  ? "bg-neutral-100 text-neutral-950"
+                  : "text-neutral-400 hover:text-neutral-200"
               }`}
-              title={
-                count > 0
-                  ? `Click to ${isSelected ? "clear filter" : `show all ${count} ${key} tracks`}`
-                  : "0 tracks"
-              }
             >
-              <div className="text-[10px] uppercase tracking-wider opacity-80">
-                {label}
-              </div>
-              <div className="font-mono text-2xl tabular-nums">{count}</div>
+              {m === "grid" ? "Grid" : "Board"}
             </button>
-          );
-        })}
+          ))}
+        </div>
+        <span className="text-xs text-neutral-500">
+          {viewMode === "grid"
+            ? "counts per stage"
+            : "kanban — drag-of-the-eye"}
+        </span>
       </div>
+
+      {viewMode === "grid" ? (
+        <ConsolidatedStageGrid
+          counts={counts}
+          filterState={filterState}
+          onTileClick={(stateKey) =>
+            setFilterState((prev) => (prev === stateKey ? null : stateKey))
+          }
+        />
+      ) : (
+        <div className="px-6 py-3">
+          <PipelineBoard
+            onTrackClick={(t) => setFilterState(t.state)}
+          />
+        </div>
+      )}
 
       {/* Two columns: left = jobs, right = activity (full width when no jobs) */}
       <div
