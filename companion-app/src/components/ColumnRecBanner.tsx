@@ -79,30 +79,44 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
   // Stem cards load only their own stem; the song-column card loads the
   // whole 4-stem combo into a fresh row.
   const isSongCard = column === "mix";
+
+  function onLoadSuccess(result: { scene_index: number; track_indices: Record<string, number> }, isFullSong: boolean) {
+    // Auto-stop any preview when committing — the candidate is now on
+    // master, so cue should go silent.
+    if (previewing) stopPreview.mutate();
+    // Register the deck locally only for whole-song commits. Single-stem
+    // loads don't form a "deck" — their row may have cells from other
+    // tracks and the backend is the source of truth.
+    if (isFullSong) {
+      store.registerDeck({
+        track_id: rec.track_id,
+        scene_index: result.scene_index,
+        stem_track_indices: Object.values(result.track_indices),
+        loaded_at: Date.now(),
+      });
+    }
+    qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+    qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
+  }
+
   const load = useMutation({
     mutationFn: () =>
       pushTrackToLive(rec.track_id, {
         includeStems: true,
         kinds: isSongCard ? undefined : [column],
       }),
-    onSuccess: (result) => {
-      // Auto-stop any preview when committing — the candidate is now on
-      // master, so cue should go silent.
-      if (previewing) stopPreview.mutate();
-      // Register the deck locally only for whole-song commits. Single-stem
-      // loads don't form a "deck" — their row may have cells from other
-      // tracks and the backend is the source of truth.
-      if (isSongCard) {
-        store.registerDeck({
-          track_id: rec.track_id,
-          scene_index: result.scene_index,
-          stem_track_indices: Object.values(result.track_indices),
-          loaded_at: Date.now(),
-        });
-      }
-      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
-      qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
-    },
+    onSuccess: (result) => onLoadSuccess(result, isSongCard),
+  });
+
+  // "Load whole song" — only available on stem cards. Same target track as
+  // this rec, but commits all 4 stems into a fresh row (anchor-ready).
+  const loadSong = useMutation({
+    mutationFn: () =>
+      pushTrackToLive(rec.track_id, {
+        includeStems: true,
+        kinds: undefined,
+      }),
+    onSuccess: (result) => onLoadSuccess(result, true),
   });
 
   function onPreview() {
@@ -158,7 +172,8 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           {rec.reasons.join(" · ")}
         </div>
       )}
-      <div className="mt-1 flex gap-1">
+      <div className="mt-1 grid grid-cols-[auto_1fr] gap-1">
+        {/* Row 1: stem actions (or song actions on the song card). */}
         <button
           type="button"
           onClick={onPreview}
@@ -166,6 +181,8 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           title={
             isPreviewing
               ? "Stop preview (Cue track → headphones)"
+              : isSongCard
+              ? "Preview the song in headphones (Scarlett outs 3/4)"
               : `Preview just the ${roleLabel(column).toLowerCase()} stem in headphones`
           }
           className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
@@ -177,26 +194,6 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
         >
           {isPreviewing ? "⏹" : "▶"}
         </button>
-        {!isSongCard && (
-          <button
-            type="button"
-            onClick={onPreviewSong}
-            disabled={startPreview.isPending || stopPreview.isPending}
-            title={
-              isPreviewingSong
-                ? "Stop preview (whole song in headphones)"
-                : "Preview the WHOLE SONG of this rec in headphones — then commit via the cue strip if you like it"
-            }
-            className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
-              isPreviewingSong
-                ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
-                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
-            }`}
-            aria-label={isPreviewingSong ? "stop song preview" : "preview song"}
-          >
-            {isPreviewingSong ? "⏹" : "♪"}
-          </button>
-        )}
         <button
           type="button"
           onClick={() => load.mutate()}
@@ -206,7 +203,7 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
               ? "Load all 4 stems into a fresh row (anchor-ready)"
               : `Load only the ${roleLabel(column).toLowerCase()} stem into the next free ${roleLabel(column).toLowerCase()} slot`
           }
-          className="flex-1 text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
+          className="text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
         >
           {load.isPending
             ? "loading…"
@@ -214,6 +211,41 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
             ? "Load song"
             : `Load ${roleLabel(column).toLowerCase()}`}
         </button>
+        {/* Row 2: song escape hatch — only on stem cards. ♪ previews the
+            whole song through cue; Load song commits all 4 stems to a
+            fresh row regardless of which stem column we're sitting in. */}
+        {!isSongCard && (
+          <>
+            <button
+              type="button"
+              onClick={onPreviewSong}
+              disabled={startPreview.isPending || stopPreview.isPending}
+              title={
+                isPreviewingSong
+                  ? "Stop preview (whole song in headphones)"
+                  : "Preview the WHOLE SONG of this rec in headphones"
+              }
+              className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
+                isPreviewingSong
+                  ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
+                  : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
+              }`}
+              aria-label={isPreviewingSong ? "stop song preview" : "preview song"}
+            >
+              {isPreviewingSong ? "⏹" : "♪"}
+            </button>
+            <button
+              type="button"
+              onClick={() => loadSong.mutate()}
+              disabled={loadSong.isPending}
+              title="Load the WHOLE SONG (all 4 stems) of this rec into a fresh row"
+              className="text-[10px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white py-1 transition-colors disabled:opacity-50 border border-neutral-700/60 hover:border-violet-500/0"
+              aria-label="load whole song"
+            >
+              {loadSong.isPending ? "loading…" : "Load song"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
