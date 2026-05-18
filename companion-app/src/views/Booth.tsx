@@ -1,46 +1,58 @@
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
-import { NowCard } from "../components/NowCard";
+import { ComboStrip } from "../components/ComboStrip";
+import { PlayedStrip } from "../components/PlayedStrip";
 import { SceneGrid } from "../components/SceneGrid";
-import { SetRail } from "../components/SetRail";
 import { useAutoLog } from "../hooks/useAutoLog";
 import { useAutoSession } from "../hooks/useAutoSession";
-import { useNowPlayingTrack } from "../hooks/useNowPlayingTrack";
 
 const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
 
 /**
  * The Booth — the only screen you should look at during a set.
  *
- *   - SetRail (left): set arc, energy curve, played history.
- *   - NowCard (middle): currently-playing combo, structure timeline, stems.
- *   - Banners + SceneGrid (right, flex-1): per-column rec streams above the
- *     8×5 APC40-mirror grid. This is the centerpiece — most attention lives
- *     here during a swap. ⌘K opens free-text vibe search.
+ * Live-remixing layout (no song-mode artifacts):
+ *
+ *   ┌─ MasterStrip (BPM · KEY · energy arc · OSC heartbeat · view tabs) ┐
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ ComboStrip (5 cards: what's playing per role, source-tracked)    │
+ *   │                                                                  │
+ *   │ Per-column rec banners (5 across)                                │
+ *   │                                                                  │
+ *   │ 8×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows)     │
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ PlayedStrip (set name · plays · history scroll · end set)        │
+ *   └─────────────────────────────────────────────────────────────────┘
  *
  * Side effects:
- *   - Auto-creates a session on first Ableton play (useAutoSession).
+ *   - Auto-creates a session on first Ableton play.
  *   - Auto-logs plays as Ableton fires clips loaded via Load-to-Live.
  */
 export function Booth() {
   useAutoSession();
   useAutoLog();
-  const { trackId, source } = useNowPlayingTrack();
 
   return (
-    <div className="flex-1 flex min-h-0">
-      <SetRail />
-      <NowCard trackId={trackId} liveLinked={source === "ableton"} />
-      <section className="flex-1 flex flex-col min-h-0 border-l border-neutral-800 px-3 py-2 gap-2 overflow-y-auto">
-        <div className="text-[10px] uppercase tracking-widest text-neutral-500">
-          Per-column recs · Scene grid (APC40 mirror)
+    <div className="flex-1 flex flex-col min-h-0">
+      <main className="flex-1 flex flex-col min-h-0 gap-3 px-4 py-3 overflow-y-auto">
+        <ComboStrip />
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
+            Next per column · live re-scored against the combo
+          </div>
+          <div className="grid grid-cols-5 gap-1.5">
+            {STEM_COLUMNS.map((c) => (
+              <ColumnRecBanner key={c} column={c} k={3} />
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-5 gap-1.5">
-          {STEM_COLUMNS.map((c) => (
-            <ColumnRecBanner key={c} column={c} k={3} />
-          ))}
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
+            Scene grid · tap to fire (mirrors APC40)
+          </div>
+          <SceneGrid />
         </div>
-        <SceneGrid />
-      </section>
+      </main>
+      <PlayedStrip />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
+import { EnergySparkline } from "./EnergySparkline";
 
 const VIEWS: { id: ViewName; label: string; hint: string }[] = [
   { id: "booth", label: "Booth", hint: "Live performance — now / next / set" },
@@ -123,6 +124,9 @@ export function MasterStrip() {
 
       {/* Camelot key of the dominant playing scene (the anchor for compat). */}
       <KeyDisplay camelot={currentKey} />
+
+      {/* Set-arc energy sparkline — ambient view of the trajectory so far. */}
+      <EnergySparkline />
 
       {/* Deck-count chip — what we've staged in Live */}
       <DeckCountChip count={loadedCount} />

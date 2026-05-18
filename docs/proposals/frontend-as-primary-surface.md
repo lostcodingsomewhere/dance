@@ -1,36 +1,42 @@
 # Proposal — Frontend as the primary DJ surface
 
-**Status:** draft, awaiting "go ahead"
-**Date:** 2026-05-17 (rev 2 — aligned with live-remixing vision)
+**Status:** implemented (rev 3 — layout reshaped to drop song-mode artifacts)
+**Date:** 2026-05-17 (initial); 2026-05-18 (rev 3)
 **Builds on:** [`../vision.md`](../vision.md), [`../dj_ux_flow.md`](../dj_ux_flow.md)
 
 ## TL;DR
 
-The companion app becomes the only screen the user looks at during a set. The screen is dominated by an **8×5 scene grid with a per-column recommendation banner above each column**. Ableton is the invisible audio engine; the APC40 is the hands.
+The companion app is the only screen the user looks at during a set. The screen is full-width: a top **MasterStrip** (BPM, KEY, energy arc, OSC heartbeat, view nav), a horizontal **ComboStrip** under it (one card per stem role, showing what's playing per role with its source-track metadata), then **five per-column rec banners** above the **8×5 SceneGrid** (the APC40 mirror), and a thin **PlayedStrip** footer for set history. Ableton is the invisible audio engine; the APC40 is the hands.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  MasterStrip   BPM 124   key 5A   ●AbletonOSC   ⌘K vibe                       │
+│ MasterStrip   BPM 124  KEY 5A   Arc▁▂▄▆█  0 decks  •OSC   ⌘K   Booth Crate    │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ ┌── DRUMS ──┐┌── BASS ──┐┌── VOCALS ─┐┌── OTHER ─┐┌── MIX ──┐                  │
-│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │  ← per-column   │
-│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │    banners      │
-│ │ vibe ▾    ││ vibe ▾   ││ vibe ▾    ││ vibe ▾   ││ vibe ▾  │                  │
+│ CURRENT COMBO                                                  live remix     │
+│ ┌─ drums ──┐┌─ bass ───┐┌─ vocals ─┐┌─ other ──┐┌─ mix ─────┐                  │
+│ │ Track A  ││ Track B  ││ silent   ││ Track C  ││ silent    │   (per-role)    │
+│ │ 124 · 8A ││ 124 · 8B ││          ││ 122 · 7A ││           │                  │
+│ └──────────┘└──────────┘└──────────┘└──────────┘└───────────┘                  │
+│                                                                                │
+│ NEXT PER COLUMN · LIVE RE-SCORED AGAINST THE COMBO                            │
+│ ┌── drums ──┐┌── bass ──┐┌── vocals ─┐┌── other ─┐┌── mix ──┐                  │
+│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │  ← banners      │
+│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │                  │
 │ └───────────┘└──────────┘└───────────┘└──────────┘└─────────┘                  │
-│ ┌─────────────────────────────────────────────────────────────────────────┐  │
-│ │  row 8                                                                   │  │
-│ │  row 7                                                                   │  │
-│ │  row 6                              ▶                                    │  │
-│ │  ...                                                                     │  │  ← 8×5
-│ │  row 2     ▶                                       ▶                     │  │    scene
-│ │  row 1            ▶                                                      │  │    grid
-│ └─────────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-│ [ SetRail footer — collapsed by default, slides up on click ]                 │
+│                                                                                │
+│ SCENE GRID · TAP TO FIRE (MIRRORS APC40)                                       │
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │  row 1  ▶  (drums)                                                       │ │
+│ │  row 2          ▶            ▶                                           │ │
+│ │  ...                                                                     │ │
+│ │  row 8                                                                   │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ PlayedStrip   Set · 12 plays · 02:27 AM   [#1 Hyph][#2 Mort][#3 …]   end set  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The grid is the bridge: shop a column via its banner, fire a cell by tapping (or via APC40), the grid shows the live combo at a glance.
+No sidebars. The COMBO STRIP makes "what's playing" honest (per-role, not per-track), and everything glanceable (energy arc, history) goes into thin strips at the edges so the grid + banners own the center.
 
 ## Problem
 
@@ -74,9 +80,20 @@ Interactions:
 - **Right-click / long-press a cell** → small per-cell control panel (loop toggle, peek metadata, "more like this").
 - **Hover a cell** → preview metadata in a small tooltip without firing.
 
-### Shift 4 — Per-column rec banners (Option A layout)
+### Shift 4 — Drop song-mode UI; full-width banners + grid
 
-Each of the 5 columns gets a banner above it showing **3–5 candidate cells, continuously re-scored against the currently-playing combo.**
+**Removed (no longer rendered):**
+- `SetRail` (left sidebar) — its content is now distributed: energy arc → MasterStrip, played history → PlayedStrip, scene list → absorbed into SceneGrid.
+- `NowCard` — replaced by the ComboStrip, which shows the active stems per role rather than a single track.
+- `SceneMap` — superseded by the canonical SceneGrid (8×5).
+- `UpNextRail` — replaced by per-column rec banners.
+
+**Added:**
+- `ComboStrip` (`components/ComboStrip.tsx`) — horizontal 5-card row directly under MasterStrip. Each card surfaces the source-track metadata (title, key, BPM, artist) of whatever is *currently playing* in that role. When all five cells point at the same scene, it surfaces an "⚓ anchored to scene N · [title]" hint so anchor-mode is legible.
+- `EnergySparkline` (`components/EnergySparkline.tsx`) — compact arc inline in MasterStrip, fed by `useCurrentSession`. Lives next to BPM/KEY/heartbeat as a glance-anywhere set-arc cue.
+- `PlayedStrip` (`components/PlayedStrip.tsx`) — thin footer with set name, play count, horizontally scrollable history of the last ~30 plays, and the end-set button.
+
+**Per-column rec banners** (existing): each of the 5 columns gets a banner above the grid showing **3–5 candidate cells, continuously re-scored against the currently-playing combo.**
 
 - Drums banner answers "given current bass + vocals + other, what drums fit?"
 - Bass banner answers "given current drums + vocals + other, what bass fits?"

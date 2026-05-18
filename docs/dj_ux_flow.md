@@ -66,23 +66,24 @@ What's happening: the user is shaping the trajectory across many swaps. Decision
 
 | Need | Source |
 |---|---|
-| Energy curve over time | Sparkline in SetRail footer |
-| Recent stem swaps | History list (per-column ideal, single-stream acceptable) |
-| Have I leaned hard on one source? | "Used 6× already" badge on tracks heavily mined |
+| Energy curve over time | Compact sparkline inline in MasterStrip (always visible) |
+| Recent stem swaps | Horizontally-scrolling PlayedStrip at the bottom |
+| Have I leaned hard on one source? | "Used N× already" badge on tracks heavily mined (v2+) |
 | Set shape vs intent | Optional set-arc template overlay (v2+) |
 
-**Eyes-on demand: occasional.** Glanced at every 5–10 minutes during lulls.
+**Eyes-on demand: occasional.** Glanced at every 5–10 minutes during lulls — but because both signals live in slim strips at top/bottom, no surface switch is needed.
 
-## What's currently fighting the flow
+## Surfaces in the live-remixing Booth
 
-The current UI was designed assuming song-mode. The live-remixing pivot exposes these gaps:
+| Surface | Where | What it answers |
+|---|---|---|
+| MasterStrip | Top bar | BPM · KEY anchor · energy arc · OSC heartbeat · view tabs · vibe search |
+| ComboStrip | Below MasterStrip | "What's playing right now?" — one card per stem role, surfaces the source track of each playing stem; flags anchor mode when present |
+| Per-column rec banners | Above the grid, 5 across | "What should I swap into each column next?" — live-rescored against the active combo |
+| SceneGrid (8×5) | Center, full width | Canonical APC40 mirror — tap a cell to fire one stem, tap a row to anchor a whole song |
+| PlayedStrip | Bottom footer | Set name, play count, recent plays history, end-set |
 
-1. **Recs are a single ranked list.** UpNextRail shows "next track" candidates. Useless for "I just want different vocals" — the user has to mentally filter by column themselves.
-2. **Cells are not first-class.** SceneMap shows rows. Firing one cell requires clicking inside a row, which is awkward and conflates the "anchor a whole song" action with the "swap one stem" action.
-3. **No per-column context awareness.** The system can't tell which column the user is shopping. Recs aren't filtered or re-scored on intent.
-4. **Stems don't loop by default.** Clips emitted by `als/writer.py` play through and stop. For live-remixing, every clip needs `Loop = true` and the user needs a per-clip override for the rare cases they want a stem to play through (vocal verse-chorus-verse).
-5. **Compat chips are per-track.** `K0 B0` currently means "this whole track matches the NOW track in key + BPM". For per-stem swapping the right question is "this candidate stem vs the current ACTIVE COMBO" — different math, different chip semantics.
-6. **Two surfaces compete.** Eye flicks between Ableton's session view and the companion app during transition prep. Addressed by [`proposals/frontend-as-primary-surface.md`](proposals/frontend-as-primary-surface.md).
+There are no sidebars. Glanceable signals (energy arc, played history) live in slim strips so the grid + banners own the center.
 
 ## What information must be co-located
 

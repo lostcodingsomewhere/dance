@@ -77,6 +77,10 @@ These decisions fall out of the vision and are locked:
 
 7. **Compat is per-stem, not per-track.** Key/BPM/energy compatibility is computed against the active combo of stems, not against a "now playing song". When you only have drums playing, only the drums are part of the compat math for other columns.
 
+8. **No "now playing" card.** The Booth never shows a single-track header — there is no single playing track in this model. The COMBO STRIP shows per-role what's active and whose source track each stem comes from.
+
+9. **No sidebars.** Glanceable signals (energy arc, played history) live in slim top/bottom strips so the grid + rec banners own the center. The user's eyes never leave the working surface.
+
 ## Provenance
 
 This vision was articulated through conversation on 2026-05-17 after the user pushed past the original "stems are first-class" framing into a more specific creative ambition. Earlier iterations of the companion app assumed song-mode performance; the live-remixing pivot is a directional refinement, not a reset — the pipeline, the DB schema, and the .als writer all still apply. What changes is the **UI's primary unit of attention** (cell, not row) and the **shape of the recommendation system** (per-column streams, not a single list).
