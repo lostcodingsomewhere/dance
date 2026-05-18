@@ -208,6 +208,10 @@ class LoadTrackRequest(BaseModel):
 
     track_id: int
     include_stems: bool = True
+    # Which scene (row in Live's session view, 0-indexed) to stage the track
+    # on. The bridge keeps 5 reusable "Deck" track columns; each song claims
+    # one scene below them. None lets the bridge default to scene 0.
+    scene_index: int | None = None
 
 
 class LoadTrackResult(BaseModel):
@@ -223,8 +227,37 @@ class LoadTrackResult(BaseModel):
     ok: bool
     scene_index: int
     track_indices: dict[str, int] = Field(default_factory=dict)
+    # How many of the 4 stems we managed to auto-load into Live (Live 12.0.5+
+    # with our patched AbletonOSC). 0 means nothing landed; 4 is a full load
+    # and means the user only has to fire the scene to play the track.
+    stems_loaded: int = 0
     message: str | None = None
     warnings: list[str] = Field(default_factory=list)
+
+
+class DeckSceneOut(BaseModel):
+    """One staged song in Live's session view, with the track metadata the
+    companion needs to render a Scene Map row without a second fetch."""
+
+    scene_index: int
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    bpm: float | None = None
+    key_camelot: str | None = None
+    floor_energy: int | None = None
+
+
+class DeckMapOut(BaseModel):
+    """Reply for ``GET /api/v1/ableton/decks``.
+
+    ``columns`` is null until the user has hit Load at least once (no decks
+    created in Live yet). ``scenes`` lists every scene the bridge has
+    staged with one of our songs.
+    """
+
+    columns: dict[str, int] | None = None
+    scenes: list[DeckSceneOut] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +439,8 @@ __all__ = [
     "JobOut",
     "LoadTrackRequest",
     "LoadTrackResult",
+    "DeckSceneOut",
+    "DeckMapOut",
     "PipelineRecentTrackOut",
     "PipelineStatusOut",
     "RecommendRequest",

@@ -130,6 +130,17 @@ class AbletonOSCClient:
         """Create an empty (MIDI) clip of ``length`` beats."""
         self._send("/live/clip_slot/create_clip", track, slot, length)
 
+    def create_audio_clip(self, track: int, slot: int, path: str) -> None:
+        """Load an audio sample from disk into the given clip slot.
+
+        Live 12.0.5+. Requires our local AbletonOSC fork — see
+        ``docs/abletonosc_setup.md`` (we patched ``clip_slot.py`` to register
+        ``/live/clip_slot/create_audio_clip``). Errors silently in Live's log
+        if the path doesn't exist, the track is frozen, the track is not an
+        audio track, or the slot is recording.
+        """
+        self._send("/live/clip_slot/create_audio_clip", track, slot, path)
+
     def delete_clip(self, track: int, slot: int) -> None:
         self._send("/live/clip_slot/delete_clip", track, slot)
 
@@ -157,6 +168,15 @@ class AbletonOSCClient:
     def get_num_tracks(self) -> None:
         """Ask Live to push the current track count to the listener port."""
         self._send("/live/song/get/num_tracks")
+
+    def get_track_names(self) -> None:
+        """Ask Live to push every track's name in one reply.
+
+        Reply addressed to ``/live/song/get/track_names``; payload is a tuple
+        of strings in track-index order. AbletonOSC also supports a range
+        ``(min, max)`` but we always want all of them.
+        """
+        self._send("/live/song/get/track_names")
 
     def show_message(self, message: str) -> None:
         """Pop a status-bar message in Live (handy for user feedback)."""

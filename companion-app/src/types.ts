@@ -125,7 +125,42 @@ export interface TrackFilters {
   state?: string;
 }
 
-export type ViewName = "now" | "next" | "library" | "session" | "ops";
+export type ViewName = "booth" | "crate" | "pipeline";
+
+/**
+ * A track loaded into Live via "Load to Live". Records which Ableton scene the
+ * stems were placed into so we can detect "this track is playing now" by
+ * cross-referencing AbletonState.playing_clips (which is keyed by
+ * ableton_track_idx → scene_idx).
+ *
+ * stem_track_indices is the set of ableton track indices that host this dance
+ * track's stems. If any of those tracks shows a playing clip whose scene_idx
+ * equals scene_index, this dance track is the one playing.
+ */
+export interface LoadedDeck {
+  track_id: number;
+  scene_index: number;
+  stem_track_indices: number[];
+  loaded_at: number; // ms epoch
+}
+
+// Mirrors src/dance/api/schemas.py::DeckSceneOut + DeckMapOut. The bridge
+// is the source of truth for what's staged in Live; the FE polls /ableton/decks
+// to render the Scene Map widget.
+export interface DeckScene {
+  scene_index: number;
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  bpm: number | null;
+  key_camelot: string | null;
+  floor_energy: number | null;
+}
+
+export interface DeckMap {
+  columns: Record<string, number> | null;
+  scenes: DeckScene[];
+}
 
 // Pipeline-ops mirror of `src/dance/api/schemas.py:PipelineStatusOut`.
 export interface PipelineStatus {

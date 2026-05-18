@@ -1,0 +1,210 @@
+import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
+import * as api from "../api";
+import { useAbletonState } from "../hooks/useAbletonState";
+import { useDeckMap } from "../hooks/useDeckMap";
+import { store, useAppStore } from "../store";
+import type { ViewName } from "../types";
+
+const VIEWS: { id: ViewName; label: string; hint: string }[] = [
+  { id: "booth", label: "Booth", hint: "Live performance — now / next / set" },
+  { id: "crate", label: "Crate", hint: "Pre-set planning, library, vibe search" },
+  { id: "pipeline", label: "Pipeline", hint: "Ingest & processing status" },
+];
+
+/**
+ * Persistent top strip. Replaces the old TopBar. Shows live BPM (huge), a
+ * full transport (play / stop / panic / halve / double), the view nav, and
+ * a command-bar trigger.
+ */
+export function MasterStrip() {
+  const state = useAbletonState();
+  const view = useAppStore((s) => s.currentView);
+  const deckMap = useDeckMap();
+  // Prefer backend truth for the chip count; fall back to the local mirror
+  // when the backend hasn't responded yet (zero round-trip on initial paint).
+  const localCount = useAppStore((s) => Object.keys(s.loadedDecks).length);
+  const loadedCount = deckMap.data?.scenes.length ?? localCount;
+
+  const play = useMutation({ mutationFn: api.abletonPlay });
+  const stop = useMutation({ mutationFn: api.abletonStop });
+  const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
+
+  function halve() {
+    if (state.tempo == null) return;
+    const t = Math.max(40, state.tempo / 2);
+    setTempo.mutate(Number(t.toFixed(2)));
+  }
+  function double() {
+    if (state.tempo == null) return;
+    const t = Math.min(240, state.tempo * 2);
+    setTempo.mutate(Number(t.toFixed(2)));
+  }
+
+  return (
+    <header className="h-16 shrink-0 flex items-center gap-3 px-4 border-b border-neutral-800 bg-neutral-950">
+      <div className="flex items-center gap-2 pr-2 border-r border-neutral-800 h-10">
+        <div className="w-6 h-6 rounded bg-amber-400" aria-hidden />
+        <div className="text-neutral-200 font-semibold tracking-wide uppercase text-[11px]">
+          Dance
+        </div>
+      </div>
+
+      {/* Master BPM block */}
+      <div className="flex items-baseline gap-1.5 px-2">
+        <span className="font-mono text-3xl text-neutral-50 tabular-nums leading-none">
+          {state.tempo != null ? state.tempo.toFixed(1) : "--"}
+        </span>
+        <span className="text-neutral-500 text-[10px] uppercase tracking-wider">
+          BPM
+        </span>
+        <div className="flex flex-col ml-1">
+          <button
+            type="button"
+            onClick={double}
+            className="text-[10px] leading-tight px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400"
+            title="Double tempo (×2)"
+          >
+            ×2
+          </button>
+          <button
+            type="button"
+            onClick={halve}
+            className="text-[10px] leading-tight px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400"
+            title="Halve tempo (÷2)"
+          >
+            ÷2
+          </button>
+        </div>
+      </div>
+
+      {/* Transport */}
+      <div className="flex items-center gap-1 px-1 border-l border-neutral-800 h-10">
+        <button
+          type="button"
+          onClick={() => play.mutate()}
+          className={`min-h-[40px] min-w-[60px] px-3 rounded-md font-semibold text-sm ${
+            state.is_playing
+              ? "bg-emerald-500 text-neutral-950"
+              : "bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+          }`}
+          aria-label="Play"
+        >
+          {state.is_playing ? "Playing" : "Play"}
+        </button>
+        <button
+          type="button"
+          onClick={() => stop.mutate()}
+          className="min-h-[40px] min-w-[56px] px-3 rounded-md bg-neutral-800 text-neutral-200 hover:bg-neutral-700 font-semibold text-sm"
+          aria-label="Stop"
+        >
+          Stop
+        </button>
+        <PanicButton />
+      </div>
+
+      {/* Deck-count chip — what we've staged in Live */}
+      <DeckCountChip count={loadedCount} />
+      <DeckSyncIndicator
+        backendCount={deckMap.data?.scenes.length ?? null}
+        localCount={localCount}
+      />
+
+
+      {/* Command bar trigger */}
+      <button
+        type="button"
+        onClick={() => store.openCommandBar()}
+        className="ml-auto h-10 px-3 rounded-md bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-sm text-neutral-400 flex items-center gap-2"
+        title="Vibe search (⌘K)"
+      >
+        <span aria-hidden>✦</span>
+        <span>Search…</span>
+        <kbd className="font-mono text-[10px] text-neutral-500 border border-neutral-700 rounded px-1">
+          ⌘K
+        </kbd>
+      </button>
+
+      {/* View nav */}
+      <nav className="flex items-center gap-1" role="tablist">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            role="tab"
+            aria-selected={view === v.id}
+            onClick={() => store.setView(v.id)}
+            title={v.hint}
+            className={`min-h-[40px] px-3 rounded-md font-semibold text-sm ${
+              view === v.id
+                ? "bg-neutral-100 text-neutral-950"
+                : "text-neutral-300 hover:bg-neutral-800"
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </nav>
+    </header>
+  );
+}
+
+function DeckCountChip({ count }: { count: number }) {
+  return (
+    <div className="px-2 text-[11px] text-neutral-500">
+      <span className="text-neutral-300 font-semibold">{count}</span> deck
+      {count === 1 ? "" : "s"} loaded
+    </div>
+  );
+}
+
+/** Tiny indicator when localStorage diverges from backend truth. */
+function DeckSyncIndicator({
+  backendCount,
+  localCount,
+}: {
+  backendCount: number | null;
+  localCount: number;
+}) {
+  if (backendCount == null) return null;
+  if (backendCount === localCount) return null;
+  return (
+    <span
+      className="text-[10px] text-amber-400/80"
+      title={`Backend sees ${backendCount} staged scene(s); local mirror has ${localCount}. The Scene Map shows backend truth.`}
+    >
+      ⚠ out-of-sync
+    </span>
+  );
+}
+
+function PanicButton() {
+  const [armed, setArmed] = useState(false);
+  const stop = useMutation({ mutationFn: api.abletonStop });
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setArmed(true)}
+        className="min-h-[40px] px-3 rounded-md bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40 font-semibold text-sm"
+        title="Hard-stop. Click once to arm; click again to fire."
+      >
+        ⏻
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        stop.mutate();
+        setArmed(false);
+      }}
+      onBlur={() => setArmed(false)}
+      autoFocus
+      className="min-h-[40px] px-3 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm"
+      title="Fires Stop — click to commit"
+    >
+      PANIC
+    </button>
+  );
+}

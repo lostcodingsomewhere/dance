@@ -25,8 +25,8 @@ export function TrackCard({
 }) {
   return (
     <div
-      className={`flex items-center gap-4 p-4 bg-neutral-900 border border-neutral-800 rounded-xl ${
-        onClick ? "cursor-pointer hover:bg-neutral-800" : ""
+      className={`flex items-center gap-4 p-4 bg-neutral-900 border border-neutral-800 rounded-xl transition-colors duration-100 ease-out hover:border-neutral-700 ${
+        onClick ? "cursor-pointer hover:bg-neutral-800" : "hover:bg-neutral-900/70"
       }`}
       onClick={onClick}
     >

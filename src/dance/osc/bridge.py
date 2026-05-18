@@ -84,6 +84,20 @@ class AbletonBridge:
         self._reply_events: dict[str, threading.Event] = {}
         self._reply_values: dict[str, Any] = {}
 
+        # Indices of the 5 reusable "Deck" tracks in Live (mix, drums, bass,
+        # vocals, other). ``None`` means we haven't created them yet; populated
+        # on the first ``push_track_to_live`` call, then reused for every
+        # subsequent load. Survives in-memory for the bridge's lifetime but
+        # not across process restarts — that's fine; on restart we just
+        # re-create the deck tracks.
+        self._deck_columns: dict[str, int] | None = None
+
+        # scene_index -> dance Track id. Populated by push_track_to_live for
+        # every (scene, track) we've staged in Live's session view. The API
+        # exposes this map so the React companion can render a "scene map"
+        # without having to query Live directly.
+        self._deck_scenes: dict[int, int] = {}
+
         # Wire incoming OSC → state updates.
         self.listener.on("/live/song/get/tempo", self._on_tempo)
         self.listener.on("/live/song/get/beat", self._on_beat)
@@ -93,6 +107,7 @@ class AbletonBridge:
         )
         self.listener.on("/live/track/get/volume", self._on_track_volume)
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
+        self.listener.on("/live/song/get/track_names", self._on_track_names)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -107,6 +122,15 @@ class AbletonBridge:
         except OSError as exc:
             # Live isn't listening; that's fine in dev/test.
             logger.info("Could not subscribe to Live (%s) — continuing without push state", exc)
+        # Best-effort adopt existing Deck columns so a backend restart
+        # doesn't create duplicates in Live. Silent on timeout — Live may
+        # not be running yet.
+        try:
+            recovered = self.recover_deck_columns(timeout=1.0)
+            if recovered is not None:
+                logger.info("Adopted existing deck columns: %s", recovered)
+        except Exception:  # noqa: BLE001 — never let recovery crash boot
+            logger.exception("Deck-column recovery failed")
 
     def stop(self) -> None:
         self.listener.stop()
@@ -167,6 +191,13 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_track_names(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends one variadic-string reply with N names.
+        self._reply_values[address] = [str(a) for a in args]
+        evt = self._reply_events.get(address)
+        if evt is not None:
+            evt.set()
+
     # ------------------------------------------------------------------
     # Request/reply helpers
     # ------------------------------------------------------------------
@@ -197,6 +228,61 @@ class AbletonBridge:
             "/live/song/get/num_tracks", self.client.get_num_tracks, timeout
         )
 
+    def get_track_names(self, timeout: float = 1.0) -> list[str] | None:
+        """Ask Live for every track's name in one OSC roundtrip. Returns the
+        names in track-index order, or ``None`` on timeout (Live not
+        running)."""
+        return self._await_reply(
+            "/live/song/get/track_names", self.client.get_track_names, timeout
+        )
+
+    def recover_deck_columns(self, timeout: float = 1.0) -> dict[str, int] | None:
+        """Scan Live's current track names for our deck columns
+        (``Deck Mix`` / ``Deck Drums`` / …) and populate the bridge cache
+        from them. This is what lets a backend restart pick up where it
+        left off without creating duplicate deck columns in Live.
+
+        Returns the recovered ``_deck_columns`` map or ``None`` if Live
+        isn't reachable.
+        """
+        names = self.get_track_names(timeout=timeout)
+        if names is None:
+            return None
+        recovered: dict[str, int] = {}
+        for kind, expected in self._DECK_DISPLAY_NAMES.items():
+            for idx, name in enumerate(names):
+                if name == expected and kind not in recovered:
+                    recovered[kind] = idx
+                    break
+        # Only adopt if we found ALL 5 columns; partial recoveries (user
+        # renamed one) are confusing — better to create a fresh set.
+        if len(recovered) == len(self._DECK_DISPLAY_NAMES):
+            self._deck_columns = recovered
+            return recovered
+        return None
+
+    def clean_live_decks(self, timeout: float = 1.0) -> dict[str, Any]:
+        """Delete every ``Deck *`` track in Live (covers stragglers from
+        previous backend runs) and reset the bridge cache. Returns a summary
+        of what was removed.
+
+        Deletes in reverse-index order so the upstream indices don't shift
+        out from under us mid-iteration.
+        """
+        names = self.get_track_names(timeout=timeout)
+        if names is None:
+            return {"deleted": 0, "warning": "Live unreachable; nothing deleted."}
+        expected = set(self._DECK_DISPLAY_NAMES.values())
+        deck_indices = [i for i, n in enumerate(names) if n in expected]
+        for idx in sorted(deck_indices, reverse=True):
+            try:
+                self.client.delete_track(idx)
+            except OSError as exc:  # pragma: no cover - best-effort
+                logger.warning("delete_track(%d) failed: %s", idx, exc)
+        self._deck_columns = None
+        self._deck_scenes = {}
+        return {"deleted": len(deck_indices), "indices": sorted(deck_indices)}
+
     # ------------------------------------------------------------------
     # High-level: push a track + its stems into Live
     # ------------------------------------------------------------------
@@ -210,94 +296,168 @@ class AbletonBridge:
         "vocals": 0x30B0FF,  # blue
         "other":  0x60D060,  # green
     }
-    _STEM_ORDER: tuple[str, ...] = ("drums", "bass", "vocals", "other")
+    # Order matters — defines column layout in Live.
+    _DECK_KINDS: tuple[str, ...] = ("mix", "drums", "bass", "vocals", "other")
+    _DECK_DISPLAY_NAMES: dict[str, str] = {
+        "mix":    "Deck Mix",
+        "drums":  "Deck Drums",
+        "bass":   "Deck Bass",
+        "vocals": "Deck Vocals",
+        "other":  "Deck Other",
+    }
+
+    def reset_deck_columns(self) -> None:
+        """Forget the cached deck-column indices AND the scene→track map.
+
+        The *next* push_track_to_live will (re)create the Deck tracks. Does
+        **not** delete anything in Live — the user is in charge of their
+        session view.
+        """
+        self._deck_columns = None
+        self._deck_scenes = {}
+
+    def get_deck_state(self) -> dict[str, Any]:
+        """Snapshot of which Ableton tracks are our deck columns and which
+        scenes are staged with our songs. The API surfaces this so the FE
+        can render a "scene map" widget that stays in sync with the bridge's
+        view of Live."""
+        return {
+            "columns": dict(self._deck_columns) if self._deck_columns else None,
+            "scenes": dict(self._deck_scenes),
+        }
 
     def push_track_to_live(
         self,
         track: "Track",
         stems: list["StemFile"],
         *,
-        include_stems: bool = True,
         scene_index: int = 0,
         num_tracks_timeout: float = 0.5,
+        # `include_stems` is accepted for backward-compat with the old API but
+        # ignored — the deck-column layout always reserves all 5 channels.
+        include_stems: bool = True,  # noqa: ARG002
     ) -> dict[str, Any]:
-        """Insert a full-mix track (and optionally one track per stem) into Live.
+        """Stage a track on a specific scene in Live's session view.
 
-        AbletonOSC has no command to *load* a sample from disk into a clip
-        slot (Live's Python API doesn't expose it). So this method only does
-        what OSC can: create empty, named, color-coded audio tracks at the
-        end of the song, ready for the user to drag stems onto.
+        Live's Python API doesn't expose "load sample into clip slot", so the
+        actual drop is done by the user (we open Finder to the stems folder).
+        What OSC *can* do is prepare the destination:
 
-        Returns ``{"scene_index": int, "track_indices": {"mix": int, ...},
-        "warnings": [str, ...]}``. The track indices are *expected* positions
-        — appended at the end of the song — because OSC create calls are
-        fire-and-forget.
+          - Maintain 5 reusable audio tracks in Live, named ``Deck Mix /
+            Drums / Bass / Vocals / Other`` and colored per stem.
+          - Each "load" call claims **one scene** of those 5 columns. Songs
+            stack vertically: song A → scene 0, song B → scene 1, etc. The
+            APC40's scene-launch buttons map directly to switching between
+            them.
+
+        The 5 columns are created lazily on the first call and reused after
+        that, so loading 10 songs uses 5 tracks and 10 scenes, not 50 tracks.
+
+        Returns ``{"scene_index": int, "track_indices": {"mix": idx, ...},
+        "warnings": [str, ...]}``. ``track_indices`` is the deck-column map
+        (same for every call once the columns exist).
         """
         warnings: list[str] = []
 
-        # Find current track count so we know what indices our new tracks land
-        # at. If Live isn't running we still proceed (fire the OSC anyway)
-        # and assume 0 — callers tolerate this.
         base = self.get_num_tracks(timeout=num_tracks_timeout)
-        if base is None:
+        live_reachable = base is not None
+        if not live_reachable:
             warnings.append(
                 "Could not read song num_tracks from Live (timeout); "
-                "indices below assume the new tracks were appended at index 0."
+                "deck-column indices below are best-effort."
             )
-            base = 0
 
-        # Validate sources up front (don't crash if a path is missing).
+        # (Re)create the 5 deck columns if we don't have them, or — only when
+        # Live is reachable — if the user has deleted tracks in Live so our
+        # cached indices no longer fit. We don't invalidate on unreachable
+        # Live, otherwise repeated load-track calls during a dev cycle (or
+        # while Live is closed) would loop forever creating phantom columns
+        # at index 0.
+        if self._deck_columns is None:
+            self._deck_columns = self._create_deck_columns(
+                start_index=base if live_reachable else 0
+            )
+        elif live_reachable:
+            cached_max = max(self._deck_columns.values())
+            assert base is not None  # narrowed by live_reachable
+            if cached_max >= base:
+                self._deck_columns = self._create_deck_columns(start_index=base)
+
+        # We just guaranteed self._deck_columns is non-None above.
+        deck_columns: dict[str, int] = self._deck_columns
+
+        # Validate sources for this load.
         title = (track.title or track.file_name or f"Track {track.id}").strip()
         full_mix_path = Path(track.file_path) if track.file_path else None
         if full_mix_path is None or not full_mix_path.exists():
             warnings.append(
                 f"Full-mix file missing on disk: {track.file_path!r}"
             )
+        stems_by_kind = {str(s.kind).lower(): s for s in stems}
+        for kind in ("drums", "bass", "vocals", "other"):
+            stem = stems_by_kind.get(kind)
+            if stem is None:
+                warnings.append(f"No {kind} stem available for track {track.id}")
+                continue
+            stem_path = Path(stem.path) if stem.path else None
+            if stem_path is None or not stem_path.exists():
+                warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
 
-        # Map stem kind -> StemFile for quick lookup.
-        stems_by_kind: dict[str, StemFile] = {}
-        for s in stems:
-            stems_by_kind[str(s.kind).lower()] = s
+        # Auto-load each stem into the matching deck column on this scene.
+        # Live 12.0.5+ exposes ClipSlot.create_audio_clip(path) and our
+        # patched AbletonOSC binds it to /live/clip_slot/create_audio_clip.
+        # The "mix" column is intentionally left empty — summing stems
+        # already produces the full mix, so loading it too would double the
+        # audio. Users who want the full-mix file can drop it manually.
+        stems_loaded = 0
+        for kind in ("drums", "bass", "vocals", "other"):
+            stem = stems_by_kind.get(kind)
+            if stem is None or not stem.path:
+                continue
+            stem_path = Path(stem.path)
+            if not stem_path.exists():
+                continue
+            t_idx = deck_columns[kind]
+            try:
+                self.client.create_audio_clip(t_idx, scene_index, str(stem_path))
+                self.client.set_clip_name(t_idx, scene_index, f"{title} ({kind})")
+                stems_loaded += 1
+            except OSError as exc:  # pragma: no cover - best-effort
+                warnings.append(f"OSC send for {kind} failed: {exc}")
 
-        track_indices: dict[str, int] = {}
-        next_index = base
-
-        def _add_track(label: str, color: int, name: str) -> int:
-            nonlocal next_index
-            idx = next_index
-            self.client.create_audio_track(-1)  # append
-            self.client.set_track_name(idx, name)
-            self.client.set_track_color(idx, color)
-            next_index += 1
-            track_indices[label] = idx
-            return idx
-
-        # 1. Full mix track.
-        _add_track("mix", self._STEM_TRACK_COLORS["mix"], f"{title} — Mix")
-
-        # 2. Per-stem tracks.
-        if include_stems:
-            for kind in self._STEM_ORDER:
-                stem = stems_by_kind.get(kind)
-                if stem is None:
-                    warnings.append(f"No {kind} stem available for track {track.id}")
-                    continue
-                stem_path = Path(stem.path) if stem.path else None
-                if stem_path is None or not stem_path.exists():
-                    warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
-                color = self._STEM_TRACK_COLORS.get(kind, 0x808080)
-                _add_track(kind, color, f"{title} — {kind.capitalize()}")
-
-        # Friendly status nudge in Live's status bar.
         try:
             self.client.show_message(
-                f"Dance: {len(track_indices)} track(s) ready — drag {title} stems onto scene {scene_index + 1}"
+                f"Dance: {title} → scene {scene_index + 1} "
+                f"({stems_loaded}/4 stems loaded)"
             )
         except OSError:  # pragma: no cover - best-effort UI
             pass
 
+        # Remember the placement so the API can expose a scene map. If the
+        # caller staged a different song on the same scene we overwrite —
+        # the user explicitly replaced it.
+        self._deck_scenes[scene_index] = track.id
+
         return {
             "scene_index": scene_index,
-            "track_indices": track_indices,
+            "track_indices": deck_columns,
+            "stems_loaded": stems_loaded,
             "warnings": warnings,
         }
+
+    def _create_deck_columns(self, *, start_index: int) -> dict[str, int]:
+        """Append 5 named, colored deck tracks to Live and return their indices.
+
+        Indices are *predicted* (created via fire-and-forget OSC). The caller
+        is responsible for using them in subsequent OSC calls in the same
+        order, which is safe because AbletonOSC processes commands serially.
+        """
+        columns: dict[str, int] = {}
+        idx = start_index
+        for kind in self._DECK_KINDS:
+            self.client.create_audio_track(-1)
+            self.client.set_track_name(idx, self._DECK_DISPLAY_NAMES[kind])
+            self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
+            columns[kind] = idx
+            idx += 1
+        return columns

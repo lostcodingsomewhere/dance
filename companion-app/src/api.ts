@@ -1,6 +1,7 @@
 import type {
   AbletonState,
   AddPlayBody,
+  DeckMap,
   DjSession,
   IngestPreviewResponse,
   Job,
@@ -263,6 +264,25 @@ export function abletonGetState(): Promise<AbletonState> {
   return request<AbletonState>("/ableton/state");
 }
 
+export function abletonDeckMap(): Promise<DeckMap> {
+  return request<DeckMap>("/ableton/decks");
+}
+
+export function abletonResetDecks(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/ableton/decks/reset", { method: "POST" });
+}
+
+export interface CleanDecksResult {
+  ok: boolean;
+  deleted: number;
+  indices?: number[];
+  warning?: string;
+}
+
+export function abletonCleanDecks(): Promise<CleanDecksResult> {
+  return request<CleanDecksResult>("/ableton/decks/clean", { method: "POST" });
+}
+
 // "Push to Live" — creates audio tracks in Live for a (track, stems) bundle.
 // AbletonOSC can't load samples programmatically, so this only prepares the
 // empty tracks; the React caller typically also reveals the stems folder in
@@ -271,17 +291,23 @@ export interface LoadTrackResult {
   ok: boolean;
   scene_index: number;
   track_indices: Record<string, number>;
+  /** How many of 4 stems landed in Live. 4 = fully auto-loaded, ready to fire. */
+  stems_loaded: number;
   message: string | null;
   warnings: string[];
 }
 
 export function pushTrackToLive(
   trackId: number,
-  includeStems = true,
+  options: { includeStems?: boolean; sceneIndex?: number } = {},
 ): Promise<LoadTrackResult> {
   return request<LoadTrackResult>("/ableton/load-track", {
     method: "POST",
-    body: JSON.stringify({ track_id: trackId, include_stems: includeStems }),
+    body: JSON.stringify({
+      track_id: trackId,
+      include_stems: options.includeStems ?? true,
+      scene_index: options.sceneIndex ?? null,
+    }),
   });
 }
 

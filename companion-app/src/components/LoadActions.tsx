@@ -5,6 +5,7 @@ import {
   pushTrackToLive,
   revealPath,
 } from "../api";
+import { store } from "../store";
 
 /**
  * "Get this into Ableton" affordances. AbletonOSC can prepare named/colored
@@ -79,16 +80,31 @@ export function LoadActions({
     try {
       setError(null);
       setPushing(true);
-      const result = await pushTrackToLive(trackId, true);
-      const count = Object.keys(result.track_indices).length;
-      setPushed(`✓ ${count} → scene ${result.scene_index + 1}`);
-      // Drop the user straight into Finder so they can drag the stems.
-      if (path) {
+      const sceneIndex = store.peekNextScene();
+      const result = await pushTrackToLive(trackId, {
+        includeStems: true,
+        sceneIndex,
+      });
+      // Track which scene this dance-track now occupies so the Booth can
+      // auto-detect when its clips fire and stop double-loading the same
+      // song into a new scene.
+      store.registerDeck({
+        track_id: trackId,
+        scene_index: result.scene_index,
+        stem_track_indices: Object.values(result.track_indices),
+        loaded_at: Date.now(),
+      });
+      const fully = result.stems_loaded === 4;
+      setPushed(
+        fully ? `✓ scene ${result.scene_index + 1}` : `⚠ ${result.stems_loaded}/4`,
+      );
+      // Only fall back to Finder reveal if auto-load was incomplete — full
+      // loads no longer need the user to drag anything.
+      if (!fully && path) {
         try {
           await revealPath(path);
         } catch {
-          // Best-effort — Finder reveal failure shouldn't surface as an error
-          // since the OSC push already succeeded.
+          // best-effort
         }
       }
       setTimeout(() => setPushed(null), 2500);
