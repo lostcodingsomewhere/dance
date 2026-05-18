@@ -55,7 +55,9 @@ export function BpmSlider({
   const [draft, setDraft] = useState(value);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Outside-click → close (cancels, since we only commit on explicit release).
+  // Outside-click and Escape both discard the draft. Commit only happens
+  // on explicit Apply / Enter so a glancing drag can't change the master
+  // tempo mid-set.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!containerRef.current) return;
@@ -64,8 +66,7 @@ export function BpmSlider({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
       else if (e.key === "Enter") {
-        onCommit(roundTenth(draft));
-        onClose();
+        commit();
       }
     }
     document.addEventListener("mousedown", onDocClick);
@@ -74,16 +75,18 @@ export function BpmSlider({
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [draft, onClose, onCommit]);
+  }, [draft, onClose]);
 
-  function commitOnRelease() {
+  function commit() {
     onCommit(roundTenth(draft));
+    onClose();
   }
 
   // % position of current draft along the slider track (used to color the
   // genre band the thumb is currently sitting on).
   const draftPct = ((draft - min) / (max - min)) * 100;
   const activeBand = GENRE_BANDS.find((b) => draft >= b.from && draft < b.to);
+  const isDirty = roundTenth(draft) !== roundTenth(value);
 
   return (
     <div
@@ -106,7 +109,7 @@ export function BpmSlider({
         </span>
       </div>
 
-      {/* Slider */}
+      {/* Slider — drag only updates draft, no commit until Apply / Enter. */}
       <div className="relative">
         <input
           type="range"
@@ -116,11 +119,6 @@ export function BpmSlider({
           value={draft}
           autoFocus
           onChange={(e) => setDraft(parseFloat(e.target.value))}
-          onMouseUp={commitOnRelease}
-          onTouchEnd={commitOnRelease}
-          onKeyUp={(e) => {
-            if (["ArrowLeft", "ArrowRight"].includes(e.key)) commitOnRelease();
-          }}
           className="w-full appearance-none h-2 rounded-full bg-neutral-800 outline-none accent-amber-400 cursor-pointer"
           aria-label="Master BPM"
         />
@@ -140,28 +138,66 @@ export function BpmSlider({
         ))}
       </div>
 
-      {/* Thin colored band strip — visual cue only; no in-band labels (the
-          active band's name lives in the top-right and updates as you drag).
-          Each band gets a distinct color tint; the active one brightens. */}
-      <div className="flex items-stretch mt-1 h-2.5 gap-px rounded overflow-hidden">
+      {/* Thin colored band strip — clickable: tapping a band snaps the draft
+          to the band's center BPM. Each band gets a distinct color tint;
+          the active one brightens. Labels live elsewhere (active band name
+          at the top-right) to keep the strip itself uncluttered. */}
+      <div className="flex items-stretch mt-1 h-3 gap-px rounded overflow-hidden">
         {GENRE_BANDS.map((b) => {
           const widthPct = ((b.to - b.from) / (max - min)) * 100;
           const isActive = activeBand && b.from === activeBand.from;
+          const center = roundTenth((b.from + b.to) / 2);
           return (
-            <div
+            <button
               key={b.label}
-              className={`transition-colors ${isActive ? b.activeTint : b.tint}`}
+              type="button"
+              onClick={() => setDraft(center)}
+              title={`${b.label} — ${b.from}–${b.to} BPM (click to snap to ${center})`}
+              className={`transition-colors hover:brightness-150 cursor-pointer ${
+                isActive ? b.activeTint : b.tint
+              }`}
               style={{ width: `${widthPct}%` }}
-              title={`${b.label} — ${b.from}–${b.to} BPM`}
+              aria-label={`Set BPM to ${center} (${b.label})`}
             />
           );
         })}
       </div>
 
-      {/* Hint */}
-      <div className="mt-2 text-[10px] text-neutral-500 flex items-center justify-between">
-        <span>Drag · ←/→ · Enter to commit</span>
-        <span className="text-neutral-600">Esc to cancel</span>
+      {/* Footer — explicit commit. Drag and band-clicks only update the
+          draft; Apply / Enter is the only way the tempo actually changes. */}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-[10px] text-neutral-500">
+          {isDirty ? (
+            <>
+              <span className="text-amber-400">●</span> uncommitted ·
+              was {value.toFixed(1)}
+            </>
+          ) : (
+            <>Drag · click bands · ←/→</>
+          )}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-7 px-2.5 rounded text-[11px] text-neutral-400 hover:text-neutral-200 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={commit}
+            disabled={!isDirty}
+            className={`h-7 px-3 rounded text-[11px] font-semibold transition-colors ${
+              isDirty
+                ? "bg-amber-500/80 hover:bg-amber-500 text-neutral-950"
+                : "bg-neutral-800 text-neutral-600 cursor-not-allowed"
+            }`}
+            title={isDirty ? "Apply this BPM to Ableton" : "No change to apply"}
+          >
+            Apply
+          </button>
+        </div>
       </div>
     </div>
   );
