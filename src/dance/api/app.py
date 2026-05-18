@@ -106,6 +106,7 @@ def create_app(
     )
 
     app.include_router(tracks.router, prefix=API_PREFIX)
+    app.include_router(tracks.stems_router, prefix=API_PREFIX)
     app.include_router(recommend.router, prefix=API_PREFIX)
     app.include_router(sessions.router, prefix=API_PREFIX)
     app.include_router(ableton.router, prefix=API_PREFIX)

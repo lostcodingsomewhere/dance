@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
+import { useTrackWaveform } from "../hooks/useWaveform";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
+import { Waveform } from "./Waveform";
 
 const ROLE_ACCENT: Record<StemRole, { dot: string; chip: string }> = {
   drums:  { dot: "bg-red-500",    chip: "text-red-300" },
@@ -29,6 +31,8 @@ export function ComboStrip() {
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
   const playing = ableton.playing_clips ?? {};
+  const tempo = ableton.tempo;
+  const beat = ableton.beat;
 
   // (scene_index, kind) → DeckCell
   const cellAt = useMemo(() => {
@@ -102,6 +106,8 @@ export function ComboStrip() {
             role={c.role}
             cell={c.cell}
             isAnchorPart={anchor != null && c.sceneIdx === anchor.sceneIdx}
+            tempo={tempo}
+            beat={beat}
           />
         ))}
       </div>
@@ -113,15 +119,36 @@ function ComboCard({
   role,
   cell,
   isAnchorPart,
+  tempo,
+  beat,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
   isAnchorPart: boolean;
+  tempo: number | null;
+  beat: number | null;
 }) {
   const accent = ROLE_ACCENT[role];
+  // Waveform per playing cell — fetches the track's full-mix peaks (sidecar-
+  // cached server-side). Disabled when nothing is playing so we don't hit
+  // the endpoint for empty cells.
+  const waveform = useTrackWaveform(cell?.track_id);
+  let position: number | undefined = undefined;
+  if (
+    tempo != null &&
+    beat != null &&
+    waveform.data?.duration_seconds &&
+    waveform.data.duration_seconds > 0
+  ) {
+    const elapsedSec = (beat / tempo) * 60;
+    position =
+      (elapsedSec % waveform.data.duration_seconds) /
+      waveform.data.duration_seconds;
+  }
+
   if (!cell) {
     return (
-      <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-16">
+      <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-20 flex flex-col">
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-neutral-700">
           <span className={`w-1.5 h-1.5 rounded-full ${accent.dot} opacity-40`} />
           {roleLabel(role)}
@@ -132,7 +159,7 @@ function ComboCard({
   }
   return (
     <div
-      className={`rounded-md border px-2 py-2 h-16 ${
+      className={`rounded-md border px-2 py-2 h-20 flex flex-col ${
         isAnchorPart
           ? "border-emerald-500/30 bg-emerald-500/5"
           : "border-neutral-800 bg-neutral-900/40"
@@ -147,18 +174,16 @@ function ComboCard({
           </span>
         )}
       </div>
-      <div className="text-xs text-neutral-100 truncate font-medium leading-tight mt-1">
+      <div className="text-xs text-neutral-100 truncate font-medium leading-tight mt-0.5">
         {cell.title ?? `Track #${cell.track_id}`}
       </div>
-      <div className="text-[10px] text-neutral-500 truncate font-mono">
-        {cell.bpm != null ? `${cell.bpm.toFixed(1)} BPM` : "—"}
-        {cell.artist && (
-          <span className="text-neutral-600 normal-case font-sans">
-            {" · "}
-            {cell.artist}
-          </span>
-        )}
-      </div>
+      <Waveform
+        peaks={waveform.data?.peaks ?? []}
+        position={position}
+        height={16}
+        className={`${accent.chip} opacity-80 mt-auto`}
+        playheadColor="rgba(255,255,255,0.9)"
+      />
     </div>
   );
 }

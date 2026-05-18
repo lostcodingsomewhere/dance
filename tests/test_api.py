@@ -2078,3 +2078,111 @@ def test_deck_map_returns_cells_not_scenes(
     assert len(body["cells"]) == 1
     assert body["cells"][0]["kind"] == "drums"
     assert body["cells"][0]["scene_index"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Waveform peaks
+# ---------------------------------------------------------------------------
+
+
+def test_track_waveform_endpoint_returns_peaks(
+    client: TestClient, session, make_track, tmp_path
+):
+    """GET /tracks/{id}/waveform decodes the track audio and returns a
+    normalized envelope of length num_peaks."""
+    from tests.audio_fixtures import TrackSpec, write_track
+
+    spec = TrackSpec(bpm=128.0, bars=2)
+    audio_path = tmp_path / "track-wave.wav"
+    write_track(audio_path, spec)
+
+    track = make_track(title="WaveTrack", file_path=str(audio_path))
+    session.commit()
+
+    r = client.get(f"/api/v1/tracks/{track.id}/waveform")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["num_peaks"] == 200
+    assert len(body["peaks"]) == 200
+    assert all(0.0 <= p <= 1.0 for p in body["peaks"])
+    assert body["duration_seconds"] > 0
+    # The synthetic track is non-silent so at least one window should peak.
+    assert max(body["peaks"]) > 0.0
+
+
+def test_stem_waveform_endpoint_returns_peaks(
+    client: TestClient, session, make_track, tmp_path
+):
+    """GET /stems/{id}/waveform decodes a stem and returns its envelope."""
+    from tests.audio_fixtures import TrackSpec, write_track
+
+    spec = TrackSpec(bpm=128.0, bars=2)
+    stem_path = tmp_path / "drums-wave.wav"
+    write_track(stem_path, spec)
+
+    track = make_track(title="StemWaveHost")
+    stem = StemFile(
+        track_id=track.id,
+        kind="drums",
+        path=str(stem_path),
+        created_at=now_utc(),
+    )
+    session.add(stem)
+    session.commit()
+
+    r = client.get(f"/api/v1/stems/{stem.id}/waveform")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["num_peaks"] == 200
+    assert len(body["peaks"]) == 200
+    assert all(0.0 <= p <= 1.0 for p in body["peaks"])
+    assert body["duration_seconds"] > 0
+
+
+def test_waveform_missing_audio_404(
+    client: TestClient, session, make_track, tmp_path
+):
+    """A DB row pointing at a path that doesn't exist on disk → 404."""
+    bogus = tmp_path / "does-not-exist.wav"
+    track = make_track(title="Ghost", file_path=str(bogus))
+
+    stem = StemFile(
+        track_id=track.id,
+        kind="vocals",
+        path=str(bogus),
+        created_at=now_utc(),
+    )
+    session.add(stem)
+    session.commit()
+
+    r = client.get(f"/api/v1/tracks/{track.id}/waveform")
+    assert r.status_code == 404
+
+    r = client.get(f"/api/v1/stems/{stem.id}/waveform")
+    assert r.status_code == 404
+
+
+def test_waveform_caches_sidecar_json(
+    client: TestClient, session, make_track, tmp_path
+):
+    """After the first call, a ``.waveform.json`` lands next to the audio
+    file and the second call returns the same peaks (cache hit)."""
+    from tests.audio_fixtures import TrackSpec, write_track
+
+    spec = TrackSpec(bpm=128.0, bars=2)
+    audio_path = tmp_path / "cached-wave.wav"
+    write_track(audio_path, spec)
+    sidecar = audio_path.with_name(audio_path.name + ".waveform.json")
+    assert not sidecar.exists()
+
+    track = make_track(title="Cacheable", file_path=str(audio_path))
+    session.commit()
+
+    r1 = client.get(f"/api/v1/tracks/{track.id}/waveform")
+    assert r1.status_code == 200
+    assert sidecar.exists(), "sidecar cache should have been written"
+    peaks1 = r1.json()["peaks"]
+
+    r2 = client.get(f"/api/v1/tracks/{track.id}/waveform")
+    assert r2.status_code == 200
+    assert r2.json()["peaks"] == peaks1

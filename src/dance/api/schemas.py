@@ -74,6 +74,24 @@ class StemFileOut(_Base):
 
 
 # ---------------------------------------------------------------------------
+# Waveform peaks (per-track or per-stem amplitude envelope)
+# ---------------------------------------------------------------------------
+
+
+class WaveformOut(_Base):
+    """Decimated amplitude envelope for the companion-app waveform renderer.
+
+    ``peaks`` is a list of ``num_peaks`` floats in ``[0, 1]``: the file is
+    split into equal-width windows and the absolute-max of each window is
+    normalized. ``duration_seconds`` is what librosa actually decoded, not
+    the file header's claim."""
+
+    peaks: list[float]
+    duration_seconds: float
+    num_peaks: int
+
+
+# ---------------------------------------------------------------------------
 # Regions
 # ---------------------------------------------------------------------------
 
@@ -523,4 +541,5 @@ __all__ = [
     "TempoRequest",
     "TrackOut",
     "VolumeRequest",
+    "WaveformOut",
 ]

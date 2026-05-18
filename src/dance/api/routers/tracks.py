@@ -17,7 +17,9 @@ from dance.api.schemas import (
     RegionOut,
     StemFileOut,
     TrackOut,
+    WaveformOut,
 )
+from dance.audio import get_or_compute_peaks
 from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
@@ -31,6 +33,18 @@ from dance.core.database import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
+
+# Per-stem endpoints live under /stems/{stem_file_id}/... because they're
+# keyed on the StemFile row, not on a (track_id, kind) pair. Same module so
+# the import wiring stays simple and the test fixture pattern is shared.
+stems_router = APIRouter(prefix="/stems", tags=["stems"])
+
+
+# Companion app's waveform renderer asks for between 50 and 1000 peaks
+# depending on viewport width. Anything past 1000 is wasted bandwidth (it'll
+# render to fewer pixels anyway); anything below 50 is degenerate.
+_MIN_NUM_PEAKS = 50
+_MAX_NUM_PEAKS = 1000
 
 
 @router.get("", response_model=list[TrackOut])
@@ -53,8 +67,7 @@ def list_tracks(
     if needs_analysis:
         q = q.join(
             AudioAnalysis,
-            (AudioAnalysis.track_id == Track.id)
-            & (AudioAnalysis.stem_file_id.is_(None)),
+            (AudioAnalysis.track_id == Track.id) & (AudioAnalysis.stem_file_id.is_(None)),
         )
         if bpm_min is not None:
             q = q.filter(AudioAnalysis.bpm >= bpm_min)
@@ -180,9 +193,7 @@ def export_als(
 
     # Quick stats for the response. We re-derive these instead of plumbing
     # them out of the generator, to keep the generator's signature simple.
-    stem_count = (
-        session.query(StemFile).filter(StemFile.track_id == track.id).count()
-    )
+    stem_count = session.query(StemFile).filter(StemFile.track_id == track.id).count()
     region_count = (
         session.query(Region)
         .filter(Region.track_id == track.id, Region.stem_file_id.is_(None))
@@ -225,8 +236,7 @@ def delete_track(
         synchronize_session=False
     )
     session.query(TrackEdge).filter(
-        (TrackEdge.from_track_id == track_id)
-        | (TrackEdge.to_track_id == track_id)
+        (TrackEdge.from_track_id == track_id) | (TrackEdge.to_track_id == track_id)
     ).delete(synchronize_session=False)
 
     session.delete(track)
@@ -243,18 +253,13 @@ def list_stems(
         raise HTTPException(status_code=404, detail="track not found")
 
     stems = (
-        session.query(StemFile)
-        .filter(StemFile.track_id == track_id)
-        .order_by(StemFile.kind)
-        .all()
+        session.query(StemFile).filter(StemFile.track_id == track_id).order_by(StemFile.kind).all()
     )
     out: list[dict] = []
     for s in stems:
         # Per-stem analysis (one row max via partial unique index).
         analysis = (
-            session.query(AudioAnalysis)
-            .filter(AudioAnalysis.stem_file_id == s.id)
-            .one_or_none()
+            session.query(AudioAnalysis).filter(AudioAnalysis.stem_file_id == s.id).one_or_none()
         )
         out.append(
             {
@@ -265,3 +270,65 @@ def list_stems(
             }
         )
     return out
+
+
+def _compute_waveform_response(audio_path_str: str, num_peaks: int) -> WaveformOut:
+    """Shared body for both waveform endpoints. Path string → response model.
+
+    Returns 404 when the file isn't on disk and 503 when librosa blows up
+    (corrupt audio, codec failure)."""
+    path = Path(audio_path_str)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"audio file missing: {audio_path_str}")
+
+    try:
+        peaks, duration_seconds = get_or_compute_peaks(path, num_peaks=num_peaks)
+    except Exception as exc:  # noqa: BLE001 — librosa/soundfile failure surface
+        logger.exception("Failed to compute waveform peaks for %s", audio_path_str)
+        raise HTTPException(status_code=503, detail=f"waveform compute failed: {exc}") from exc
+
+    return WaveformOut(peaks=peaks, duration_seconds=duration_seconds, num_peaks=num_peaks)
+
+
+@router.get("/{track_id}/waveform", response_model=WaveformOut)
+def get_track_waveform(
+    track_id: int,
+    session: Session = Depends(get_session),
+    num_peaks: int = Query(
+        200,
+        ge=_MIN_NUM_PEAKS,
+        le=_MAX_NUM_PEAKS,
+        description="How many amplitude windows to bucket the file into.",
+    ),
+) -> WaveformOut:
+    """Decimated amplitude envelope for a track's full mix.
+
+    Reads ``Track.file_path``. Result is cached as a sidecar JSON next to
+    the audio so subsequent calls are near-instant.
+    """
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+    if not track.file_path:
+        raise HTTPException(status_code=404, detail="track has no file_path on disk")
+    return _compute_waveform_response(track.file_path, num_peaks)
+
+
+@stems_router.get("/{stem_file_id}/waveform", response_model=WaveformOut)
+def get_stem_waveform(
+    stem_file_id: int,
+    session: Session = Depends(get_session),
+    num_peaks: int = Query(
+        200,
+        ge=_MIN_NUM_PEAKS,
+        le=_MAX_NUM_PEAKS,
+        description="How many amplitude windows to bucket the file into.",
+    ),
+) -> WaveformOut:
+    """Decimated amplitude envelope for a single stem file (drums/bass/...)."""
+    stem = session.get(StemFile, stem_file_id)
+    if stem is None:
+        raise HTTPException(status_code=404, detail="stem not found")
+    if not stem.path:
+        raise HTTPException(status_code=404, detail="stem has no path on disk")
+    return _compute_waveform_response(stem.path, num_peaks)

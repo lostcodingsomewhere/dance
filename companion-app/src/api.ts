@@ -17,6 +17,7 @@ import type {
   StemFile,
   Track,
   TrackFilters,
+  Waveform,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -83,6 +84,14 @@ export function getRegions(trackId: number): Promise<Region[]> {
 
 export function getStems(trackId: number): Promise<StemFile[]> {
   return request<StemFile[]>(`/tracks/${trackId}/stems`);
+}
+
+export function getTrackWaveform(trackId: number, numPeaks = 200): Promise<Waveform> {
+  return request<Waveform>(`/tracks/${trackId}/waveform?num_peaks=${numPeaks}`);
+}
+
+export function getStemWaveform(stemFileId: number, numPeaks = 200): Promise<Waveform> {
+  return request<Waveform>(`/stems/${stemFileId}/waveform?num_peaks=${numPeaks}`);
 }
 
 // Recommend -----------------------------------------------------------------

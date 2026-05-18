@@ -1,5 +1,6 @@
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
 import { ComboStrip } from "../components/ComboStrip";
+import { CueStrip } from "../components/CueStrip";
 import { PlayedStrip } from "../components/PlayedStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { useAutoLog } from "../hooks/useAutoLog";
@@ -35,6 +36,7 @@ export function Booth() {
     <div className="flex-1 flex flex-col min-h-0">
       <main className="flex-1 flex flex-col min-h-0 gap-3 px-4 py-3 overflow-y-auto">
         <ComboStrip />
+        <CueStrip />
         <div>
           <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
             Next per column · live re-scored against the combo

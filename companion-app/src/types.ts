@@ -117,6 +117,14 @@ export interface PreviewResult {
   warnings?: string[];
 }
 
+// Mirrors src/dance/api/schemas.py::WaveformOut. Pre-decimated amplitude
+// envelope returned by GET /tracks/{id}/waveform and /stems/{id}/waveform.
+export interface Waveform {
+  peaks: number[];
+  duration_seconds: number;
+  num_peaks: number;
+}
+
 export interface SessionPlay {
   track_id: number;
   played_at: string; // ISO datetime
