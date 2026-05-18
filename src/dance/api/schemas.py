@@ -141,6 +141,40 @@ class TextRecommendRequest(BaseModel):
     exclude: list[int] | None = None
 
 
+class ColumnRecOut(_Base):
+    """A single candidate in a per-column rec stream."""
+
+    track_id: int
+    # None when the column is "mix" (candidate is a whole track, not a stem).
+    stem_file_id: int | None = None
+    track_title: str | None = None
+    track_artist: str | None = None
+    bpm: float | None = None
+    key_camelot: str | None = None
+    floor_energy: int | None = None
+    score: float
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ColumnRecsResponse(_Base):
+    """Top-K candidates for a single stem column, re-scored against combo."""
+
+    column: str
+    combo_size: int
+    recs: list[ColumnRecOut] = Field(default_factory=list)
+
+
+class ColumnRecsRequest(BaseModel):
+    """Combo + column to score against."""
+
+    column: str
+    combo_stem_ids: list[int] = Field(default_factory=list)
+    master_bpm: float | None = None
+    k: int = 5
+    exclude_track_ids: list[int] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------
@@ -430,6 +464,9 @@ __all__ = [
     "AlsExportRequest",
     "AlsExportResult",
     "AnalysisOut",
+    "ColumnRecOut",
+    "ColumnRecsRequest",
+    "ColumnRecsResponse",
     "FireClipRequest",
     "IngestCommitRequest",
     "IngestPreviewRequest",

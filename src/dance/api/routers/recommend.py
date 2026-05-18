@@ -10,13 +10,20 @@ from sqlalchemy.orm import Session
 
 from dance.api.deps import fullmix_analysis, get_session, get_settings
 from dance.api.schemas import (
+    ColumnRecOut,
+    ColumnRecsRequest,
+    ColumnRecsResponse,
     RecommendationOut,
     RecommendRequest,
     TextRecommendRequest,
 )
 from dance.config import Settings
 from dance.core.database import EdgeKind, Track
-from dance.recommender.recommender import Recommender
+from dance.recommender.recommender import (
+    VALID_COLUMNS,
+    Recommender,
+    recommend_by_column,
+)
 
 logger = logging.getLogger(__name__)
 _clap_lock = threading.Lock()
@@ -191,3 +198,64 @@ def recommend_by_text(
             }
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Per-column rec stream — the live-remixing rec backbone (Phase 3 redesign).
+# ---------------------------------------------------------------------------
+
+
+@router.post("/by-column", response_model=ColumnRecsResponse)
+def recommend_by_column_route(
+    body: ColumnRecsRequest,
+    session: Session = Depends(get_session),
+) -> ColumnRecsResponse:
+    """Top-K candidate stems (or tracks for ``column='mix'``) for one column,
+    re-scored against the currently-active combo of stems.
+
+    POST body shape:
+        column: str  — one of drums/bass/vocals/other/mix
+        combo_stem_ids: list[int] — stem_file_ids currently active in Live
+        master_bpm: float | None — Live's master tempo
+        k: int — top-K to return (default 5)
+        exclude_track_ids: list[int] — tracks already loaded (don't repeat)
+    """
+    if body.column not in VALID_COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown column {body.column!r}; valid: {VALID_COLUMNS}",
+        )
+
+    results = recommend_by_column(
+        session,
+        column=body.column,
+        combo_stem_ids=body.combo_stem_ids,
+        master_bpm=body.master_bpm,
+        k=body.k,
+        exclude_track_ids=body.exclude_track_ids,
+    )
+
+    recs_out: list[ColumnRecOut] = []
+    for r in results:
+        track = session.get(Track, r.track_id)
+        analysis = fullmix_analysis(session, r.track_id)
+        recs_out.append(
+            ColumnRecOut(
+                track_id=r.track_id,
+                stem_file_id=r.stem_file_id,
+                track_title=getattr(track, "title", None),
+                track_artist=getattr(track, "artist", None),
+                bpm=getattr(analysis, "bpm", None),
+                key_camelot=getattr(analysis, "key_camelot", None),
+                floor_energy=getattr(analysis, "floor_energy", None),
+                score=r.score,
+                score_breakdown=r.score_breakdown,
+                reasons=r.reasons,
+            )
+        )
+
+    return ColumnRecsResponse(
+        column=body.column,
+        combo_size=len(body.combo_stem_ids),
+        recs=recs_out,
+    )

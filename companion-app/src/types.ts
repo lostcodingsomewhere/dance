@@ -74,6 +74,35 @@ export interface RecommendRequest {
   exclude?: number[];
 }
 
+// Per-column rec stream — five parallel streams that re-score as the
+// active combo changes. ``stem_file_id`` is null for the mix column.
+export interface ColumnRec {
+  track_id: number;
+  stem_file_id: number | null;
+  track_title: string | null;
+  track_artist: string | null;
+  bpm: number | null;
+  key_camelot: string | null;
+  floor_energy: number | null;
+  score: number;
+  score_breakdown: Record<string, number>;
+  reasons: string[];
+}
+
+export interface ColumnRecsResponse {
+  column: string;
+  combo_size: number;
+  recs: ColumnRec[];
+}
+
+export interface ColumnRecsRequest {
+  column: string;
+  combo_stem_ids: number[];
+  master_bpm?: number | null;
+  k?: number;
+  exclude_track_ids?: number[];
+}
+
 export interface SessionPlay {
   track_id: number;
   played_at: string; // ISO datetime

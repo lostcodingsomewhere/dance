@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useCleanDecks, useDeckMap, useResetDecks } from "../hooks/useDeckMap";
+import { useFireScene, useStopAllClips } from "../hooks/useTransport";
 import { useAppStore } from "../store";
 import type { DeckScene } from "../types";
 import { KeyBadge } from "./KeyBadge";
@@ -20,6 +21,8 @@ export function SceneMap() {
   const ableton = useAbletonState();
   const reset = useResetDecks();
   const clean = useCleanDecks();
+  const fireScene = useFireScene();
+  const stopAll = useStopAllClips();
   const localDecks = useAppStore((s) => s.loadedDecks);
   const [cleanResult, setCleanResult] = useState<string | null>(null);
 
@@ -93,6 +96,15 @@ export function SceneMap() {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => stopAll.mutate()}
+            disabled={stopAll.isPending}
+            className="text-[10px] text-neutral-600 hover:text-amber-300"
+            title="Stop every playing clip (combo panic — transport keeps running)"
+          >
+            stop all
+          </button>
+          <button
+            type="button"
             onClick={() => reset.mutate()}
             disabled={reset.isPending}
             className="text-[10px] text-neutral-600 hover:text-neutral-300"
@@ -120,6 +132,8 @@ export function SceneMap() {
             key={s.scene_index}
             scene={s}
             isPlaying={playingScenes.has(s.scene_index)}
+            onFire={() => fireScene.mutate(s.scene_index)}
+            firePending={fireScene.isPending}
           />
         ))}
       </ol>
@@ -130,13 +144,17 @@ export function SceneMap() {
 function SceneRow({
   scene,
   isPlaying,
+  onFire,
+  firePending,
 }: {
   scene: DeckScene;
   isPlaying: boolean;
+  onFire: () => void;
+  firePending: boolean;
 }) {
   return (
     <li
-      className={`flex items-center gap-2 px-2 py-1.5 rounded-md border transition-colors duration-100 ease-out ${
+      className={`flex items-center gap-2 px-2 py-1.5 rounded-md border transition-colors duration-100 ease-out group ${
         isPlaying
           ? "border-emerald-500/40 bg-emerald-500/10"
           : "border-neutral-800/60 bg-neutral-900/40 hover:border-neutral-700 hover:bg-neutral-900/70"
@@ -149,13 +167,23 @@ function SceneRow({
       >
         {scene.scene_index + 1}
       </span>
-      <span
-        className={`text-xs w-3 shrink-0 ${
-          isPlaying ? "text-emerald-300" : "text-neutral-700"
+      <button
+        type="button"
+        onClick={onFire}
+        disabled={firePending}
+        title={
+          isPlaying
+            ? `Re-fire scene ${scene.scene_index + 1} (anchor mode)`
+            : `Fire scene ${scene.scene_index + 1} — play the full original combo`
+        }
+        className={`text-xs w-4 shrink-0 cursor-pointer transition-colors ${
+          isPlaying
+            ? "text-emerald-300 hover:text-emerald-200"
+            : "text-neutral-700 hover:text-emerald-300"
         }`}
       >
-        {isPlaying ? "▶" : "·"}
-      </span>
+        ▶
+      </button>
       <KeyBadge keyCamelot={scene.key_camelot} size="sm" />
       <div className="flex-1 min-w-0">
         <div className="text-sm text-neutral-100 truncate">

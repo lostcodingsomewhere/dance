@@ -51,14 +51,13 @@ describe("App smoke", () => {
     renderApp();
     expect(screen.getByText(/Dance/i)).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
-    // All four view tabs are visible.
-    expect(screen.getByRole("tab", { name: "Now" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Next" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Library" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Session" })).toBeInTheDocument();
+    // Three view tabs after the live-remixing redesign.
+    expect(screen.getByRole("tab", { name: "Booth" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Crate" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Pipeline" })).toBeInTheDocument();
   });
 
-  it("surfaces an API error visibly in the Library view", async () => {
+  it("surfaces an API error visibly in the Crate view", async () => {
     mockFetch((url) => {
       if (url.includes("/tracks")) {
         return new Response("boom", { status: 500 });
@@ -66,9 +65,8 @@ describe("App smoke", () => {
       return jsonResponse({});
     });
     renderApp();
-    // Switch to Library tab.
     await act(async () => {
-      screen.getByRole("tab", { name: "Library" }).click();
+      screen.getByRole("tab", { name: "Crate" }).click();
     });
     await waitFor(() => {
       expect(screen.getByText(/Failed to load tracks/i)).toBeInTheDocument();

@@ -429,11 +429,14 @@ def _build_audio_clip(
 
 
 def _build_loop_block(clip: etree._Element, end_beats: float) -> None:
+    # LoopOn=true so stems keep grooving until the user swaps them. This is
+    # core to the live-remixing model — see docs/vision.md. Override per-clip
+    # from the UI when a stem is meant to play through (e.g. vocal arc).
     loop = etree.SubElement(clip, "Loop")
     _val(loop, "LoopStart", "0")
     _val(loop, "LoopEnd", f"{end_beats:.6f}")
     _val(loop, "StartRelative", "0")
-    _val(loop, "LoopOn", "false")
+    _val(loop, "LoopOn", "true")
     _val(loop, "OutMarker", f"{end_beats:.6f}")
     _val(loop, "HiddenLoopStart", "0")
     _val(loop, "HiddenLoopEnd", f"{end_beats:.6f}")

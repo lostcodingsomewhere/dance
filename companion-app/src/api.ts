@@ -1,6 +1,8 @@
 import type {
   AbletonState,
   AddPlayBody,
+  ColumnRecsRequest,
+  ColumnRecsResponse,
   DeckMap,
   DjSession,
   IngestPreviewResponse,
@@ -105,6 +107,15 @@ export function recommendByText(
   return request<Recommendation[]>("/recommend/text", {
     method: "POST",
     body: JSON.stringify({ query, k, exclude }),
+  });
+}
+
+export function recommendByColumn(
+  body: ColumnRecsRequest,
+): Promise<ColumnRecsResponse> {
+  return request<ColumnRecsResponse>("/recommend/by-column", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 
@@ -248,6 +259,35 @@ export function abletonFireClip(track: number, scene: number): Promise<void> {
     method: "POST",
     body: JSON.stringify({ track, scene }),
   });
+}
+
+// Transport — used by the SceneGrid / per-column rec banners to drive Live
+// without the user touching Ableton's UI. See docs/proposals/...
+
+export function abletonFireScene(sceneIndex: number): Promise<void> {
+  return request<void>(`/ableton/transport/fire-scene/${sceneIndex}`, {
+    method: "POST",
+  });
+}
+
+export function abletonFireCell(
+  trackIndex: number,
+  slotIndex: number,
+): Promise<void> {
+  return request<void>(
+    `/ableton/transport/fire-clip/${trackIndex}/${slotIndex}`,
+    { method: "POST" },
+  );
+}
+
+export function abletonStopTrack(trackIndex: number): Promise<void> {
+  return request<void>(`/ableton/transport/stop-track/${trackIndex}`, {
+    method: "POST",
+  });
+}
+
+export function abletonStopAllClips(): Promise<void> {
+  return request<void>("/ableton/transport/stop-all", { method: "POST" });
 }
 
 export function abletonSetVolume(

@@ -1662,3 +1662,206 @@ def test_pipeline_watch_persists_across_init(client: TestClient, app) -> None:
     pipeline_router._WATCH_STATE["enabled"] = True
     pipeline_router._load_watch_state(test_settings)
     assert pipeline_router._WATCH_STATE["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# Per-column rec stream (Phase 3 — live-remixing redesign).
+# ---------------------------------------------------------------------------
+
+
+def _seed_stem(
+    session,
+    track,
+    *,
+    kind: str,
+    bpm: float,
+    key: str | None,
+    embedding: list[float] | None = None,
+):
+    """Helper: create a StemFile + its AudioAnalysis + optional embedding.
+
+    Returns the StemFile id.
+    """
+    import numpy as np
+
+    from dance.core.database import StemFile, TrackEmbedding
+    from dance.core.serialization import encode_embedding
+
+    sf = StemFile(
+        track_id=track.id,
+        kind=kind,
+        path=f"/tmp/{track.id}-{kind}.wav",
+        created_at=now_utc(),
+    )
+    session.add(sf)
+    session.flush()
+    session.add(
+        AudioAnalysis(
+            track_id=track.id,
+            stem_file_id=sf.id,
+            bpm=bpm,
+            dominant_pitch_camelot=key,
+            floor_energy=5,
+            analyzed_at=now_utc(),
+            created_at=now_utc(),
+        )
+    )
+    if embedding is not None:
+        session.add(
+            TrackEmbedding(
+                track_id=track.id,
+                stem_file_id=sf.id,
+                model="test",
+                model_version=None,
+                dim=len(embedding),
+                embedding=encode_embedding(np.asarray(embedding, dtype=np.float32)),
+                created_at=now_utc(),
+            )
+        )
+    return sf.id
+
+
+def test_recommend_by_column_empty_combo_ranks_by_bpm(
+    client: TestClient, session, fake_bridge, make_track
+):
+    """With no combo to compare against, candidates rank by BPM proximity
+    to ``master_bpm`` (key weight zeroes out when there's nothing to match)."""
+    t1 = make_track(title="exact-bpm")
+    t2 = make_track(title="off-by-six")
+    t3 = make_track(title="off-by-fifteen")
+    _seed_stem(session, t1, kind="drums", bpm=128.0, key="8A")
+    _seed_stem(session, t2, kind="drums", bpm=122.0, key="8A")
+    _seed_stem(session, t3, kind="drums", bpm=113.0, key="8A")
+    session.commit()
+
+    r = client.post(
+        "/api/v1/recommend/by-column",
+        json={
+            "column": "drums",
+            "combo_stem_ids": [],
+            "master_bpm": 128.0,
+            "k": 5,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["column"] == "drums"
+    assert body["combo_size"] == 0
+    titles = [r["track_title"] for r in body["recs"]]
+    assert titles == ["exact-bpm", "off-by-six", "off-by-fifteen"]
+    assert body["recs"][0]["score"] > body["recs"][1]["score"]
+
+
+def test_recommend_by_column_uses_combo_embedding(
+    client: TestClient, session, fake_bridge, make_track
+):
+    """Candidate stems get cosine-scored against the averaged combo embedding;
+    the closer a candidate's vector is to the combo, the higher it ranks."""
+    # Combo: drums + bass of the same direction.
+    seed = make_track(title="seed")
+    combo_stem_ids = [
+        _seed_stem(
+            session, seed, kind="drums", bpm=128.0, key="8A",
+            embedding=[1.0, 0.0, 0.0],
+        ),
+        _seed_stem(
+            session, seed, kind="bass", bpm=128.0, key="8A",
+            embedding=[1.0, 0.0, 0.0],
+        ),
+    ]
+    # Candidates: vocals — one aligned to combo, one orthogonal.
+    aligned_track = make_track(title="aligned")
+    orth_track = make_track(title="orthogonal")
+    _seed_stem(
+        session, aligned_track, kind="vocals", bpm=128.0, key="2A",
+        embedding=[1.0, 0.0, 0.0],
+    )
+    _seed_stem(
+        session, orth_track, kind="vocals", bpm=128.0, key="2A",
+        embedding=[0.0, 1.0, 0.0],
+    )
+    session.commit()
+
+    r = client.post(
+        "/api/v1/recommend/by-column",
+        json={
+            "column": "vocals",
+            "combo_stem_ids": combo_stem_ids,
+            "master_bpm": 128.0,
+            "k": 5,
+        },
+    )
+    body = r.json()
+    titles = [rec["track_title"] for rec in body["recs"]]
+    assert titles[0] == "aligned"
+    assert titles[1] == "orthogonal"
+    assert body["recs"][0]["score"] > body["recs"][1]["score"]
+    # The aligned candidate's embedding score should be ~1.0 (cosine 1 → mapped to 1).
+    assert body["recs"][0]["score_breakdown"]["embedding"] > 0.9
+
+
+def test_recommend_by_column_mix_returns_full_tracks(
+    client: TestClient, session, fake_bridge, make_track
+):
+    """Asking for the 'mix' column returns whole tracks (stem_file_id null)."""
+    t = make_track(title="full-mix")
+    session.add(
+        AudioAnalysis(
+            track_id=t.id,
+            stem_file_id=None,
+            bpm=124.0,
+            key_camelot="5A",
+            floor_energy=6,
+            analyzed_at=now_utc(),
+            created_at=now_utc(),
+        )
+    )
+    session.commit()
+
+    r = client.post(
+        "/api/v1/recommend/by-column",
+        json={"column": "mix", "combo_stem_ids": [], "master_bpm": 124.0, "k": 5},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["column"] == "mix"
+    assert all(rec["stem_file_id"] is None for rec in body["recs"])
+    titles = [rec["track_title"] for rec in body["recs"]]
+    assert "full-mix" in titles
+
+
+def test_recommend_by_column_rejects_invalid_column(
+    client: TestClient, app, fake_bridge
+):
+    r = client.post(
+        "/api/v1/recommend/by-column",
+        json={"column": "guitar", "combo_stem_ids": [], "master_bpm": 128, "k": 3},
+    )
+    assert r.status_code == 400
+    assert "unknown column" in r.json()["detail"]
+
+
+def test_recommend_by_column_exclude_tracks(
+    client: TestClient, session, fake_bridge, make_track
+):
+    """Tracks listed in exclude_track_ids never appear in the result."""
+    t_keep = make_track(title="keeper")
+    t_skip = make_track(title="excluded")
+    _seed_stem(session, t_keep, kind="drums", bpm=128.0, key="8A")
+    _seed_stem(session, t_skip, kind="drums", bpm=128.0, key="8A")
+    session.commit()
+
+    r = client.post(
+        "/api/v1/recommend/by-column",
+        json={
+            "column": "drums",
+            "combo_stem_ids": [],
+            "master_bpm": 128.0,
+            "exclude_track_ids": [t_skip.id],
+            "k": 5,
+        },
+    )
+    body = r.json()
+    titles = [rec["track_title"] for rec in body["recs"]]
+    assert "excluded" not in titles
+    assert "keeper" in titles

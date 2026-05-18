@@ -60,6 +60,51 @@ def fire(
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Transport — path-param helpers for the live-remixing UI. Each one routes to
+# an existing OSC primitive on the bridge client; we keep them grouped here so
+# the FE can call them with one verb + one path segment per intent.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/transport/fire-scene/{scene_index}")
+def fire_scene(
+    scene_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Fire a whole scene (anchor mode — play the row's original combo)."""
+    bridge.client.fire_scene(scene_index)
+    return {"ok": True, "scene_index": scene_index}
+
+
+@router.post("/transport/fire-clip/{track_index}/{slot_index}")
+def fire_clip(
+    track_index: int,
+    slot_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Fire one cell (swap or layer a single stem into the active combo)."""
+    bridge.client.fire_clip(track_index, slot_index)
+    return {"ok": True, "track_index": track_index, "slot_index": slot_index}
+
+
+@router.post("/transport/stop-track/{track_index}")
+def stop_track(
+    track_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Stop every clip on one track (clears one stem from the combo)."""
+    bridge.client.stop_track(track_index)
+    return {"ok": True, "track_index": track_index}
+
+
+@router.post("/transport/stop-all")
+def stop_all_clips(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Stop every playing clip without halting transport (combo panic)."""
+    bridge.client.stop_all_clips()
+    return {"ok": True}
+
+
 @router.post("/volume")
 def volume(
     body: VolumeRequest,

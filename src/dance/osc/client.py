@@ -65,6 +65,22 @@ class AbletonOSCClient:
     def stop_track(self, track: int) -> None:
         self._send("/live/track/stop_all_clips", track)
 
+    def fire_scene(self, scene: int) -> None:
+        """Trigger every clip on scene ``scene`` simultaneously (anchor mode).
+
+        Plays the full original combination for a row of staged stems. Used
+        when the user wants to play a track as-recorded instead of remixing.
+        """
+        self._send("/live/scene/fire", scene)
+
+    def stop_all_clips(self) -> None:
+        """Stop every playing clip without halting the transport.
+
+        Clears the combo; the master clock keeps running so the next fired
+        clip syncs cleanly. ``stop()`` (transport off) is the harder kill.
+        """
+        self._send("/live/song/stop_all_clips")
+
     # ------------------------------------------------------------------
     # Mixer
     # ------------------------------------------------------------------

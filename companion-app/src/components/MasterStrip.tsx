@@ -1,7 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
+import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
@@ -21,10 +22,27 @@ export function MasterStrip() {
   const state = useAbletonState();
   const view = useAppStore((s) => s.currentView);
   const deckMap = useDeckMap();
+  const heartbeat = useBridgeHeartbeat();
   // Prefer backend truth for the chip count; fall back to the local mirror
   // when the backend hasn't responded yet (zero round-trip on initial paint).
   const localCount = useAppStore((s) => Object.keys(s.loadedDecks).length);
-  const loadedCount = deckMap.data?.scenes.length ?? localCount;
+  const loadedCount = deckMap.data?.scenes?.length ?? localCount;
+
+  // Camelot key of the dominant playing scene (anchor for compat math).
+  // When nothing is playing, falls back to null and the strip shows "—".
+  const currentKey = useMemo<string | null>(() => {
+    const columns = deckMap.data?.columns;
+    const scenes = deckMap.data?.scenes ?? [];
+    const playing = state.playing_clips ?? {};
+    if (!columns) return null;
+    for (const trackIdx of Object.values(columns)) {
+      const sIdx = playing[trackIdx];
+      if (sIdx == null) continue;
+      const sc = scenes.find((s) => s.scene_index === sIdx);
+      if (sc?.key_camelot) return sc.key_camelot;
+    }
+    return null;
+  }, [deckMap.data, state.playing_clips]);
 
   const play = useMutation({ mutationFn: api.abletonPlay });
   const stop = useMutation({ mutationFn: api.abletonStop });
@@ -103,12 +121,18 @@ export function MasterStrip() {
         <PanicButton />
       </div>
 
+      {/* Camelot key of the dominant playing scene (the anchor for compat). */}
+      <KeyDisplay camelot={currentKey} />
+
       {/* Deck-count chip — what we've staged in Live */}
       <DeckCountChip count={loadedCount} />
       <DeckSyncIndicator
-        backendCount={deckMap.data?.scenes.length ?? null}
+        backendCount={deckMap.data?.scenes?.length ?? null}
         localCount={localCount}
       />
+
+      {/* AbletonOSC heartbeat — red when the bridge has gone stale. */}
+      <HeartbeatDot alive={heartbeat.alive} />
 
 
       {/* Command bar trigger */}
@@ -153,6 +177,52 @@ function DeckCountChip({ count }: { count: number }) {
     <div className="px-2 text-[11px] text-neutral-500">
       <span className="text-neutral-300 font-semibold">{count}</span> deck
       {count === 1 ? "" : "s"} loaded
+    </div>
+  );
+}
+
+function KeyDisplay({ camelot }: { camelot: string | null }) {
+  return (
+    <div
+      className="flex items-baseline gap-1 px-2 border-l border-neutral-800 h-10 pt-1.5"
+      title={
+        camelot
+          ? `Currently anchored at ${camelot} (Camelot). Compat math scores recs against this.`
+          : "No scene currently playing"
+      }
+    >
+      <span className="text-neutral-500 text-[10px] uppercase tracking-wider">
+        Key
+      </span>
+      <span
+        className={`font-mono text-2xl tabular-nums leading-none ${
+          camelot ? "text-neutral-50" : "text-neutral-700"
+        }`}
+      >
+        {camelot ?? "—"}
+      </span>
+    </div>
+  );
+}
+
+function HeartbeatDot({ alive }: { alive: boolean }) {
+  return (
+    <div
+      className="flex items-center gap-1 text-[10px]"
+      title={
+        alive
+          ? "AbletonOSC alive — bridge responding"
+          : "AbletonOSC stale or unreachable — alt-tab to Live to check"
+      }
+    >
+      <span
+        className={`w-2 h-2 rounded-full ${
+          alive ? "bg-emerald-400" : "bg-rose-500 animate-pulse"
+        }`}
+      />
+      <span className={alive ? "text-neutral-600" : "text-rose-300"}>
+        {alive ? "OSC" : "OSC stale"}
+      </span>
     </div>
   );
 }
