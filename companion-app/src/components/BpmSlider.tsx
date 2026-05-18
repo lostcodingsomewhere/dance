@@ -4,15 +4,24 @@ import { useEffect, useRef, useState } from "react";
  * Genre BPM anchors. Bands are approximate but match the conventions DJs
  * use to navigate a set ("we're in tech house territory", "drop into D&B").
  * Edit freely — these are display-only hints, not enforced ranges.
+ *
+ * ``tint`` is the resting bg class for the band strip; ``activeTint`` is
+ * what shows when the slider thumb sits inside the band. ``label`` is the
+ * pretty name that surfaces above the strip when the band is active.
  */
-const GENRE_BANDS: { from: number; to: number; label: string }[] = [
-  { from: 60,  to: 90,  label: "Chill" },
-  { from: 90,  to: 105, label: "Hip-Hop" },
-  { from: 105, to: 118, label: "Slow Hse" },
-  { from: 118, to: 128, label: "House" },
-  { from: 128, to: 135, label: "Techno" },
-  { from: 135, to: 145, label: "Trance" },
-  { from: 145, to: 175, label: "D&B" },
+const GENRE_BANDS: {
+  from: number;
+  to: number;
+  label: string;
+  tint: string;
+  activeTint: string;
+}[] = [
+  { from: 60,  to: 95,  label: "Chill / Downtempo",    tint: "bg-sky-900/40",    activeTint: "bg-sky-500/60" },
+  { from: 95,  to: 110, label: "Hip-Hop",              tint: "bg-purple-900/40", activeTint: "bg-purple-500/60" },
+  { from: 110, to: 128, label: "House",                tint: "bg-violet-900/40", activeTint: "bg-violet-500/60" },
+  { from: 128, to: 135, label: "Techno / Tech House",  tint: "bg-rose-900/40",   activeTint: "bg-rose-500/60" },
+  { from: 135, to: 145, label: "Trance",               tint: "bg-cyan-900/40",   activeTint: "bg-cyan-500/60" },
+  { from: 145, to: 180, label: "D&B / Hardstyle",      tint: "bg-amber-900/40",  activeTint: "bg-amber-500/60" },
 ];
 
 const TICKS = [60, 80, 100, 120, 140, 160, 180];
@@ -79,7 +88,7 @@ export function BpmSlider({
   return (
     <div
       ref={containerRef}
-      className="absolute top-full left-2 mt-2 z-50 w-[420px] rounded-lg border border-amber-500/30 bg-neutral-950/95 backdrop-blur shadow-2xl px-4 pt-3 pb-3"
+      className="absolute top-full left-2 mt-2 z-50 w-[480px] rounded-lg border border-amber-500/30 bg-neutral-950/95 backdrop-blur shadow-2xl px-4 pt-3 pb-3"
       data-testid="bpm-slider"
     >
       {/* Live value + active genre band */}
@@ -92,7 +101,7 @@ export function BpmSlider({
             BPM
           </span>
         </div>
-        <span className="text-[10px] uppercase tracking-widest text-amber-300/70">
+        <span className="text-xs uppercase tracking-widest text-amber-300 font-semibold">
           {activeBand?.label ?? "—"}
         </span>
       </div>
@@ -131,24 +140,20 @@ export function BpmSlider({
         ))}
       </div>
 
-      {/* Genre bands */}
-      <div className="flex items-stretch mt-1 h-4 gap-px rounded overflow-hidden">
+      {/* Thin colored band strip — visual cue only; no in-band labels (the
+          active band's name lives in the top-right and updates as you drag).
+          Each band gets a distinct color tint; the active one brightens. */}
+      <div className="flex items-stretch mt-1 h-2.5 gap-px rounded overflow-hidden">
         {GENRE_BANDS.map((b) => {
           const widthPct = ((b.to - b.from) / (max - min)) * 100;
           const isActive = activeBand && b.from === activeBand.from;
           return (
             <div
               key={b.label}
-              className={`flex items-center justify-center text-[9px] uppercase tracking-tight truncate transition-colors ${
-                isActive
-                  ? "bg-amber-500/30 text-amber-100 font-semibold"
-                  : "bg-neutral-900 text-neutral-500"
-              }`}
+              className={`transition-colors ${isActive ? b.activeTint : b.tint}`}
               style={{ width: `${widthPct}%` }}
               title={`${b.label} — ${b.from}–${b.to} BPM`}
-            >
-              {b.label}
-            </div>
+            />
           );
         })}
       </div>
