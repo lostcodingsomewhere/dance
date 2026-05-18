@@ -81,6 +81,11 @@ class FakeAbletonBridge:
         self.preview_calls: list[dict[str, Any]] = []
         self.preview_raises: Exception | None = None
         self.stop_preview_calls: int = 0
+        # Cell-level deck state — overridable by individual tests.
+        self.deck_state_return: dict[str, Any] = {
+            "columns": None,
+            "cells": [],
+        }
 
     def start(self) -> None:
         self.started = True
@@ -105,6 +110,8 @@ class FakeAbletonBridge:
                 "track_id": int(track.id),
                 "stem_count": len(stems),
                 "include_stems": include_stems,
+                "kinds": kwargs.get("kinds"),
+                "scene_index": kwargs.get("scene_index"),
             }
         )
         if self.push_raises is not None:
@@ -138,6 +145,9 @@ class FakeAbletonBridge:
     def stop_preview(self) -> dict[str, Any]:
         self.stop_preview_calls += 1
         return {"ok": True, "cleared": True}
+
+    def get_deck_state(self) -> dict[str, Any]:
+        return self.deck_state_return
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +555,8 @@ def test_load_track_with_stems_creates_five_tracks(
         "track_id": t.id,
         "stem_count": 4,
         "include_stems": True,
+        "kinds": None,
+        "scene_index": None,
     }
 
 
@@ -1980,3 +1992,89 @@ def test_preview_stop_clears_bridge(
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert fake_bridge.stop_preview_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Cell-level loads (kinds filter) — Phase 7
+# ---------------------------------------------------------------------------
+
+
+def test_load_track_full_song_default_loads_all_stems(
+    client: TestClient, session, fake_bridge, make_track, tmp_path
+):
+    """No ``kinds`` field → backward-compat: whole-song load (all 4 stems)."""
+    from dance.core.database import StemFile
+
+    track = make_track(title="Full Song Probe")
+    for kind in ("drums", "bass", "vocals", "other"):
+        p = tmp_path / f"{kind}.wav"
+        p.write_bytes(b"")
+        session.add(
+            StemFile(
+                track_id=track.id, kind=kind, path=str(p), created_at=now_utc()
+            )
+        )
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": track.id, "include_stems": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    # FakeAbletonBridge default returns indices for all stems supplied.
+    assert "drums" in body["track_indices"]
+    assert "bass" in body["track_indices"]
+    assert "vocals" in body["track_indices"]
+    assert "other" in body["track_indices"]
+
+
+def test_load_track_kinds_filter_passed_through_to_bridge(
+    client: TestClient, session, fake_bridge, make_track, tmp_path
+):
+    """``kinds=["drums"]`` only asks the bridge to load drums — no other
+    stems. Verified by inspecting the recorded bridge call."""
+    from dance.core.database import StemFile
+
+    track = make_track(title="Drum Only Probe")
+    for kind in ("drums", "bass", "vocals", "other"):
+        p = tmp_path / f"{kind}.wav"
+        p.write_bytes(b"")
+        session.add(
+            StemFile(
+                track_id=track.id, kind=kind, path=str(p), created_at=now_utc()
+            )
+        )
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/load-track",
+        json={"track_id": track.id, "include_stems": True, "kinds": ["drums"]},
+    )
+    assert r.status_code == 200
+    # The fake bridge records every push_track_to_live call; we ensure the
+    # kinds filter went through to the bridge layer.
+    last = fake_bridge.push_calls[-1]
+    assert last["kinds"] == ["drums"]
+
+
+def test_deck_map_returns_cells_not_scenes(
+    client: TestClient, fake_bridge
+):
+    """GET /ableton/decks responds with a ``cells`` list (cell-level shape),
+    not a legacy ``scenes`` list."""
+    fake_bridge.deck_state_return = {
+        "columns": {"mix": 0, "drums": 1, "bass": 2, "vocals": 3, "other": 4},
+        "cells": [
+            {"scene_index": 0, "kind": "drums", "track_id": 99},
+        ],
+    }
+    r = client.get("/api/v1/ableton/decks")
+    assert r.status_code == 200
+    body = r.json()
+    assert "cells" in body
+    assert "scenes" not in body
+    assert len(body["cells"]) == 1
+    assert body["cells"][0]["kind"] == "drums"
+    assert body["cells"][0]["scene_index"] == 0

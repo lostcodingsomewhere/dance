@@ -7,16 +7,9 @@ import {
   useStopPreview,
   usePreviewState,
 } from "../hooks/usePreview";
+import { roleLabel } from "../lib/roles";
 import type { ColumnRec } from "../types";
 import { store } from "../store";
-
-const ROLE_LABEL: Record<string, string> = {
-  drums: "Drums",
-  bass: "Bass",
-  vocals: "Vocals",
-  other: "Other",
-  mix: "Mix",
-};
 
 const ROLE_ACCENT: Record<string, string> = {
   drums: "bg-red-500/15 border-red-500/30 text-red-300",
@@ -43,7 +36,7 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
       <div
         className={`flex items-baseline justify-between px-2 py-1 rounded-md border text-[10px] uppercase tracking-widest ${accent}`}
       >
-        <span className="font-semibold">{ROLE_LABEL[column] ?? column}</span>
+        <span className="font-semibold">{roleLabel(column)}</span>
         <span className="opacity-60">{q.data?.recs.length ?? 0} recs</span>
       </div>
       {q.isLoading && (
@@ -78,19 +71,30 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
   const isPreviewing =
     previewing?.trackId === rec.track_id && previewing?.column === column;
 
+  // Stem cards load only their own stem; the song-column card loads the
+  // whole 4-stem combo into a fresh row.
+  const isSongCard = column === "mix";
   const load = useMutation({
-    mutationFn: () => pushTrackToLive(rec.track_id, { includeStems: true }),
+    mutationFn: () =>
+      pushTrackToLive(rec.track_id, {
+        includeStems: true,
+        kinds: isSongCard ? undefined : [column],
+      }),
     onSuccess: (result) => {
       // Auto-stop any preview when committing — the candidate is now on
       // master, so cue should go silent.
       if (previewing) stopPreview.mutate();
-      // Register the deck in local state so SceneGrid + NowPlaying see it.
-      store.registerDeck({
-        track_id: rec.track_id,
-        scene_index: result.scene_index,
-        stem_track_indices: Object.values(result.track_indices),
-        loaded_at: Date.now(),
-      });
+      // Register the deck locally only for whole-song commits. Single-stem
+      // loads don't form a "deck" — their row may have cells from other
+      // tracks and the backend is the source of truth.
+      if (isSongCard) {
+        store.registerDeck({
+          track_id: rec.track_id,
+          scene_index: result.scene_index,
+          stem_track_indices: Object.values(result.track_indices),
+          loaded_at: Date.now(),
+        });
+      }
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
       qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
     },
@@ -161,9 +165,18 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           type="button"
           onClick={() => load.mutate()}
           disabled={load.isPending}
+          title={
+            isSongCard
+              ? "Load all 4 stems into a fresh row (anchor-ready)"
+              : `Load only the ${roleLabel(column).toLowerCase()} stem into the next free ${roleLabel(column).toLowerCase()} slot`
+          }
           className="flex-1 text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
         >
-          {load.isPending ? "loading…" : "Load → Live"}
+          {load.isPending
+            ? "loading…"
+            : isSongCard
+            ? "Load song"
+            : `Load ${roleLabel(column).toLowerCase()}`}
         </button>
       </div>
     </div>

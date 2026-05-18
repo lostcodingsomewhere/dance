@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 from dance.api.deps import get_bridge, get_session
 from dance.api.schemas import (
     AbletonStateOut,
+    DeckCellOut,
     DeckMapOut,
-    DeckSceneOut,
     FireClipRequest,
     LoadTrackRequest,
     LoadTrackResult,
@@ -152,7 +152,8 @@ def load_track(
             track,
             stems,
             include_stems=body.include_stems,
-            scene_index=body.scene_index if body.scene_index is not None else 0,
+            scene_index=body.scene_index,
+            kinds=body.kinds,
         )
     except OSError as exc:
         logger.warning("OSC send failed during load-track: %s", exc)
@@ -163,18 +164,22 @@ def load_track(
 
     title = track.title or track.file_name or f"Track {track.id}"
     stems_loaded = result.get("stems_loaded", 0)
-    if stems_loaded == 4:
+    is_full_song = body.kinds is None and body.include_stems
+    if is_full_song and stems_loaded == 4:
         message = (
             f"Loaded {title!r} into scene {result['scene_index'] + 1}. "
             f"Fire the scene to play."
         )
     elif stems_loaded > 0:
+        kinds_summary = (
+            ", ".join(body.kinds) if body.kinds else f"{stems_loaded}/4 stems"
+        )
         message = (
-            f"Partially loaded {title!r}: {stems_loaded}/4 stems on "
+            f"Loaded {kinds_summary} from {title!r} on "
             f"scene {result['scene_index'] + 1}."
         )
     else:
-        message = f"Could not auto-load stems for {title!r} — check warnings."
+        message = f"Could not load {title!r} — check warnings."
 
     return LoadTrackResult(
         ok=True,
@@ -191,19 +196,24 @@ def deck_map(
     bridge: AbletonBridge = Depends(get_bridge),
     session: Session = Depends(get_session),
 ) -> DeckMapOut:
-    """Current scene→track map plus track-name/BPM/key metadata for each.
+    """Current cell-level deck map plus per-cell source-track metadata.
 
-    The companion app polls this to render its Scene Map widget — a
-    distilled view of "what songs are loaded where in Live" — without
-    having to keep its own localStorage state in sync with reality.
+    The companion polls this to render the SceneGrid + ComboStrip in sync
+    with the bridge's view of Live. Cells in the same scene can come from
+    different tracks — that's the whole point of the live-remixing model.
     """
     state = bridge.get_deck_state()
-    scenes: list[DeckSceneOut] = []
-    for scene_idx, track_id in sorted(state["scenes"].items()):
-        track = session.query(Track).filter(Track.id == track_id).one_or_none()
-        # AudioAnalysis is one-row-per-(track, stem) and Track.analysis is a
-        # *list*; the full-mix analysis is the row where stem_file_id IS NULL.
-        # That's the row whose BPM/key/energy a DJ cares about.
+    raw_cells = state["cells"]
+    # Cache per-track metadata so we don't query N times for the same
+    # source track loaded across multiple cells.
+    track_cache: dict[int, tuple[Track | None, AudioAnalysis | None]] = {}
+
+    def _lookup(track_id: int) -> tuple[Track | None, AudioAnalysis | None]:
+        if track_id in track_cache:
+            return track_cache[track_id]
+        track = (
+            session.query(Track).filter(Track.id == track_id).one_or_none()
+        )
         analysis = (
             session.query(AudioAnalysis)
             .filter(
@@ -214,9 +224,17 @@ def deck_map(
             if track is not None
             else None
         )
-        scenes.append(
-            DeckSceneOut(
-                scene_index=scene_idx,
+        track_cache[track_id] = (track, analysis)
+        return track, analysis
+
+    cells: list[DeckCellOut] = []
+    for cell in raw_cells:
+        track_id = cell["track_id"]
+        track, analysis = _lookup(track_id)
+        cells.append(
+            DeckCellOut(
+                scene_index=cell["scene_index"],
+                kind=cell["kind"],
                 track_id=track_id,
                 title=getattr(track, "title", None),
                 artist=getattr(track, "artist", None),
@@ -225,7 +243,7 @@ def deck_map(
                 floor_energy=getattr(analysis, "floor_energy", None),
             )
         )
-    return DeckMapOut(columns=state["columns"], scenes=scenes)
+    return DeckMapOut(columns=state["columns"], cells=cells)
 
 
 @router.post("/decks/reset")

@@ -27,20 +27,29 @@ export function MasterStrip() {
   // Prefer backend truth for the chip count; fall back to the local mirror
   // when the backend hasn't responded yet (zero round-trip on initial paint).
   const localCount = useAppStore((s) => Object.keys(s.loadedDecks).length);
-  const loadedCount = deckMap.data?.scenes?.length ?? localCount;
+  // Number of distinct scenes the backend knows about (any cell at all).
+  const loadedCount =
+    new Set((deckMap.data?.cells ?? []).map((c) => c.scene_index)).size ||
+    localCount;
 
-  // Camelot key of the dominant playing scene (anchor for compat math).
-  // When nothing is playing, falls back to null and the strip shows "—".
+  // Camelot key of the dominant playing cell — the harmonic anchor for compat
+  // math. We scan playing_clips against the deck columns and pick the first
+  // cell that's actually playing (drums first, so the kick's root note
+  // anchors when present). Falls back to null when nothing is firing.
   const currentKey = useMemo<string | null>(() => {
     const columns = deckMap.data?.columns;
-    const scenes = deckMap.data?.scenes ?? [];
+    const cells = deckMap.data?.cells ?? [];
     const playing = state.playing_clips ?? {};
     if (!columns) return null;
-    for (const trackIdx of Object.values(columns)) {
+    for (const role of ["vocals", "bass", "drums", "other", "mix"]) {
+      const trackIdx = columns[role];
+      if (trackIdx == null) continue;
       const sIdx = playing[trackIdx];
       if (sIdx == null) continue;
-      const sc = scenes.find((s) => s.scene_index === sIdx);
-      if (sc?.key_camelot) return sc.key_camelot;
+      const cell = cells.find(
+        (c) => c.scene_index === sIdx && c.kind === role,
+      );
+      if (cell?.key_camelot) return cell.key_camelot;
     }
     return null;
   }, [deckMap.data, state.playing_clips]);
@@ -131,7 +140,12 @@ export function MasterStrip() {
       {/* Deck-count chip — what we've staged in Live */}
       <DeckCountChip count={loadedCount} />
       <DeckSyncIndicator
-        backendCount={deckMap.data?.scenes?.length ?? null}
+        backendCount={
+          deckMap.data
+            ? new Set((deckMap.data.cells ?? []).map((c) => c.scene_index))
+                .size
+            : null
+        }
         localCount={localCount}
       />
 

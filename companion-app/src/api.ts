@@ -352,7 +352,12 @@ export interface LoadTrackResult {
 
 export function pushTrackToLive(
   trackId: number,
-  options: { includeStems?: boolean; sceneIndex?: number } = {},
+  options: {
+    includeStems?: boolean;
+    sceneIndex?: number;
+    /** Subset of stem kinds to load. ``undefined`` = whole song (all 4). */
+    kinds?: string[];
+  } = {},
 ): Promise<LoadTrackResult> {
   return request<LoadTrackResult>("/ableton/load-track", {
     method: "POST",
@@ -360,6 +365,7 @@ export function pushTrackToLive(
       track_id: trackId,
       include_stems: options.includeStems ?? true,
       scene_index: options.sceneIndex ?? null,
+      kinds: options.kinds ?? null,
     }),
   });
 }

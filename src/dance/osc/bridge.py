@@ -92,11 +92,12 @@ class AbletonBridge:
         # re-create the deck tracks.
         self._deck_columns: dict[str, int] | None = None
 
-        # scene_index -> dance Track id. Populated by push_track_to_live for
-        # every (scene, track) we've staged in Live's session view. The API
-        # exposes this map so the React companion can render a "scene map"
-        # without having to query Live directly.
-        self._deck_scenes: dict[int, int] = {}
+        # (scene_index, kind) -> dance Track id. One entry per loaded cell in
+        # Live's session view. Cells in a single row can come from different
+        # tracks (the live-remixing model); anchor mode is just the case
+        # where all 4 stem cells in a row point at the same track. The API
+        # exposes this map as the cell-level deck view.
+        self._deck_cells: dict[tuple[int, str], int] = {}
 
         # Index of the dedicated "Cue" track in Live — output routed to the
         # Scarlett 4i4's outs 3/4 so previews play in headphones without
@@ -293,7 +294,7 @@ class AbletonBridge:
             except OSError as exc:  # pragma: no cover - best-effort
                 logger.warning("delete_track(%d) failed: %s", idx, exc)
         self._deck_columns = None
-        self._deck_scenes = {}
+        self._deck_cells = {}
         self._cue_track_idx = None
         return {"deleted": len(deck_indices), "indices": sorted(deck_indices)}
 
@@ -333,57 +334,99 @@ class AbletonBridge:
     _CUE_SLOT: int = 0
 
     def reset_deck_columns(self) -> None:
-        """Forget the cached deck-column indices AND the scene→track map.
+        """Forget the cached deck-column indices AND the per-cell load map.
 
         The *next* push_track_to_live will (re)create the Deck tracks. Does
         **not** delete anything in Live — the user is in charge of their
         session view.
         """
         self._deck_columns = None
-        self._deck_scenes = {}
+        self._deck_cells = {}
 
     def get_deck_state(self) -> dict[str, Any]:
         """Snapshot of which Ableton tracks are our deck columns and which
-        scenes are staged with our songs. The API surfaces this so the FE
-        can render a "scene map" widget that stays in sync with the bridge's
-        view of Live."""
+        cells (scene × kind) are loaded with which dance-track ids. The API
+        surfaces this so the FE can render the SceneGrid + ComboStrip in
+        sync with the bridge's view of Live.
+
+        ``cells`` is a list of ``{"scene_index": int, "kind": str, "track_id": int}``
+        rows — one per loaded cell.
+        """
+        cells = [
+            {"scene_index": s, "kind": k, "track_id": tid}
+            for (s, k), tid in sorted(self._deck_cells.items())
+        ]
         return {
             "columns": dict(self._deck_columns) if self._deck_columns else None,
-            "scenes": dict(self._deck_scenes),
+            "cells": cells,
         }
+
+    def next_free_slot(self, kind: str) -> int:
+        """Lowest scene index where the given kind's cell is empty."""
+        used = {s for (s, k) in self._deck_cells if k == kind}
+        i = 0
+        while i in used:
+            i += 1
+        return i
+
+    def next_free_row(self) -> int:
+        """Lowest scene index where ALL stem kinds are empty.
+
+        Used as the default load slot for whole-song (anchor) loads so that a
+        fresh row is reserved for the 4-stem combo. Excludes the ``mix`` kind
+        from the emptiness check since the mix cell is intentionally left
+        blank by push_track_to_live for the standard 4-stem layout.
+        """
+        kinds = ("drums", "bass", "vocals", "other")
+        i = 0
+        while True:
+            if all((i, k) not in self._deck_cells for k in kinds):
+                return i
+            i += 1
 
     def push_track_to_live(
         self,
         track: "Track",
         stems: list["StemFile"],
         *,
-        scene_index: int = 0,
+        scene_index: int | None = None,
+        kinds: list[str] | None = None,
         num_tracks_timeout: float = 0.5,
-        # `include_stems` is accepted for backward-compat with the old API but
-        # ignored — the deck-column layout always reserves all 5 channels.
-        include_stems: bool = True,  # noqa: ARG002
+        # `include_stems` accepted for backward-compat with the old API; when
+        # False we still default ``kinds`` to ``[]`` so nothing loads.
+        include_stems: bool = True,
     ) -> dict[str, Any]:
-        """Stage a track on a specific scene in Live's session view.
+        """Stage some or all of a track's stems on a scene in Live's session view.
 
-        Live's Python API doesn't expose "load sample into clip slot", so the
-        actual drop is done by the user (we open Finder to the stems folder).
-        What OSC *can* do is prepare the destination:
+        ``kinds`` controls which stems are loaded:
+        - ``None`` → all 4 stems (drums/bass/vocals/other) into one row
+          (anchor / whole-song mode).
+        - A list (e.g. ``["drums"]``) → only those stems load (live-remixing
+          single-cell mode).
 
-          - Maintain 5 reusable audio tracks in Live, named ``Deck Mix /
-            Drums / Bass / Vocals / Other`` and colored per stem.
-          - Each "load" call claims **one scene** of those 5 columns. Songs
-            stack vertically: song A → scene 0, song B → scene 1, etc. The
-            APC40's scene-launch buttons map directly to switching between
-            them.
+        ``scene_index`` controls where they land:
+        - ``None`` → the bridge picks: ``next_free_row()`` for full-song
+          loads, ``next_free_slot(kind)`` for single-stem loads.
+        - An int → use that exact scene (caller's choice; overwrites any
+          existing cell at that intersection).
 
-        The 5 columns are created lazily on the first call and reused after
-        that, so loading 10 songs uses 5 tracks and 10 scenes, not 50 tracks.
-
-        Returns ``{"scene_index": int, "track_indices": {"mix": idx, ...},
-        "warnings": [str, ...]}``. ``track_indices`` is the deck-column map
-        (same for every call once the columns exist).
+        Returns ``{"scene_index": int, "track_indices": {kind: idx, ...},
+        "stems_loaded": int, "warnings": [str, ...]}``. ``track_indices``
+        always carries the full deck-column map; ``stems_loaded`` is how
+        many cells this call actually populated.
         """
         warnings: list[str] = []
+
+        # Honor the backward-compat include_stems=False shape.
+        if kinds is None and not include_stems:
+            kinds = []
+        # Default: whole-song load.
+        full_song = kinds is None
+        if kinds is None:
+            kinds = ["drums", "bass", "vocals", "other"]
+        # Filter to known stem kinds. Mix isn't loaded (it's the original
+        # full-track audio and we never duplicate it into the deck row).
+        valid_kinds = [k for k in kinds if k in ("drums", "bass", "vocals", "other")]
 
         base = self.get_num_tracks(timeout=num_tracks_timeout)
         live_reachable = base is not None
@@ -395,10 +438,7 @@ class AbletonBridge:
 
         # (Re)create the 5 deck columns if we don't have them, or — only when
         # Live is reachable — if the user has deleted tracks in Live so our
-        # cached indices no longer fit. We don't invalidate on unreachable
-        # Live, otherwise repeated load-track calls during a dev cycle (or
-        # while Live is closed) would loop forever creating phantom columns
-        # at index 0.
+        # cached indices no longer fit.
         if self._deck_columns is None:
             self._deck_columns = self._create_deck_columns(
                 start_index=base if live_reachable else 0
@@ -409,18 +449,24 @@ class AbletonBridge:
             if cached_max >= base:
                 self._deck_columns = self._create_deck_columns(start_index=base)
 
-        # We just guaranteed self._deck_columns is non-None above.
         deck_columns: dict[str, int] = self._deck_columns
+
+        # Resolve the scene_index now that we know which kinds we're loading.
+        if scene_index is None:
+            if full_song:
+                scene_index = self.next_free_row()
+            elif valid_kinds:
+                # Single-stem load — drop into the lowest slot in this kind's
+                # column. When multiple kinds were requested we use the
+                # first kind's column to anchor the slot choice.
+                scene_index = self.next_free_slot(valid_kinds[0])
+            else:
+                scene_index = 0
 
         # Validate sources for this load.
         title = (track.title or track.file_name or f"Track {track.id}").strip()
-        full_mix_path = Path(track.file_path) if track.file_path else None
-        if full_mix_path is None or not full_mix_path.exists():
-            warnings.append(
-                f"Full-mix file missing on disk: {track.file_path!r}"
-            )
         stems_by_kind = {str(s.kind).lower(): s for s in stems}
-        for kind in ("drums", "bass", "vocals", "other"):
+        for kind in valid_kinds:
             stem = stems_by_kind.get(kind)
             if stem is None:
                 warnings.append(f"No {kind} stem available for track {track.id}")
@@ -429,14 +475,11 @@ class AbletonBridge:
             if stem_path is None or not stem_path.exists():
                 warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
 
-        # Auto-load each stem into the matching deck column on this scene.
-        # Live 12.0.5+ exposes ClipSlot.create_audio_clip(path) and our
-        # patched AbletonOSC binds it to /live/clip_slot/create_audio_clip.
-        # The "mix" column is intentionally left empty — summing stems
-        # already produces the full mix, so loading it too would double the
-        # audio. Users who want the full-mix file can drop it manually.
+        # Auto-load each requested stem into the matching deck column on the
+        # chosen scene. Mix is intentionally never loaded (summing stems
+        # already approximates the full mix; doubling it would clip).
         stems_loaded = 0
-        for kind in ("drums", "bass", "vocals", "other"):
+        for kind in valid_kinds:
             stem = stems_by_kind.get(kind)
             if stem is None or not stem.path:
                 continue
@@ -447,6 +490,7 @@ class AbletonBridge:
             try:
                 self.client.create_audio_clip(t_idx, scene_index, str(stem_path))
                 self.client.set_clip_name(t_idx, scene_index, f"{title} ({kind})")
+                self._deck_cells[(scene_index, kind)] = track.id
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
                 warnings.append(f"OSC send for {kind} failed: {exc}")
@@ -454,15 +498,10 @@ class AbletonBridge:
         try:
             self.client.show_message(
                 f"Dance: {title} → scene {scene_index + 1} "
-                f"({stems_loaded}/4 stems loaded)"
+                f"({stems_loaded} cell{'s' if stems_loaded != 1 else ''} loaded)"
             )
         except OSError:  # pragma: no cover - best-effort UI
             pass
-
-        # Remember the placement so the API can expose a scene map. If the
-        # caller staged a different song on the same scene we overwrite —
-        # the user explicitly replaced it.
-        self._deck_scenes[scene_index] = track.id
 
         return {
             "scene_index": scene_index,

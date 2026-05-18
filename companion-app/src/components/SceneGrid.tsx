@@ -2,11 +2,10 @@ import { useMemo } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { useFireCell, useFireScene } from "../hooks/useTransport";
-import type { DeckScene } from "../types";
+import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
+import type { DeckCell } from "../types";
 
 const GRID_ROWS = 8;
-const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"] as const;
-type StemRole = (typeof STEM_COLUMNS)[number];
 
 const ROLE_COLOR: Record<StemRole, { dot: string; text: string; border: string; bg: string }> = {
   drums:  { dot: "bg-red-500",    text: "text-red-300",    border: "border-red-500/30",    bg: "bg-red-500/10" },
@@ -18,18 +17,15 @@ const ROLE_COLOR: Record<StemRole, { dot: string; text: string; border: string; 
 
 /**
  * The 8×5 scene grid — the canonical visual representation of what the APC40
- * is touching. Columns are stem roles (drums/bass/vocals/other/mix); rows are
- * scenes. Mirror of Live's session view in the live-remixing layout.
+ * is touching. Columns are stem roles (drums/bass/vocals/melody/song); rows
+ * are scenes. Cells in the same row can come from different source tracks
+ * (the live-remixing model); when all 4 stem cells in a row point at the
+ * same track, that row is the song-as-recorded (anchor mode).
  *
  * Interactions:
- * - Tap a cell → fire that one stem clip (swap into the active combo).
- * - Tap a row label → fire the whole scene (anchor mode — original combo).
+ * - Tap a cell → fire that one stem clip.
+ * - Tap a row label → fire the whole scene (anchor mode).
  * - Hover a loaded cell → see truncated track title + metadata.
- *
- * Visual states per cell:
- * - Empty:   dim outline only.
- * - Loaded:  filled, dim, title visible.
- * - Playing: emerald accent + beat-driven pulse animation.
  */
 export function SceneGrid() {
   const deckMap = useDeckMap();
@@ -38,19 +34,18 @@ export function SceneGrid() {
   const fireCell = useFireCell();
 
   const columns = deckMap.data?.columns ?? null;
-  const scenes = deckMap.data?.scenes ?? [];
+  const cells = deckMap.data?.cells ?? [];
   const playing = ableton.playing_clips ?? {};
   const tempo = ableton.tempo ?? 120;
 
-  // Map scene_index → DeckScene for O(1) lookup. Scenes the backend doesn't
-  // know about are rendered as fully empty rows (no metadata, no loaded cells).
-  const sceneByIdx = useMemo(() => {
-    const m = new Map<number, DeckScene>();
-    for (const s of scenes) m.set(s.scene_index, s);
+  // (scene_index, kind) → DeckCell, for O(1) lookup during render.
+  const cellAt = useMemo(() => {
+    const m = new Map<string, DeckCell>();
+    for (const c of cells) m.set(`${c.scene_index}|${c.kind}`, c);
     return m;
-  }, [scenes]);
+  }, [cells]);
 
-  const rows = Array.from({ length: GRID_ROWS }, (_, i) => i); // scene 0..7
+  const rows = Array.from({ length: GRID_ROWS }, (_, i) => i);
 
   // Beat-pulse animation duration in ms. One pulse per beat.
   const beatMs = Math.max(200, Math.round(60_000 / Math.max(40, tempo)));
@@ -75,17 +70,25 @@ export function SceneGrid() {
             className="flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-widest text-neutral-400"
           >
             <span className={`w-1.5 h-1.5 rounded-full ${ROLE_COLOR[role].dot}`} />
-            {role}
+            {roleLabel(role)}
           </div>
         ))}
       </div>
 
       {/* Rows */}
       {rows.map((sceneIdx) => {
-        const scene = sceneByIdx.get(sceneIdx);
-        const anyPlaying =
-          scene != null &&
-          Object.values(columns).some((trackIdx) => playing[trackIdx] === sceneIdx);
+        // Anchor mode: all 4 stem cells in this row point at the same track.
+        const rowCells = STEM_COLUMNS.filter((r) => r !== "mix").map((r) =>
+          cellAt.get(`${sceneIdx}|${r}`),
+        );
+        const rowTrackIds = rowCells.map((c) => c?.track_id ?? null);
+        const isAnchorReady =
+          rowTrackIds.every((t) => t != null) &&
+          new Set(rowTrackIds).size === 1;
+        const anyPlaying = Object.values(columns).some(
+          (trackIdx) => playing[trackIdx] === sceneIdx,
+        );
+        const anyLoaded = rowCells.some((c) => c != null);
 
         return (
           <div
@@ -94,25 +97,29 @@ export function SceneGrid() {
           >
             <RowLabel
               sceneIdx={sceneIdx}
-              loaded={scene != null}
+              loaded={anyLoaded}
+              anchorReady={isAnchorReady}
               playing={anyPlaying}
               onFire={() => fireScene.mutate(sceneIdx)}
               pending={fireScene.isPending}
             />
             {STEM_COLUMNS.map((role) => {
               const trackIdx = columns[role];
-              const isPlaying = trackIdx != null && playing[trackIdx] === sceneIdx;
+              const cell = cellAt.get(`${sceneIdx}|${role}`);
+              const isPlaying =
+                trackIdx != null && playing[trackIdx] === sceneIdx;
               return (
                 <Cell
                   key={role}
                   role={role}
-                  scene={scene}
-                  loaded={scene != null && trackIdx != null}
+                  cell={cell}
+                  loaded={cell != null}
                   playing={isPlaying}
                   beatMs={beatMs}
                   onFire={
-                    trackIdx != null
-                      ? () => fireCell.mutate({ track: trackIdx, slot: sceneIdx })
+                    cell != null && trackIdx != null
+                      ? () =>
+                          fireCell.mutate({ track: trackIdx, slot: sceneIdx })
                       : undefined
                   }
                 />
@@ -128,12 +135,14 @@ export function SceneGrid() {
 function RowLabel({
   sceneIdx,
   loaded,
+  anchorReady,
   playing,
   onFire,
   pending,
 }: {
   sceneIdx: number;
   loaded: boolean;
+  anchorReady: boolean;
   playing: boolean;
   onFire: () => void;
   pending: boolean;
@@ -144,15 +153,19 @@ function RowLabel({
       onClick={onFire}
       disabled={pending || !loaded}
       title={
-        loaded
+        anchorReady
           ? `Fire scene ${sceneIdx + 1} — play the original combo (anchor mode)`
+          : loaded
+          ? `Fire scene ${sceneIdx + 1} — plays whatever cells are loaded in this row`
           : `Scene ${sceneIdx + 1} (empty)`
       }
       className={`flex items-center justify-center rounded-md text-xs font-mono font-semibold transition-colors ${
         playing
           ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+          : anchorReady
+          ? "bg-neutral-900/70 text-emerald-300/70 border border-emerald-500/30 hover:border-emerald-500/60 hover:text-emerald-300 cursor-pointer"
           : loaded
-          ? "bg-neutral-900/70 text-neutral-400 border border-neutral-800 hover:border-emerald-500/40 hover:text-emerald-300 cursor-pointer"
+          ? "bg-neutral-900/70 text-neutral-400 border border-neutral-800 hover:border-neutral-700 cursor-pointer"
           : "bg-neutral-950 text-neutral-700 border border-neutral-900"
       }`}
     >
@@ -163,14 +176,14 @@ function RowLabel({
 
 function Cell({
   role,
-  scene,
+  cell,
   loaded,
   playing,
   beatMs,
   onFire,
 }: {
   role: StemRole;
-  scene: DeckScene | undefined;
+  cell: DeckCell | undefined;
   loaded: boolean;
   playing: boolean;
   beatMs: number;
@@ -182,7 +195,7 @@ function Cell({
     return (
       <div
         className="rounded-md border border-neutral-900 bg-neutral-950 h-14"
-        aria-label={`${role} (empty)`}
+        aria-label={`${roleLabel(role)} (empty)`}
       />
     );
   }
@@ -193,9 +206,9 @@ function Cell({
       onClick={onFire}
       disabled={!onFire}
       title={
-        scene
-          ? `${role}: ${scene.title ?? `Track #${scene.track_id}`} — tap to fire`
-          : `${role} (loaded)`
+        cell
+          ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`} — tap to fire`
+          : `${roleLabel(role)} (loaded)`
       }
       className={`rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
         playing
@@ -205,18 +218,17 @@ function Cell({
       style={
         playing
           ? {
-              // beat pulse — opacity dips on every beat. Cheap, no JS.
               animation: `dance-beat-pulse ${beatMs}ms ease-in-out infinite`,
             }
           : undefined
       }
     >
       <div className={`text-[10px] uppercase tracking-wider ${playing ? "text-emerald-300" : color.text}`}>
-        {playing ? "▶ playing" : role}
+        {playing ? "▶ playing" : roleLabel(role)}
       </div>
-      {scene && (
+      {cell && (
         <div className="text-xs text-neutral-200 truncate font-medium leading-tight mt-0.5">
-          {scene.title ?? `Track #${scene.track_id}`}
+          {cell.title ?? `Track #${cell.track_id}`}
         </div>
       )}
     </button>

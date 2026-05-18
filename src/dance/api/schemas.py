@@ -262,9 +262,15 @@ class LoadTrackRequest(BaseModel):
     track_id: int
     include_stems: bool = True
     # Which scene (row in Live's session view, 0-indexed) to stage the track
-    # on. The bridge keeps 5 reusable "Deck" track columns; each song claims
-    # one scene below them. None lets the bridge default to scene 0.
+    # on. The bridge keeps reusable Deck-column tracks; each load claims one
+    # or more cells. ``None`` lets the bridge pick: lowest fully-empty row
+    # for full-song loads, lowest empty slot per column for stem loads.
     scene_index: int | None = None
+    # Which stem kinds to load. ``None`` = all 4 stems (drums/bass/vocals/
+    # other) into the same row — whole-song / anchor mode. A subset (e.g.
+    # ``["drums"]``) loads only those cells, leaving the rest of the row
+    # untouched. Live-remixing mode lives here.
+    kinds: list[str] | None = None
 
 
 class LoadTrackResult(BaseModel):
@@ -288,11 +294,13 @@ class LoadTrackResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class DeckSceneOut(BaseModel):
-    """One staged song in Live's session view, with the track metadata the
-    companion needs to render a Scene Map row without a second fetch."""
+class DeckCellOut(BaseModel):
+    """One loaded cell (scene × stem-kind) in Live's session view, with the
+    source-track metadata the companion needs to render the SceneGrid +
+    ComboStrip without a second fetch."""
 
     scene_index: int
+    kind: str  # "drums" | "bass" | "vocals" | "other"
     track_id: int
     title: str | None = None
     artist: str | None = None
@@ -305,12 +313,13 @@ class DeckMapOut(BaseModel):
     """Reply for ``GET /api/v1/ableton/decks``.
 
     ``columns`` is null until the user has hit Load at least once (no decks
-    created in Live yet). ``scenes`` lists every scene the bridge has
-    staged with one of our songs.
+    created in Live yet). ``cells`` lists every loaded (scene, kind) cell
+    in the live-remixing grid; cells in the same scene can come from
+    different source tracks (the whole point of the model).
     """
 
     columns: dict[str, int] | None = None
-    scenes: list[DeckSceneOut] = Field(default_factory=list)
+    cells: list[DeckCellOut] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +506,7 @@ __all__ = [
     "JobOut",
     "LoadTrackRequest",
     "LoadTrackResult",
-    "DeckSceneOut",
+    "DeckCellOut",
     "DeckMapOut",
     "PipelineRecentTrackOut",
     "PipelineStatusOut",

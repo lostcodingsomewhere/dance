@@ -187,11 +187,13 @@ export interface LoadedDeck {
   loaded_at: number; // ms epoch
 }
 
-// Mirrors src/dance/api/schemas.py::DeckSceneOut + DeckMapOut. The bridge
-// is the source of truth for what's staged in Live; the FE polls /ableton/decks
-// to render the Scene Map widget.
-export interface DeckScene {
+// Mirrors src/dance/api/schemas.py::DeckCellOut + DeckMapOut. The bridge
+// is the source of truth for which cells (scene × stem-kind) are loaded
+// from which source tracks. The FE polls /ableton/decks to render the
+// SceneGrid + ComboStrip.
+export interface DeckCell {
   scene_index: number;
+  kind: string; // "drums" | "bass" | "vocals" | "other"
   track_id: number;
   title: string | null;
   artist: string | null;
@@ -202,7 +204,7 @@ export interface DeckScene {
 
 export interface DeckMap {
   columns: Record<string, number> | null;
-  scenes: DeckScene[];
+  cells: DeckCell[];
 }
 
 // Pipeline-ops mirror of `src/dance/api/schemas.py:PipelineStatusOut`.

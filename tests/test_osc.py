@@ -391,7 +391,9 @@ def test_bridge_push_track_to_live_creates_tracks_in_order():
         fake_live_listener.stop()
 
 
-def test_bridge_push_track_to_live_include_stems_false_creates_one_track():
+def test_bridge_push_track_to_live_include_stems_false_loads_no_cells():
+    """include_stems=False loads zero cells but still provisions the 5
+    reusable deck columns so future loads have somewhere to land."""
     listen_port = _free_port()
     send_port = _free_port()
     fake_live_listener = AbletonOSCListener(port=send_port)
@@ -411,14 +413,17 @@ def test_bridge_push_track_to_live_include_stems_false_creates_one_track():
         result = bridge.push_track_to_live(
             _stub_track(), [], include_stems=False
         )
-        assert set(result["track_indices"].keys()) == {"mix"}
-        assert result["track_indices"]["mix"] == 0
-
+        # All 5 deck columns get provisioned on first call.
+        assert set(result["track_indices"].keys()) == {
+            "mix", "drums", "bass", "vocals", "other"
+        }
+        # But nothing actually loaded since kinds resolved to [].
+        assert result["stems_loaded"] == 0
         assert _wait_for(
             lambda: sum(
                 1 for a, _ in received if a == "/live/song/create_audio_track"
             )
-            == 1
+            == 5
         )
     finally:
         bridge.stop()
@@ -445,12 +450,13 @@ def test_bridge_push_track_to_live_records_warning_for_missing_stem_file():
         stems = [_stub_stem("drums", "/also/missing.wav")]
         result = bridge.push_track_to_live(track, stems, include_stems=True)
         warns = " ".join(result["warnings"])
-        assert "Full-mix file missing" in warns
         assert "drums stem file missing" in warns
         # The "bass/vocals/other" stems aren't supplied -> their own warnings.
         assert "No bass stem" in warns
         assert "No vocals stem" in warns
         assert "No other stem" in warns
+        # The full-mix file is never loaded as a clip, so its existence is
+        # not checked here — that was an older song-mode assumption.
     finally:
         bridge.stop()
         fake_live_listener.stop()
