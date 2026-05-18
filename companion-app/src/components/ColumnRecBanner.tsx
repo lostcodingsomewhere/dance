@@ -10,6 +10,7 @@ import {
 import { roleLabel } from "../lib/roles";
 import type { ColumnRec } from "../types";
 import { store } from "../store";
+import { RoleIcon } from "./RoleIcon";
 
 const ROLE_ACCENT: Record<string, string> = {
   drums: "bg-red-500/15 border-red-500/30 text-red-300",
@@ -34,9 +35,12 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
   return (
     <div className="flex flex-col gap-1" data-testid={`rec-banner-${column}`}>
       <div
-        className={`flex items-baseline justify-between px-2 py-1 rounded-md border text-[10px] uppercase tracking-widest ${accent}`}
+        className={`flex items-center justify-between px-2 py-1 rounded-md border text-[10px] uppercase tracking-widest ${accent}`}
       >
-        <span className="font-semibold">{roleLabel(column)}</span>
+        <span className="flex items-center gap-1.5 font-semibold">
+          <RoleIcon role={column} size={14} />
+          {roleLabel(column)}
+        </span>
         <span className="opacity-60">{q.data?.recs.length ?? 0} recs</span>
       </div>
       {q.isLoading && (

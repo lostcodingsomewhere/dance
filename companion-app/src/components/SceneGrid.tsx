@@ -4,6 +4,7 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import { useFireCell, useFireScene } from "../hooks/useTransport";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
+import { RoleIcon } from "./RoleIcon";
 
 const GRID_ROWS = 8;
 
@@ -67,9 +68,9 @@ export function SceneGrid() {
         {STEM_COLUMNS.map((role) => (
           <div
             key={role}
-            className="flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-widest text-neutral-400"
+            className={`flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-widest ${ROLE_COLOR[role].text}`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${ROLE_COLOR[role].dot}`} />
+            <RoleIcon role={role} size={12} />
             {roleLabel(role)}
           </div>
         ))}

@@ -6,6 +6,7 @@ import { useTrack } from "../hooks/useTracks";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
+import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
 
 /**
@@ -87,11 +88,12 @@ export function CueStrip() {
       className="rounded-md border border-cyan-400/40 bg-cyan-500/[0.06] px-3 py-2 flex items-center gap-3 shadow-[0_0_16px_rgba(34,211,238,0.12)]"
       data-testid="cue-strip"
     >
-      <div className="flex items-baseline gap-1.5 shrink-0 min-w-[8rem]">
+      <div className="flex items-center gap-2 shrink-0 min-w-[9rem]">
         <span className="text-[10px] uppercase tracking-widest text-cyan-300/80 font-semibold">
           In Cue
         </span>
-        <span className="text-[10px] uppercase tracking-wide text-cyan-300/60">
+        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-cyan-300">
+          <RoleIcon role={previewing.column} size={12} />
           {isSong ? "song" : roleLabel(previewing.column)}
         </span>
       </div>

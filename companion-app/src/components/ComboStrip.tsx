@@ -4,6 +4,7 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
+import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
 
 const ROLE_ACCENT: Record<StemRole, { dot: string; chip: string }> = {
@@ -150,7 +151,7 @@ function ComboCard({
     return (
       <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-20 flex flex-col">
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-neutral-700">
-          <span className={`w-1.5 h-1.5 rounded-full ${accent.dot} opacity-40`} />
+          <RoleIcon role={role} size={12} className="opacity-40" />
           {roleLabel(role)}
         </div>
         <div className="text-[11px] text-neutral-700 italic mt-1">silent</div>
@@ -165,9 +166,9 @@ function ComboCard({
           : "border-neutral-800 bg-neutral-900/40"
       }`}
     >
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
-        <span className={`w-1.5 h-1.5 rounded-full ${accent.dot}`} />
-        <span className={accent.chip}>{roleLabel(role)}</span>
+      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wider ${accent.chip}`}>
+        <RoleIcon role={role} size={12} />
+        <span>{roleLabel(role)}</span>
         {cell.key_camelot && (
           <span className="ml-auto font-mono text-neutral-400">
             {cell.key_camelot}
