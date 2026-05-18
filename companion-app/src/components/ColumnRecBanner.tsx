@@ -70,6 +70,11 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
   const previewing = usePreviewState();
   const isPreviewing =
     previewing?.trackId === rec.track_id && previewing?.column === column;
+  // Whole-song cue from a stem card: same track, but auditioned via the
+  // mix path (full original audio file). Lets the user follow "I like
+  // these drums — does the whole song hold up?" without leaving the card.
+  const isPreviewingSong =
+    previewing?.trackId === rec.track_id && previewing?.column === "mix";
 
   // Stem cards load only their own stem; the song-column card loads the
   // whole 4-stem combo into a fresh row.
@@ -108,11 +113,22 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
     }
   }
 
+  function onPreviewSong() {
+    if (isPreviewingSong) {
+      stopPreview.mutate();
+    } else {
+      // Replaces any in-flight preview (single-preview constraint on
+      // backend). The CueStrip auto-flips to song mode because the new
+      // preview state has column="mix".
+      startPreview.mutate({ trackId: rec.track_id, column: "mix" });
+    }
+  }
+
   const energy = rec.floor_energy;
   return (
     <div
       className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${
-        isPreviewing
+        isPreviewing || isPreviewingSong
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
           : "border-neutral-800/70 bg-neutral-900/40"
       }`}
@@ -150,7 +166,7 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           title={
             isPreviewing
               ? "Stop preview (Cue track → headphones)"
-              : "Preview in headphones only (Scarlett outs 3/4)"
+              : `Preview just the ${roleLabel(column).toLowerCase()} stem in headphones`
           }
           className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
             isPreviewing
@@ -161,6 +177,26 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
         >
           {isPreviewing ? "⏹" : "▶"}
         </button>
+        {!isSongCard && (
+          <button
+            type="button"
+            onClick={onPreviewSong}
+            disabled={startPreview.isPending || stopPreview.isPending}
+            title={
+              isPreviewingSong
+                ? "Stop preview (whole song in headphones)"
+                : "Preview the WHOLE SONG of this rec in headphones — then commit via the cue strip if you like it"
+            }
+            className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
+              isPreviewingSong
+                ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
+                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
+            }`}
+            aria-label={isPreviewingSong ? "stop song preview" : "preview song"}
+          >
+            {isPreviewingSong ? "⏹" : "♪"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => load.mutate()}
