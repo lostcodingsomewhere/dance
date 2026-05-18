@@ -148,23 +148,23 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
       }`}
     >
       <div className="flex items-baseline gap-1.5">
-        <span className="font-mono text-[10px] text-neutral-500 tabular-nums">
+        <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0">
           {Math.round(rec.score * 100)}
         </span>
-        <span className="truncate flex-1 text-neutral-100">
+        <span className="truncate flex-1 text-neutral-50 text-sm font-medium leading-tight">
           {rec.track_title ?? `Track #${rec.track_id}`}
         </span>
       </div>
-      <div className="text-[10px] text-neutral-500 truncate">
+      <div className="text-xs text-neutral-300 truncate mt-0.5">
         {rec.track_artist ?? "—"}
-        {rec.bpm != null && (
-          <span className="font-mono ml-1.5">· {rec.bpm.toFixed(1)} BPM</span>
-        )}
+      </div>
+      <div className="text-[10px] text-neutral-500 truncate font-mono mt-0.5">
+        {rec.bpm != null && <span>{rec.bpm.toFixed(1)} BPM</span>}
         {rec.key_camelot && (
-          <span className="font-mono ml-1.5">· {rec.key_camelot}</span>
+          <span className="ml-1.5">· {rec.key_camelot}</span>
         )}
         {energy != null && (
-          <span className="font-mono ml-1.5 text-neutral-600">· E{energy}</span>
+          <span className="ml-1.5 text-neutral-600">· E{energy}</span>
         )}
       </div>
       {rec.reasons.length > 0 && (
