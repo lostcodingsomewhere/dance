@@ -6,6 +6,7 @@ import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
+import { BpmSlider } from "./BpmSlider";
 import { EnergySparkline } from "./EnergySparkline";
 
 const VIEWS: { id: ViewName; label: string; hint: string }[] = [
@@ -58,24 +59,12 @@ export function MasterStrip() {
   const stop = useMutation({ mutationFn: api.abletonStop });
   const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
 
-  // Tap-to-edit BPM: click the number → text input pre-populated with the
-  // current tempo; Enter commits, Escape cancels, blur cancels.
+  // Click-to-edit BPM: opens a slider popover with genre BPM anchors.
+  // Commit fires on slider release (or Enter); Escape / outside-click cancels.
   const [editingBpm, setEditingBpm] = useState(false);
-  const [bpmDraft, setBpmDraft] = useState("");
-  function startEditBpm() {
-    setBpmDraft(state.tempo != null ? state.tempo.toFixed(1) : "");
-    setEditingBpm(true);
-  }
-  function commitBpm() {
-    const n = parseFloat(bpmDraft);
-    if (Number.isFinite(n)) {
-      const clamped = Math.min(240, Math.max(40, n));
-      setTempo.mutate(Number(clamped.toFixed(2)));
-    }
-    setEditingBpm(false);
-  }
-  function cancelBpm() {
-    setEditingBpm(false);
+  function commitBpm(n: number) {
+    const clamped = Math.min(240, Math.max(40, n));
+    setTempo.mutate(Number(clamped.toFixed(2)));
   }
 
   function halve() {
@@ -98,37 +87,31 @@ export function MasterStrip() {
         </div>
       </div>
 
-      {/* Master BPM block — click the number to edit, ×2/÷2 for quick jumps. */}
-      <div className="flex items-baseline gap-1.5 px-2">
-        {editingBpm ? (
-          <input
-            type="text"
-            inputMode="decimal"
-            value={bpmDraft}
-            autoFocus
-            onChange={(e) => setBpmDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitBpm();
-              else if (e.key === "Escape") cancelBpm();
-            }}
-            onBlur={cancelBpm}
-            onFocus={(e) => e.currentTarget.select()}
-            className="font-mono text-3xl text-amber-200 tabular-nums leading-none bg-neutral-900 border border-amber-500/40 rounded px-1.5 w-[5.5rem] outline-none"
-            aria-label="Set master BPM"
-          />
-        ) : (
-          <button
-            type="button"
-            onClick={startEditBpm}
-            title="Click to set BPM. Range 40–240."
-            className="font-mono text-3xl text-neutral-50 tabular-nums leading-none hover:text-amber-200 transition-colors cursor-pointer focus:outline-none focus:text-amber-200"
-          >
-            {state.tempo != null ? state.tempo.toFixed(1) : "--"}
-          </button>
-        )}
+      {/* Master BPM block — click the number for a slider with genre anchors,
+          ×2/÷2 for quick jumps. */}
+      <div className="relative flex items-baseline gap-1.5 px-2">
+        <button
+          type="button"
+          onClick={() => setEditingBpm((s) => !s)}
+          title="Click for BPM slider with genre anchors. Range 40–240."
+          className={`font-mono text-3xl tabular-nums leading-none transition-colors cursor-pointer focus:outline-none ${
+            editingBpm
+              ? "text-amber-200"
+              : "text-neutral-50 hover:text-amber-200 focus:text-amber-200"
+          }`}
+        >
+          {state.tempo != null ? state.tempo.toFixed(1) : "--"}
+        </button>
         <span className="text-neutral-500 text-[10px] uppercase tracking-wider">
           BPM
         </span>
+        {editingBpm && state.tempo != null && (
+          <BpmSlider
+            value={state.tempo}
+            onCommit={commitBpm}
+            onClose={() => setEditingBpm(false)}
+          />
+        )}
         <div className="flex flex-col ml-1">
           <button
             type="button"
