@@ -20,7 +20,7 @@ Full architecture: [`docs/architecture.md`](docs/architecture.md). Repo layout: 
 | Mac | MacBook Pro M2 Pro 14" (2023, 16 GB) |
 | DAW | **Ableton Live Standard 12.4** — locked at this version for `.als` template compatibility |
 | Controller | Akai APC40 mk2 (only MIDI device) |
-| Audio interface | Focusrite Scarlett 2i2 4th gen |
+| Audio interface | Focusrite Scarlett 4i4 4th gen — outs 1/2 = master to speakers, outs 3/4 = cue bus to headphones (swapped in from a 2i2 on 2026-05-18) |
 | Speakers | Edifier R1700BT |
 | Headphones | Bose wired (DJ headphones deferred) |
 

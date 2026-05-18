@@ -11,30 +11,34 @@ Update freely — keep entries dated, keep them short, keep the *what surprised 
 ### First-time setup (one-off)
 
 ```bash
-# Hardware (current — headphones-only, no speakers yet):
-#   1. Plug Scarlett 2i2 into Mac (USB-C). Mac picks it as default audio out.
+# Hardware (current rig — Scarlett 4i4 4th gen, 4 outs):
+#   1. Plug Scarlett 4i4 into Mac (USB-C). Mac picks it as default audio out.
 #   2. Plug APC40 mk2 into Mac (USB-C). Ableton sees it as a Control Surface.
-#   3. Bose plugged into Scarlett 1/4" front jack via GPM-103 adapter.
-#      Scarlett "Phones" knob ~9 o'clock to start; "Monitor" knob can stay at 0
-#      (no speakers in the chain).
-#   4. Edifier speakers will join the chain once they're at the desk —
-#      Scarlett TRS outs (back) → Hosa CPR-203 → Edifier RCA inputs.
-#      Until then, headphones are the only output.
+#   3. Speakers: Scarlett outs 1/2 (TRS, back) → Hosa CPR-203 → Edifier RCA.
+#   4. Cue: Scarlett outs 3/4 (or the front headphone jack assigned to mirror
+#      3/4 via Focusrite Control) → GPM-103 adapter → Bose.
+#      Front Phones knob ~9 o'clock to start. Direct Monitor disabled.
 #
 # Ableton:
-#   Preferences → Audio → Driver: CoreAudio, Audio Input: Scarlett 2i2 USB, Audio Output: Scarlett 2i2 USB
-#   Preferences → Link, Tempo & MIDI → Control Surface row: Akai APC40 mkII (Input/Output: APC40 mkII)
+#   Preferences → Audio → Driver: CoreAudio,
+#     Audio Input: Scarlett 4i4 USB, Audio Output: Scarlett 4i4 USB.
+#   Preferences → Audio → Output Config: enable both 1/2 and 3/4.
+#   Mixer: set Master → Audio To: 1/2. Set Cue Out: 3/4. Click Solo button →
+#     "Cue" mode (toggles between Solo-in-Place and PFL/Cue). With Cue mode
+#     on, a soloed track routes to 3/4 (headphones) instead of muting the
+#     rest of the mix.
+#   Preferences → Link, Tempo & MIDI → Control Surface row: Akai APC40 mkII
+#     (Input/Output: APC40 mkII).
 #
 # Dance:
 source .venv/bin/activate
 dance config --show               # confirms playlist URL, dirs, db
 ```
 
-> **Headphones-only mode (current):** Cueing (the "play this track silently in
-> headphones while the other is on the main outs") doesn't work without
-> speakers — the headphone jack mirrors the main outs on a 2i2. That's fine
-> for learning APC40 muscle memory and stem-mixing a single track. Real
-> A/B cueing arrives when the Edifiers join the chain.
+> **Independent cue is live:** with the 4i4, soloing a deck or clip in Live
+> routes audio to the Bose only — the Edifiers keep playing the master
+> untouched. This is the foundation for "preview a candidate before
+> committing to the master" workflows in the companion app.
 
 ### Every-session runbook ("I want to DJ now")
 
@@ -105,6 +109,18 @@ Append to the top. Use this template:
 **Broke:** what surprised me / what didn't work
 **Next time:** one thing to try
 ```
+
+### 2026-05-18 — Scarlett 2i2 → 4i4 swap (cue routing unlocked)
+
+**Played:** No DJing yet — hardware change session.
+**Worked:** Pulled the Scarlett 4i4 upgrade forward from "9-12 months out" because the cue/preview workflow in the companion app makes no sense without an independent stereo cue out. Sweetwater 45-day window made it cheap to swap inside the original buy.
+**Why now:** The proposed "preview before committing" UI (small ▶ on every rec / anchor card) requires the candidate to be auditioned in headphones without leaking to the master. A 2-output interface physically can't do that.
+**Broke:** Nothing yet — Kyle's RMA paperwork is the next dependency.
+**Next time:**
+1. Wire 4i4 per the updated runbook: outs 1/2 → Edifier, outs 3/4 → Bose via GPM-103.
+2. In Ableton Preferences → Audio → Output Config, enable both pairs; set Master → 1/2, Cue Out → 3/4. Toggle the mixer's solo button into Cue (PFL) mode.
+3. Solo a clip → confirm it plays in headphones only.
+4. Then green-light the FE cue/preview build (decoupled from this hardware day; lands as its own PR).
 
 ### 2026-05-16 — Bootstrap day (audio source meltdown + recovery)
 

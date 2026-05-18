@@ -1,15 +1,18 @@
-# Order — Sweetwater, 2026-05-11
+# Order — Sweetwater
 
-The initial hardware buy. **Total: $659.66.** Salesperson: **Kyle Sorensen (x3957)**.
+Paper trail for the rig: receipt, line items, warranty/return windows. For *why* each piece was chosen, see [`HARDWARE.md`](HARDWARE.md).
 
-For *why* each piece was chosen, see [`HARDWARE.md`](HARDWARE.md). This file is the paper trail — receipt, line items, warranty/return windows.
+- **Initial buy 2026-05-11** — $659.66.
+- **Swap 2026-05-18** — Scarlett 2i2 → Scarlett 4i4 (4th gen) inside the 45-day return window for independent cue/main outputs.
 
-## Line items
+Salesperson on both: **Kyle Sorensen (x3957)**.
+
+## Initial buy — 2026-05-11
 
 | Qty | Item | Unit | Notes |
 |---|---|---|---|
 | 1 | Akai APC40 mk2 | $329.00 | New. Akai discontinued 2022; while stock lasts. |
-| 1 | Focusrite Scarlett 2i2 (4th gen) | $215.00 | New. USB-C, 2023 revision. |
+| 1 | Focusrite Scarlett 2i2 (4th gen) | $215.00 | New. USB-C, 2023 revision. **Returned 2026-05-18 — swapped for 4i4.** |
 | 1 | StarTech USB-C to USB-C cable, 3 ft | $25.00 | Scarlett → Mac. |
 | 1 | StarTech USB-C to USB-B cable, 10 ft | $23.00 | APC40 → Mac. 10 ft for desk slack. |
 | 1 | Hosa CPR-203 TRS-to-RCA pair, 3 m | $20.00 | Scarlett TRS outs → Edifier RCA. |
@@ -17,6 +20,18 @@ For *why* each piece was chosen, see [`HARDWARE.md`](HARDWARE.md). This file is 
 | — | **Subtotal** | **$612.00** | |
 | — | CA sales tax + shipping (free) | $47.66 | |
 | — | **Order total** | **$659.66** | |
+
+## Swap — 2026-05-18
+
+Reason: cue/preview workflow needs the candidate clip to leave the box on a separate stereo pair from the master. The 2i2 has only one output bus.
+
+| Action | Item | Notes |
+|---|---|---|
+| Return | Focusrite Scarlett 2i2 (4th gen) | Sweetwater 45-day window. Refund −$215.00. |
+| Buy | Focusrite Scarlett 4i4 (4th gen) | New. USB-C. 4-in / 4-out. **Outs 1/2 = master, outs 3/4 = cue.** ~$299 list. |
+| Net | Difference | ~+$84 + CA tax delta. |
+
+Exact figures pending Kyle's RMA paperwork — update this table once Sweetwater issues the credit + new invoice.
 
 ## Important dates
 
@@ -43,5 +58,5 @@ If you find any of the above items cheaper at an authorized dealer (B&H, Sweetwa
 | Item | Plan | Trigger |
 |---|---|---|
 | DJ headphones (M50x / HD25 / HDJ-X7) | Deferred 4–8 weeks | Cueing on Bose becomes obviously broken |
-| Scarlett 4i4 (4-out interface) | Deferred 9–12 months | Need truly independent cue/main outs |
+| ~~Scarlett 4i4 (4-out interface)~~ | **Pulled in to 2026-05-18 — see Swap table above** | Needed for cue from day one |
 | USB hub | Dropped entirely | Replaced by direct USB-C cables |

@@ -55,7 +55,7 @@ This is the highest-frequency decision in the loop. In song-mode DJing the picke
 | Compat with current combo | Per-cell chips: key / BPM / energy fit vs combo |
 | Filter to a mood | Per-column vibe chips ("denser", "darker", "more vocal") |
 | Search escape hatch | ⌘K vibe search, auto-scoped to focused column |
-| Cue before firing | Headphone solo (v2 — APC40 manual cue only for v1) |
+| Cue before firing | Per-rec ▶ preview button → cue bus (Scarlett 4i4 outs 3/4 → headphones, master unaffected) |
 | Fire it | Tap cell in grid OR launch from APC40 |
 
 **Eyes-on demand: medium-high.** Scanning rec banners, reading compat chips. Faster cycle than song-mode picking.

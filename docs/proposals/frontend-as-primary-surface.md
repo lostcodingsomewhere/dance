@@ -218,7 +218,7 @@ Per CLAUDE.md workflow rule 2: play a **30-minute set end-to-end with Live minim
 - Replacing Ableton's audio engine.
 - Stem faders driven from the FE (read-only readouts only).
 - Set-arc personalization / "this is landing" feedback loop.
-- Cue-in-headphones from FE.
+- ~~Cue-in-headphones from FE.~~ Hardware (Scarlett 4i4, swapped in 2026-05-18) now exposes a dedicated cue bus on outs 3/4; the FE preview build (per-rec ▶ button → solo/cue route via OSC) is now in-scope but tracked as its own work, not this proposal.
 - Multi-DJ / multi-session collab.
 - iPad-first responsive layout.
 - Pipeline or DB schema changes beyond the per-column rec endpoint.

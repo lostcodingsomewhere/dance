@@ -1,35 +1,35 @@
 # Hardware
 
-The physical rig that runs Dance. As of **2026-05-11**, $660 spent at Sweetwater (Kyle Sorensen, x3957 — 90-day price-match window through ~2026-08-11).
-
-> **2026-05-16 — pending swap:** Messaged Kyle to upgrade the **Scarlett 2i2** → **Scarlett 4i4** for true independent cue/main outputs (well within the 45-day return window). The 2i2 section below is preserved for context; once Kyle confirms the swap I'll move the 2i2 to a "replaced" section and add the 4i4 properly.
+The physical rig that runs Dance. Initial buy **2026-05-11** ($660 at Sweetwater, Kyle Sorensen x3957). **2026-05-18:** swapped the Scarlett 2i2 → **Scarlett 4i4** (4th gen) inside the 45-day return window to unlock true independent cue/main outputs.
 
 Two independent USB chains. **Audio interface and controller never touch each other** — they both plug into the Mac.
 
 ```
 AUDIO (out of Mac):
-  Mac ──USB-C──▶ Scarlett 2i2 ──TRS-to-RCA──▶ Edifier R1700BT (main speakers)
-                              └──1/4" jack──▶ GPM-103 adapter ──▶ Bose (cue headphones)
+  Mac ──USB-C──▶ Scarlett 4i4 ──Outs 1/2 (TRS)──▶ Hosa CPR-203 ──▶ Edifier R1700BT (main speakers)
+                              └──Outs 3/4 (TRS or front headphone jack)──▶ GPM-103 adapter ──▶ Bose (cue)
 
 CONTROL (into Mac):
   APC40 mk2 ──USB-C-to-B──▶ Mac ──▶ Ableton Live (Session View)
 ```
+
+The 4i4 routes Outputs 1/2 to the main speakers and Outputs 3/4 to a separate stereo cue bus. In Ableton: **Preferences → Audio → Output Config:** enable both `1/2` and `3/4`; **Master → Audio To: 1/2**; **Cue Out: 3/4**. The Scarlett's front headphone amp can be assigned to mirror 3/4, which is the standard DJ workflow (preview a clip in headphones without it leaking to the master).
 
 ## Bill of materials
 
 | Item | Price | Role |
 |---|---|---|
 | **Akai APC40 mk2** (new) | $329 | Performance controller — only MIDI device, drives Ableton Session View |
-| **Focusrite Scarlett 2i2** (4th gen, new) | $215 | USB-C audio interface — main outs + headphone cue |
+| **Focusrite Scarlett 4i4** (4th gen, new) | ~$299 | USB-C audio interface — main outs 1/2 + cue outs 3/4 |
 | StarTech USB-C to USB-C, 3 ft | $25 | Scarlett → Mac (USB-C port) |
 | StarTech USB-C to USB-B, 10 ft | $23 | APC40 → Mac (USB-C port) |
-| Hosa CPR-203 TRS-to-RCA pair, 3 m | $20 | Scarlett TRS outs → Edifier RCA inputs |
+| Hosa CPR-203 TRS-to-RCA pair, 3 m | $20 | Scarlett outs 1/2 → Edifier RCA inputs |
 | Hosa GPM-103 1/4"-to-3.5mm adapter | FREE | Bose 3.5mm → Scarlett 1/4" headphone jack |
-| Subtotal | $612 | |
-| CA tax + free shipping | $47 | |
-| **Total** | **$660** | |
+| Subtotal | ~$696 | |
+| CA tax + free shipping | ~$54 | |
+| **Total** | **~$750** | exact figure confirmed when Sweetwater issues the swap RMA |
 
-Sales engineer: **Kyle Sorensen, Sweetwater, x3957**. Order detail in [`ORDER.md`](ORDER.md).
+Sales engineer: **Kyle Sorensen, Sweetwater, x3957**. Order detail (initial buy + 2i2→4i4 swap) in [`ORDER.md`](ORDER.md).
 
 ## Why each piece
 
@@ -51,22 +51,26 @@ Sales engineer: **Kyle Sorensen, Sweetwater, x3957**. Order detail in [`ORDER.md
 
 **Caveat:** Discontinued by Akai in 2022. Bought new from Sweetwater while stock lasts. Still natively supported in Ableton 12.4.
 
-### Scarlett 2i2 — the audio interface
+### Scarlett 4i4 — the audio interface
 
-**Role:** Gets audio out of the Mac with two independent volume controls (speakers + headphones) and balanced outputs for eventual gigs.
+**Role:** Two independent stereo output pairs so the master mix and the cue/preview bus can leave the box on different channels. Plus the usual: real DAC, low noise floor, balanced TRS outs for eventual gigs.
 
 **Why not optional:**
-1. Two independent outputs — laptop headphone jack physically can't do main + cue at separate volumes.
-2. Balanced TRS outputs — required for clean signal to club mixers (no hum/interference).
-3. Real DAC + low noise floor — laptop output isn't accurate enough for mixing decisions.
-4. Low latency — designed for real-time audio.
+1. **Two independent stereo outs** — DJ cueing requires sending the candidate clip to headphones *without* it leaking to the master. A 2-output interface (e.g. the 2i2 this rig started with) can't do that; the headphone jack mirrors outs 1/2.
+2. Balanced TRS outputs — clean signal to club mixers (no hum/interference).
+3. Low latency, real-time audio path.
 
 **Why this specific interface:**
-- Most widely-owned interface in the world, battle-tested.
-- 4th gen (2023), USB-C native.
-- $215 is the sweet spot — cheaper compromises on preamps/converters, more expensive adds features we don't need yet.
+- 4th-gen 4i4 (2023+), USB-C native, well-supported on macOS via CoreAudio (no driver install).
+- Independent monitor mix on the front panel — useful for "more click in headphones" without re-routing in software.
+- Standalone mode (works as a clean DAC even with the Mac off) — gig insurance.
 
-**Known limitation:** Only one stereo output pair. The headphone jack mirrors it. "Full" independent cue (separate hardware outputs for main vs cue) needs a 4-output interface (Scarlett 4i4, Audient iD14) — that's the **9–12 month upgrade trigger**.
+**Routing for cue/preview:**
+- **Outs 1/2** → Edifier R1700BT speakers (Ableton master).
+- **Outs 3/4** → cue bus (Ableton's Cue Out). Front headphone jack can be assigned to mirror 3/4 via the Scarlett's Direct Monitor / Focusrite Control mix.
+- Net effect: when the user clicks "preview" on a rec card or solo's a deck in Live, audio goes to the Bose only — the speakers keep playing the master untouched.
+
+**History:** Rig launched 2026-05-11 with a Scarlett 2i2 4th gen ($215, single stereo pair). The 2i2 was returned and swapped for the 4i4 on 2026-05-18 inside Sweetwater's 45-day window once it was clear independent cue was a workflow requirement, not a nice-to-have.
 
 ### USB cables — both USB-C, both bought separately
 
@@ -79,7 +83,7 @@ Sales engineer: **Kyle Sorensen, Sweetwater, x3957**. Order detail in [`ORDER.md
 
 ### Hosa CPR-203 — TRS-to-RCA cables
 
-Scarlett outputs are 1/4" TRS (pro standard); Edifier R1700BT wants RCA (consumer standard). This cable bridges them. No cable, no audio.
+Scarlett outputs are 1/4" TRS (pro standard); Edifier R1700BT wants RCA (consumer standard). This cable bridges the **master pair (outs 1/2 → Edifier)**. Outs 3/4 don't need a TRS-to-RCA cable since the cue path terminates at the front headphone jack.
 
 ### Hosa GPM-103 — 3.5 mm-to-1/4" adapter
 
@@ -128,6 +132,6 @@ Originally going to buy an Anker USB-A hub ($12). USB-C cable approach removed t
 | When this becomes annoying | Buy this |
 |---|---|
 | Cueing while main plays is awkward on Bose | DJ headphones (HD25 / M50x / HDJ-X7) — $160–250 |
-| Want truly independent cue/main outputs | Scarlett 4i4 / Audient iD14 — $300–350 |
 | Outgrow APC40 grid or want haptic | Push 3 or grandMA3 — $1000+ |
+| Need more inputs (recording a guest, multi-channel feed) | Already covered — 4i4 has 4 ins |
 | Need to take the rig out of the bedroom | Gig bag, power conditioner, XLR cables, IEC kettle leads |
