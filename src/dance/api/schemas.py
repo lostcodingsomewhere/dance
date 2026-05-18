@@ -175,6 +175,25 @@ class ColumnRecsRequest(BaseModel):
     exclude_track_ids: list[int] = Field(default_factory=list)
 
 
+class PreviewRequest(BaseModel):
+    """Audition a candidate clip through the Cue track (headphones only)."""
+
+    track_id: int
+    # One of "drums" / "bass" / "vocals" / "other" / "mix". For stem columns
+    # we preview the matching StemFile; for "mix" we preview the original
+    # full-track audio.
+    column: str
+
+
+class PreviewResult(_Base):
+    ok: bool
+    cue_track_idx: int | None = None
+    slot: int | None = None
+    audio_path: str | None = None
+    label: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------
@@ -468,6 +487,8 @@ __all__ = [
     "ColumnRecsRequest",
     "ColumnRecsResponse",
     "FireClipRequest",
+    "PreviewRequest",
+    "PreviewResult",
     "IngestCommitRequest",
     "IngestPreviewRequest",
     "IngestPreviewResponse",

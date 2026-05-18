@@ -110,6 +110,23 @@ class AbletonOSCClient:
         """Set a track's color via Live's palette (32-bit RGB int)."""
         self._send("/live/track/set/color", track, color)
 
+    def set_track_output_routing_type(self, track: int, type_str: str) -> None:
+        """Set a track's output routing type (e.g. ``"Ext. Out"``, ``"Master"``).
+
+        Used to route the Cue deck track to outs 3/4 instead of Master so
+        previews play through headphones without leaking to the speakers.
+        Available values come from Live's Preferences → Audio → Output Config.
+        """
+        self._send("/live/track/set/output_routing_type", track, type_str)
+
+    def set_track_output_routing_channel(self, track: int, channel: str) -> None:
+        """Set a track's output routing channel (e.g. ``"3/4"``, ``"1/2"``).
+
+        Only meaningful when output routing type is ``"Ext. Out"``. With the
+        Scarlett 4i4, ``"3/4"`` is the dedicated cue bus.
+        """
+        self._send("/live/track/set/output_routing_channel", track, channel)
+
     # ------------------------------------------------------------------
     # Song-level track/scene management
     #

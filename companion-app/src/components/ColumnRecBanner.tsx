@@ -2,6 +2,11 @@ import { useColumnRecs } from "../hooks/useColumnRecs";
 import { pushTrackToLive } from "../api";
 import { useMutation } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  useStartPreview,
+  useStopPreview,
+  usePreviewState,
+} from "../hooks/usePreview";
 import type { ColumnRec } from "../types";
 import { store } from "../store";
 
@@ -50,7 +55,11 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
         </div>
       )}
       {q.data?.recs.map((rec) => (
-        <RecCard key={`${rec.track_id}-${rec.stem_file_id ?? "mix"}`} rec={rec} />
+        <RecCard
+          key={`${rec.track_id}-${rec.stem_file_id ?? "mix"}`}
+          rec={rec}
+          column={column}
+        />
       ))}
       {q.data && q.data.recs.length === 0 && !q.isLoading && (
         <div className="text-[10px] text-neutral-600 px-2 py-2 italic">
@@ -61,12 +70,21 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
   );
 }
 
-function RecCard({ rec }: { rec: ColumnRec }) {
+function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
   const qc = useQueryClient();
+  const startPreview = useStartPreview();
+  const stopPreview = useStopPreview();
+  const previewing = usePreviewState();
+  const isPreviewing =
+    previewing?.trackId === rec.track_id && previewing?.column === column;
+
   const load = useMutation({
     mutationFn: () => pushTrackToLive(rec.track_id, { includeStems: true }),
     onSuccess: (result) => {
-      // Register the deck in local state so SceneMap + NowPlaying see it.
+      // Auto-stop any preview when committing — the candidate is now on
+      // master, so cue should go silent.
+      if (previewing) stopPreview.mutate();
+      // Register the deck in local state so SceneGrid + NowPlaying see it.
       store.registerDeck({
         track_id: rec.track_id,
         scene_index: result.scene_index,
@@ -78,9 +96,23 @@ function RecCard({ rec }: { rec: ColumnRec }) {
     },
   });
 
+  function onPreview() {
+    if (isPreviewing) {
+      stopPreview.mutate();
+    } else {
+      startPreview.mutate({ trackId: rec.track_id, column });
+    }
+  }
+
   const energy = rec.floor_energy;
   return (
-    <div className="rounded-md border border-neutral-800/70 bg-neutral-900/40 px-2 py-1.5 text-xs">
+    <div
+      className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${
+        isPreviewing
+          ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
+          : "border-neutral-800/70 bg-neutral-900/40"
+      }`}
+    >
       <div className="flex items-baseline gap-1.5">
         <span className="font-mono text-[10px] text-neutral-500 tabular-nums">
           {Math.round(rec.score * 100)}
@@ -106,14 +138,34 @@ function RecCard({ rec }: { rec: ColumnRec }) {
           {rec.reasons.join(" · ")}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => load.mutate()}
-        disabled={load.isPending}
-        className="mt-1 w-full text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
-      >
-        {load.isPending ? "loading…" : "Load → Live"}
-      </button>
+      <div className="mt-1 flex gap-1">
+        <button
+          type="button"
+          onClick={onPreview}
+          disabled={startPreview.isPending || stopPreview.isPending}
+          title={
+            isPreviewing
+              ? "Stop preview (Cue track → headphones)"
+              : "Preview in headphones only (Scarlett outs 3/4)"
+          }
+          className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
+            isPreviewing
+              ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
+              : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+          }`}
+          aria-label={isPreviewing ? "stop preview" : "preview"}
+        >
+          {isPreviewing ? "⏹" : "▶"}
+        </button>
+        <button
+          type="button"
+          onClick={() => load.mutate()}
+          disabled={load.isPending}
+          className="flex-1 text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
+        >
+          {load.isPending ? "loading…" : "Load → Live"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -19,6 +19,8 @@ from dance.api.schemas import (
     FireClipRequest,
     LoadTrackRequest,
     LoadTrackResult,
+    PreviewRequest,
+    PreviewResult,
     TempoRequest,
     VolumeRequest,
 )
@@ -243,3 +245,87 @@ def clean_decks(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     deck columns the companion no longer knows about — typically after a
     backend restart that lost its in-memory cache."""
     return {"ok": True, **bridge.clean_live_decks()}
+
+
+# ---------------------------------------------------------------------------
+# Cue / preview — audition a candidate in headphones without leaking to the
+# master speakers. Routes through a dedicated "Cue" track in Live whose
+# output is set to the 4i4's outs 3/4.
+# ---------------------------------------------------------------------------
+
+
+_STEM_COLUMNS = {"drums", "bass", "vocals", "other"}
+_MIX_COLUMN = "mix"
+
+
+def _resolve_preview_path(
+    session: Session, track_id: int, column: str
+) -> str | None:
+    """Look up the audio file on disk for a given preview request.
+
+    For stem columns we return the matching StemFile.path; for the mix
+    column the original Track.file_path (which is the full-mix audio).
+    """
+    if column == _MIX_COLUMN:
+        track = session.query(Track).filter(Track.id == track_id).one_or_none()
+        return track.file_path if track and track.file_path else None
+    if column not in _STEM_COLUMNS:
+        return None
+    stem = (
+        session.query(StemFile)
+        .filter(StemFile.track_id == track_id, StemFile.kind == column)
+        .one_or_none()
+    )
+    return stem.path if stem and stem.path else None
+
+
+@router.post("/preview", response_model=PreviewResult)
+def preview(
+    body: PreviewRequest,
+    bridge: AbletonBridge = Depends(get_bridge),
+    session: Session = Depends(get_session),
+) -> PreviewResult:
+    """Start auditioning a candidate through the Cue track (headphones only).
+
+    Resolves the audio file from the track + column, then drops it into
+    Live's Cue track and fires it. Replaces any in-progress preview. The
+    master speakers are untouched — the Cue track is permanently routed to
+    outs 3/4 on the Scarlett 4i4.
+    """
+    if body.column != _MIX_COLUMN and body.column not in _STEM_COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown column {body.column!r}; must be mix or one of {sorted(_STEM_COLUMNS)}",
+        )
+
+    audio_path = _resolve_preview_path(session, body.track_id, body.column)
+    if audio_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No audio file for track {body.track_id} / column {body.column!r}",
+        )
+
+    track = session.query(Track).filter(Track.id == body.track_id).one_or_none()
+    label = (
+        f"PREVIEW · {(track.title if track else None) or f'#{body.track_id}'} ({body.column})"
+    )
+
+    try:
+        result = bridge.preview_audio(audio_path, label=label)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not reach Ableton Live over OSC: {exc}",
+        ) from exc
+
+    return PreviewResult(**result)
+
+
+@router.post("/preview/stop", response_model=PreviewResult)
+def preview_stop(bridge: AbletonBridge = Depends(get_bridge)) -> PreviewResult:
+    """Stop the in-progress preview and clear the Cue track's slot.
+
+    Idempotent: safe to call when nothing is previewing.
+    """
+    result = bridge.stop_preview()
+    return PreviewResult(ok=result.get("ok", True), warnings=[])

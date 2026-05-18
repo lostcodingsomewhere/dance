@@ -9,6 +9,8 @@ import type {
   Job,
   PipelineRecentTrack,
   PipelineStatus,
+  PreviewRequest,
+  PreviewResult,
   Recommendation,
   RecommendRequest,
   Region,
@@ -288,6 +290,17 @@ export function abletonStopTrack(trackIndex: number): Promise<void> {
 
 export function abletonStopAllClips(): Promise<void> {
   return request<void>("/ableton/transport/stop-all", { method: "POST" });
+}
+
+export function abletonPreview(body: PreviewRequest): Promise<PreviewResult> {
+  return request<PreviewResult>("/ableton/preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function abletonPreviewStop(): Promise<PreviewResult> {
+  return request<PreviewResult>("/ableton/preview/stop", { method: "POST" });
 }
 
 export function abletonSetVolume(

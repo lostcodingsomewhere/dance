@@ -103,6 +103,20 @@ export interface ColumnRecsRequest {
   exclude_track_ids?: number[];
 }
 
+export interface PreviewRequest {
+  track_id: number;
+  column: string;
+}
+
+export interface PreviewResult {
+  ok: boolean;
+  cue_track_idx?: number | null;
+  slot?: number | null;
+  audio_path?: string | null;
+  label?: string | null;
+  warnings?: string[];
+}
+
 export interface SessionPlay {
   track_id: number;
   played_at: string; // ISO datetime

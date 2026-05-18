@@ -77,6 +77,10 @@ class FakeAbletonBridge:
         # Override-able return; default mimics a happy 5-stem push.
         self.push_return: dict[str, Any] | None = None
         self.push_raises: Exception | None = None
+        # Recorded preview invocations.
+        self.preview_calls: list[dict[str, Any]] = []
+        self.preview_raises: Exception | None = None
+        self.stop_preview_calls: int = 0
 
     def start(self) -> None:
         self.started = True
@@ -115,6 +119,25 @@ class FakeAbletonBridge:
                 if any(str(s.kind).lower() == kind for s in stems):
                     indices[kind] = i
         return {"scene_index": 0, "track_indices": indices, "warnings": []}
+
+    def preview_audio(
+        self, audio_path: str, *, label: str | None = None
+    ) -> dict[str, Any]:
+        self.preview_calls.append({"audio_path": audio_path, "label": label})
+        if self.preview_raises is not None:
+            raise self.preview_raises
+        return {
+            "ok": True,
+            "cue_track_idx": 5,
+            "slot": 0,
+            "audio_path": audio_path,
+            "label": label,
+            "warnings": [],
+        }
+
+    def stop_preview(self) -> dict[str, Any]:
+        self.stop_preview_calls += 1
+        return {"ok": True, "cleared": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1865,3 +1888,95 @@ def test_recommend_by_column_exclude_tracks(
     titles = [rec["track_title"] for rec in body["recs"]]
     assert "excluded" not in titles
     assert "keeper" in titles
+
+
+# ---------------------------------------------------------------------------
+# Preview / cue endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_preview_stem_routes_to_bridge_with_stem_file_path(
+    client: TestClient, session, fake_bridge, make_track, tmp_path
+):
+    """POST /ableton/preview with column=drums resolves to the drums
+    StemFile.path and asks the bridge to audition it on the Cue track."""
+    from dance.core.database import StemFile
+
+    track = make_track(title="Probe")
+    stem_path = tmp_path / "probe-drums.wav"
+    stem_path.write_bytes(b"")
+    session.add(
+        StemFile(
+            track_id=track.id,
+            kind="drums",
+            path=str(stem_path),
+            created_at=now_utc(),
+        )
+    )
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/preview",
+        json={"track_id": track.id, "column": "drums"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["audio_path"] == str(stem_path)
+    assert "drums" in (body["label"] or "")
+    assert len(fake_bridge.preview_calls) == 1
+    assert fake_bridge.preview_calls[0]["audio_path"] == str(stem_path)
+
+
+def test_preview_mix_uses_full_track_file_path(
+    client: TestClient, session, fake_bridge, make_track, tmp_path
+):
+    """column='mix' previews the original full-track audio file, not a stem."""
+    fpath = tmp_path / "full-mix.mp3"
+    fpath.write_bytes(b"")
+    track = make_track(title="Full Mix Probe", file_path=str(fpath))
+    session.commit()
+
+    r = client.post(
+        "/api/v1/ableton/preview",
+        json={"track_id": track.id, "column": "mix"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["audio_path"] == str(fpath)
+    assert fake_bridge.preview_calls[-1]["audio_path"] == str(fpath)
+
+
+def test_preview_unknown_column_rejected(
+    client: TestClient, session, fake_bridge, make_track
+):
+    track = make_track(title="X")
+    session.commit()
+    r = client.post(
+        "/api/v1/ableton/preview",
+        json={"track_id": track.id, "column": "guitar"},
+    )
+    assert r.status_code == 400
+    assert "unknown column" in r.json()["detail"]
+
+
+def test_preview_missing_audio_returns_404(
+    client: TestClient, session, fake_bridge, make_track
+):
+    """A track with no matching StemFile for the requested column → 404."""
+    track = make_track(title="Headless")  # no stems for any column
+    session.commit()
+    r = client.post(
+        "/api/v1/ableton/preview",
+        json={"track_id": track.id, "column": "drums"},
+    )
+    assert r.status_code == 404
+
+
+def test_preview_stop_clears_bridge(
+    client: TestClient, fake_bridge
+):
+    r = client.post("/api/v1/ableton/preview/stop")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert fake_bridge.stop_preview_calls == 1

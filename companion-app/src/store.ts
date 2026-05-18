@@ -15,6 +15,13 @@ interface AppState {
   /** Ordered set of track ids the user is staging for a future set. */
   stack: number[];
   commandBarOpen: boolean;
+  /**
+   * Currently auditioning candidate in the Cue track (headphones-only via
+   * Scarlett outs 3/4). Cleared on stopPreview or when the user commits a
+   * track to a real deck row. Local state only — backend tracks the actual
+   * Cue clip via the bridge.
+   */
+  previewing: { trackId: number; column: string } | null;
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -52,6 +59,7 @@ const initial: AppState = {
   loadedDecks: {},
   stack: [],
   commandBarOpen: false,
+  previewing: null,
   ...readPersisted(),
 };
 
@@ -159,6 +167,10 @@ export const store = {
   closeCommandBar(): void {
     if (!state.commandBarOpen) return;
     state = { ...state, commandBarOpen: false };
+    emit();
+  },
+  setPreviewing(p: { trackId: number; column: string } | null): void {
+    state = { ...state, previewing: p };
     emit();
   },
 };

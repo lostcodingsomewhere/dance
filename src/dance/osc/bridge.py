@@ -98,6 +98,12 @@ class AbletonBridge:
         # without having to query Live directly.
         self._deck_scenes: dict[int, int] = {}
 
+        # Index of the dedicated "Cue" track in Live — output routed to the
+        # Scarlett 4i4's outs 3/4 so previews play in headphones without
+        # leaking to the master speakers. Lazy-created on first preview call.
+        # See preview_audio() / stop_preview().
+        self._cue_track_idx: int | None = None
+
         # Wire incoming OSC → state updates.
         self.listener.on("/live/song/get/tempo", self._on_tempo)
         self.listener.on("/live/song/get/beat", self._on_beat)
@@ -243,7 +249,8 @@ class AbletonBridge:
         left off without creating duplicate deck columns in Live.
 
         Returns the recovered ``_deck_columns`` map or ``None`` if Live
-        isn't reachable.
+        isn't reachable. Also recovers ``_cue_track_idx`` if a track named
+        "Cue" is present.
         """
         names = self.get_track_names(timeout=timeout)
         if names is None:
@@ -254,7 +261,13 @@ class AbletonBridge:
                 if name == expected and kind not in recovered:
                     recovered[kind] = idx
                     break
-        # Only adopt if we found ALL 5 columns; partial recoveries (user
+        # Adopt the Cue track too — partial recovery is fine here since the
+        # Cue track is independent of the deck columns.
+        for idx, name in enumerate(names):
+            if name == self._CUE_DISPLAY_NAME:
+                self._cue_track_idx = idx
+                break
+        # Only adopt deck columns if we found ALL 5; partial recoveries (user
         # renamed one) are confusing — better to create a fresh set.
         if len(recovered) == len(self._DECK_DISPLAY_NAMES):
             self._deck_columns = recovered
@@ -262,9 +275,9 @@ class AbletonBridge:
         return None
 
     def clean_live_decks(self, timeout: float = 1.0) -> dict[str, Any]:
-        """Delete every ``Deck *`` track in Live (covers stragglers from
-        previous backend runs) and reset the bridge cache. Returns a summary
-        of what was removed.
+        """Delete every ``Deck *`` track AND the Cue track in Live (covers
+        stragglers from previous backend runs) and reset the bridge cache.
+        Returns a summary of what was removed.
 
         Deletes in reverse-index order so the upstream indices don't shift
         out from under us mid-iteration.
@@ -272,7 +285,7 @@ class AbletonBridge:
         names = self.get_track_names(timeout=timeout)
         if names is None:
             return {"deleted": 0, "warning": "Live unreachable; nothing deleted."}
-        expected = set(self._DECK_DISPLAY_NAMES.values())
+        expected = set(self._DECK_DISPLAY_NAMES.values()) | {self._CUE_DISPLAY_NAME}
         deck_indices = [i for i, n in enumerate(names) if n in expected]
         for idx in sorted(deck_indices, reverse=True):
             try:
@@ -281,6 +294,7 @@ class AbletonBridge:
                 logger.warning("delete_track(%d) failed: %s", idx, exc)
         self._deck_columns = None
         self._deck_scenes = {}
+        self._cue_track_idx = None
         return {"deleted": len(deck_indices), "indices": sorted(deck_indices)}
 
     # ------------------------------------------------------------------
@@ -305,6 +319,18 @@ class AbletonBridge:
         "vocals": "Deck Vocals",
         "other":  "Deck Other",
     }
+
+    # Dedicated Cue track — output routed to outs 3/4 (the Scarlett 4i4's
+    # cue bus). Created next to the deck columns; always in this exact
+    # configuration so previews never leak to master.
+    _CUE_DISPLAY_NAME: str = "Cue"
+    _CUE_COLOR: int = 0xFFE066  # warm yellow — visually distinct from decks
+    _CUE_OUTPUT_TYPE: str = "Ext. Out"
+    _CUE_OUTPUT_CHANNEL: str = "3/4"
+    # Slot inside the Cue track used for all preview clips. We always
+    # delete + recreate so anchor-mode fire_scene calls never accidentally
+    # re-trigger a stale preview.
+    _CUE_SLOT: int = 0
 
     def reset_deck_columns(self) -> None:
         """Forget the cached deck-column indices AND the scene→track map.
@@ -461,3 +487,127 @@ class AbletonBridge:
             columns[kind] = idx
             idx += 1
         return columns
+
+    # ------------------------------------------------------------------
+    # Cue / preview — audition a candidate clip in headphones without
+    # leaking to master. Requires the Scarlett 4i4 (or similar 4-out
+    # interface) with outs 3/4 enabled in Live's Output Config.
+    # ------------------------------------------------------------------
+
+    def _ensure_cue_track(self, *, num_tracks_timeout: float = 0.5) -> int:
+        """Return the Cue track's index, creating + routing it if needed.
+
+        The Cue track lives next to the deck columns. Its output is set to
+        ``Ext. Out → 3/4`` (the 4i4's cue bus). Once created, it's reused
+        for the life of the bridge.
+        """
+        if self._cue_track_idx is not None:
+            return self._cue_track_idx
+
+        # Try to adopt an existing "Cue" track first.
+        recovered = self.recover_deck_columns(timeout=num_tracks_timeout)
+        if self._cue_track_idx is not None:
+            return self._cue_track_idx
+
+        # Otherwise create it. Predict its index from the current track
+        # count (same trick _create_deck_columns uses).
+        base = self.get_num_tracks(timeout=num_tracks_timeout)
+        if base is None:
+            # Live unreachable — best-effort prediction so we don't loop on
+            # a closed Live. Caller will see preview fail.
+            base = 0
+        if recovered is not None:
+            # Deck columns adopted; Cue appends after them.
+            base = max(max(self._deck_columns.values()) + 1, base) if self._deck_columns else base
+        idx = base
+        self.client.create_audio_track(-1)
+        self.client.set_track_name(idx, self._CUE_DISPLAY_NAME)
+        self.client.set_track_color(idx, self._CUE_COLOR)
+        self.client.set_track_output_routing_type(idx, self._CUE_OUTPUT_TYPE)
+        self.client.set_track_output_routing_channel(idx, self._CUE_OUTPUT_CHANNEL)
+        self._cue_track_idx = idx
+        return idx
+
+    def preview_audio(
+        self,
+        audio_path: str,
+        *,
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        """Audition ``audio_path`` through the Cue track (headphones only).
+
+        Stops any in-progress preview first, then drops the new clip into
+        the Cue track's slot and fires it. The clip is replaced on every
+        call (rather than reused) so the user can rapidly cycle through
+        previews without accumulated state.
+
+        Returns ``{"ok": bool, "cue_track_idx": int, "slot": int, "audio_path": str,
+        "label": str | None, "warnings": [str, ...]}``.
+        """
+        warnings: list[str] = []
+        path = Path(audio_path)
+        if not path.exists():
+            return {
+                "ok": False,
+                "cue_track_idx": self._cue_track_idx,
+                "slot": self._CUE_SLOT,
+                "audio_path": str(path),
+                "label": label,
+                "warnings": [f"Audio file not found: {audio_path!r}"],
+            }
+
+        cue_idx = self._ensure_cue_track()
+
+        # Stop + clear any prior preview so the new one starts cleanly.
+        try:
+            self.client.stop_clip(cue_idx, self._CUE_SLOT)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        try:
+            self.client.delete_clip(cue_idx, self._CUE_SLOT)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+
+        try:
+            self.client.create_audio_clip(cue_idx, self._CUE_SLOT, str(path))
+            if label:
+                self.client.set_clip_name(cue_idx, self._CUE_SLOT, label)
+            self.client.fire_clip(cue_idx, self._CUE_SLOT)
+        except OSError as exc:
+            warnings.append(f"OSC send failed: {exc}")
+            return {
+                "ok": False,
+                "cue_track_idx": cue_idx,
+                "slot": self._CUE_SLOT,
+                "audio_path": str(path),
+                "label": label,
+                "warnings": warnings,
+            }
+
+        return {
+            "ok": True,
+            "cue_track_idx": cue_idx,
+            "slot": self._CUE_SLOT,
+            "audio_path": str(path),
+            "label": label,
+            "warnings": warnings,
+        }
+
+    def stop_preview(self) -> dict[str, Any]:
+        """Stop the current preview and clear the Cue track's slot.
+
+        Idempotent — safe to call when nothing is previewing. Deleting the
+        clip (not just stopping) prevents an accidental ``fire_scene(0)``
+        from re-triggering a stale preview during anchor mode.
+        """
+        if self._cue_track_idx is None:
+            return {"ok": True, "cleared": False}
+        try:
+            self.client.stop_clip(self._cue_track_idx, self._CUE_SLOT)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        try:
+            self.client.delete_clip(self._cue_track_idx, self._CUE_SLOT)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        return {"ok": True, "cleared": True}
