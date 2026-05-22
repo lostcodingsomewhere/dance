@@ -153,8 +153,11 @@ export function Waveform({
   const playX = showPlayhead ? Math.max(0, Math.min(1, position!)) * 100 : 0;
 
   return (
-    <svg
+    <div
       className={className}
+      style={{ position: "relative", width: "100%", height: H }}
+    >
+    <svg
       viewBox={`0 0 100 ${H}`}
       preserveAspectRatio="none"
       width="100%"
@@ -179,34 +182,21 @@ export function Waveform({
           fill={b.fill}
         />
       ))}
-      {/* Section start-line + label badge at the top of each band so
-          DJs can see WHAT section is coming up, not just a colored blob.
-          Label uses the section_label (drop / buildup / breakdown / ...)
-          truncated to first 4 chars to fit narrow combo cards. */}
+      {/* Section start lines. Labels themselves render as HTML overlays
+          (see the wrapping div outside the SVG) — SVG <text> would get
+          stretched by preserveAspectRatio="none" since the viewBox is
+          100 units wide regardless of the SVG's pixel width. */}
       {sectionBands.map((b) => (
-        <g key={`section-marker-${b.id}`} data-testid="waveform-section-marker">
-          <line
-            x1={b.x}
-            x2={b.x}
-            y1={0}
-            y2={H}
-            stroke={b.markerStroke}
-            strokeWidth="0.4"
-          />
-          {b.w > 6 && (
-            <text
-              x={b.x + 0.6}
-              y={H * 0.32}
-              fill={b.labelFill}
-              fontSize={H * 0.36}
-              fontFamily="ui-monospace, monospace"
-              fontWeight="600"
-              style={{ textTransform: "uppercase", letterSpacing: "0.5px" }}
-            >
-              {b.label.slice(0, 4)}
-            </text>
-          )}
-        </g>
+        <line
+          key={`section-marker-${b.id}`}
+          data-testid="waveform-section-marker"
+          x1={b.x}
+          x2={b.x}
+          y1={0}
+          y2={H}
+          stroke={b.markerStroke}
+          strokeWidth="0.4"
+        />
       ))}
       {/* Cue / phrase ticks — solid lines for hard boundaries, with a
           small downward-pointing triangle at the top so they read as
@@ -255,5 +245,36 @@ export function Waveform({
         />
       )}
     </svg>
+      {/* Section labels — rendered as HTML overlays so they don't get
+          stretched by the SVG's preserveAspectRatio="none". One badge
+          per section, positioned at the section's start as a % of the
+          waveform's width. Skips bands too narrow to fit text. */}
+      {sectionBands
+        .filter((b) => b.w > 4)
+        .map((b) => (
+          <div
+            key={`label-${b.id}`}
+            data-testid="waveform-section-label"
+            style={{
+              position: "absolute",
+              left: `${b.x}%`,
+              top: 1,
+              color: b.labelFill,
+              fontSize: Math.max(8, Math.min(11, H * 0.36)),
+              fontFamily: "ui-monospace, monospace",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.5px",
+              lineHeight: 1,
+              paddingLeft: 2,
+              pointerEvents: "none",
+              userSelect: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {b.label.slice(0, 4)}
+          </div>
+        ))}
+    </div>
   );
 }
