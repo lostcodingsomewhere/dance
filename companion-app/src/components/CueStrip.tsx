@@ -3,6 +3,7 @@ import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
+import { useRegions } from "../hooks/useRegions";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
@@ -28,6 +29,11 @@ export function CueStrip() {
   const stopPreview = useStopPreview();
   const trackQuery = useTrack(previewing?.trackId);
   const waveform = useTrackWaveform(previewing?.trackId);
+  // Regions hang off the full track (sections/cues are detected on the
+  // mix, not the stem) — overlay them on the cue waveform so the DJ can
+  // see "we're about to hit the drop" before committing the track to
+  // master.
+  const regions = useRegions(previewing?.trackId ?? null);
   const ableton = useAbletonState();
   const qc = useQueryClient();
 
@@ -123,6 +129,8 @@ export function CueStrip() {
           height={24}
           className="text-cyan-400/70"
           playheadColor="rgb(34, 211, 238)"
+          regions={regions.data ?? undefined}
+          durationSeconds={waveform.data?.duration_seconds}
         />
       </div>
       <div className="shrink-0 flex items-center gap-1.5">

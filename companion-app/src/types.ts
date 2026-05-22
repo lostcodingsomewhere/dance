@@ -158,6 +158,8 @@ export interface AbletonState {
   track_volumes: Record<string, number>;
   /** track_index → output meter level 0-1. Subscribed on deck columns. */
   track_meters: Record<string, number>;
+  /** track_index → currently-playing clip's playing_position in beats. */
+  playing_positions: Record<string, number>;
 }
 
 export const EMPTY_ABLETON_STATE: AbletonState = {
@@ -167,6 +169,7 @@ export const EMPTY_ABLETON_STATE: AbletonState = {
   playing_clips: {},
   track_volumes: {},
   track_meters: {},
+  playing_positions: {},
 };
 
 export interface TrackFilters {

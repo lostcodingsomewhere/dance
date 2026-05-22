@@ -245,6 +245,20 @@ class AbletonOSCClient:
     def stop_listen_track_meter(self, track: int) -> None:
         self._send("/live/track/stop_listen/output_meter_level", track)
 
+    def start_listen_clip_position(self, track: int, slot: int) -> None:
+        """Subscribe to a clip's playing_position (beat-accurate playhead).
+        Reply: ``/live/clip/get/playing_position`` (track, slot, beats)."""
+        self._send("/live/clip/start_listen/playing_position", track, slot)
+
+    def stop_listen_clip_position(self, track: int, slot: int) -> None:
+        self._send("/live/clip/stop_listen/playing_position", track, slot)
+
+    def set_clip_start_marker(self, track: int, slot: int, beats: float) -> None:
+        """Set where the clip's playback begins on next fire. Takes effect
+        only after the clip is re-fired; doesn't seek a currently-playing
+        clip. ``beats`` is floating-point beats from the clip's origin."""
+        self._send("/live/clip/set/start_marker", track, slot, beats)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

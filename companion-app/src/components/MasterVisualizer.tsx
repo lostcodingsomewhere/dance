@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
+import { useRegions } from "../hooks/useRegions";
+import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform } from "../hooks/useWaveform";
 import { STEM_ONLY_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
@@ -25,10 +27,12 @@ import { Waveform } from "./Waveform";
 export function MasterVisualizer() {
   const ableton = useAbletonState();
   const deckMap = useDeckMap();
+  const seek = useSeekClip();
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
   const playing = ableton.playing_clips ?? {};
+  const positions = ableton.playing_positions ?? {};
   const tempo = ableton.tempo;
   const beat = ableton.beat;
 
@@ -64,15 +68,31 @@ export function MasterVisualizer() {
       <div className="text-[10px] uppercase tracking-widest text-neutral-500 px-1">
         Master · stacked stems
       </div>
-      {STEM_ONLY_COLUMNS.map((role) => (
-        <StemRow
-          key={role}
-          role={role}
-          cell={playingByRole?.[role]}
-          tempo={tempo}
-          beat={beat}
-        />
-      ))}
+      {STEM_ONLY_COLUMNS.map((role) => {
+        const cell = playingByRole?.[role];
+        const trackIdx = columns?.[role];
+        const livePosBeats =
+          trackIdx != null ? positions[String(trackIdx)] : undefined;
+        return (
+          <StemRow
+            key={role}
+            role={role}
+            cell={cell}
+            trackIdx={trackIdx}
+            tempo={tempo}
+            beat={beat}
+            livePosBeats={livePosBeats}
+            onSeek={(beats) => {
+              if (trackIdx == null || cell == null) return;
+              seek.mutate({
+                track: trackIdx,
+                slot: cell.scene_index,
+                positionBeats: beats,
+              });
+            }}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -88,31 +108,50 @@ const ROLE_TINT: Record<StemRole, string> = {
 function StemRow({
   role,
   cell,
+  trackIdx,
   tempo,
   beat,
+  livePosBeats,
+  onSeek,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
+  trackIdx: number | undefined;
   tempo: number | null;
   beat: number | null;
+  livePosBeats: number | undefined;
+  onSeek: (beats: number) => void;
 }) {
   const waveform = useStemWaveform(cell?.stem_file_id);
+  // Region overlays come from the *source track* (not the stem itself) —
+  // sections + cues are detected on the mix, and the stems share that
+  // structure. ``useRegions`` no-ops when track_id is null so silent rows
+  // don't fire spurious requests.
+  const regions = useRegions(cell?.track_id ?? null);
   const tint = ROLE_TINT[role];
 
-  // Wrapping playhead: clips loop by default (LoopOn=true in our writer),
-  // so position = (elapsed seconds) mod (clip duration).
+  // Playhead position 0-1. Prefer Live's per-clip playing_position (beat-
+  // accurate, respects loop wraps automatically) over our master-beat
+  // estimate. Fall back to the estimate when subscription data hasn't
+  // landed yet — keeps the playhead from flickering on cold start.
+  const duration = waveform.data?.duration_seconds;
   let position: number | undefined = undefined;
-  if (
-    cell &&
-    tempo != null &&
-    beat != null &&
-    waveform.data?.duration_seconds &&
-    waveform.data.duration_seconds > 0
-  ) {
-    const elapsedSec = (beat / tempo) * 60;
-    position =
-      (elapsedSec % waveform.data.duration_seconds) /
-      waveform.data.duration_seconds;
+  if (cell && duration && duration > 0 && tempo != null) {
+    if (livePosBeats != null) {
+      const elapsedSec = (livePosBeats / tempo) * 60;
+      position = (elapsedSec % duration) / duration;
+    } else if (beat != null) {
+      const elapsedSec = (beat / tempo) * 60;
+      position = (elapsedSec % duration) / duration;
+    }
+  }
+
+  // Click-to-jump: convert the ratio (0-1) back into beats and POST to
+  // /transport/seek/{track}/{slot}. Sets start_marker + re-fires.
+  function handleSeek(ratio: number) {
+    if (!duration || !tempo) return;
+    const beats = ratio * duration * (tempo / 60);
+    onSeek(beats);
   }
 
   return (
@@ -129,6 +168,9 @@ function StemRow({
           height={18}
           className={`${tint} opacity-90`}
           playheadColor="rgba(255,255,255,0.85)"
+          onSeek={trackIdx != null ? handleSeek : undefined}
+          regions={regions.data ?? undefined}
+          durationSeconds={waveform.data?.duration_seconds}
         />
       ) : (
         <div className="text-[10px] text-neutral-700 italic px-1">silent</div>

@@ -260,6 +260,9 @@ class AbletonStateOut(BaseModel):
     track_volumes: dict[int, float] = Field(default_factory=dict)
     # track_index → output meter level 0-1, subscribed on deck columns.
     track_meters: dict[int, float] = Field(default_factory=dict)
+    # track_index → currently-playing clip's playing_position in beats.
+    # Subscribed per clip when it starts; cleared when it stops.
+    playing_positions: dict[int, float] = Field(default_factory=dict)
 
 
 class TempoRequest(BaseModel):

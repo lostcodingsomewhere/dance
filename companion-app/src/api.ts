@@ -327,6 +327,17 @@ export function abletonSoloTrack(
   );
 }
 
+export function abletonSeekClip(
+  trackIndex: number,
+  slotIndex: number,
+  positionBeats: number,
+): Promise<void> {
+  return request<void>(
+    `/ableton/transport/seek/${trackIndex}/${slotIndex}?position=${positionBeats}`,
+    { method: "POST" },
+  );
+}
+
 export function abletonPreview(body: PreviewRequest): Promise<PreviewResult> {
   return request<PreviewResult>("/ableton/preview", {
     method: "POST",

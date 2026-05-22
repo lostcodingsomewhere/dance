@@ -65,3 +65,19 @@ export function useSoloTrack() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
+
+export function useSeekClip() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      track,
+      slot,
+      positionBeats,
+    }: {
+      track: number;
+      slot: number;
+      positionBeats: number;
+    }) => api.abletonSeekClip(track, slot, positionBeats),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
+  });
+}

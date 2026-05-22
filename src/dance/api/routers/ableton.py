@@ -129,6 +129,35 @@ def stop_scene(
     return bridge.stop_scene(scene_index)
 
 
+@router.post("/transport/seek/{track_index}/{slot_index}")
+def seek_clip(
+    track_index: int,
+    slot_index: int,
+    position: float,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Jump a clip's playback to ``position`` beats. Sets the clip's
+    start_marker (the LOM has no live-playhead setter) and immediately
+    re-fires the clip so the new marker takes effect. Live's clip-launch
+    quantization snaps the actual start to the next bar boundary.
+
+    Used by the FE's click-to-jump on Waveform — tap a position on the
+    stem-waveform of a playing cell to seek there.
+
+    NOTE: setting start_marker is persistent — next time you fire this
+    clip naturally it'll start from this point. Re-set to 0 to "reset
+    to top" before stopping.
+    """
+    bridge.client.set_clip_start_marker(track_index, slot_index, position)
+    bridge.client.fire_clip(track_index, slot_index)
+    return {
+        "ok": True,
+        "track_index": track_index,
+        "slot_index": slot_index,
+        "position": position,
+    }
+
+
 @router.post("/transport/solo-track/{track_index}")
 def solo_track(
     track_index: int,

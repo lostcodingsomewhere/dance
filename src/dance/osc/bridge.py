@@ -41,6 +41,11 @@ class AbletonState:
     # Subscribed on deck columns so the FE can render a VU meter that
     # represents what's coming out of our live-remixing combo.
     track_meters: dict[int, float] = field(default_factory=dict)
+    # track_index -> currently-playing clip's playing_position in beats.
+    # Subscribed per clip when the bridge sees that clip start playing
+    # (in _on_playing_clip); unsubscribed when it stops. Drives the
+    # accurate playhead in the FE's MasterVisualizer + CueStrip.
+    playing_positions: dict[int, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +55,7 @@ class AbletonState:
             "playing_clips": dict(self.playing_clips),
             "track_volumes": dict(self.track_volumes),
             "track_meters": dict(self.track_meters),
+            "playing_positions": dict(self.playing_positions),
         }
 
 
@@ -130,6 +136,9 @@ class AbletonBridge:
         self.listener.on("/live/track/get/volume", self._on_track_volume)
         self.listener.on(
             "/live/track/get/output_meter_level", self._on_track_meter
+        )
+        self.listener.on(
+            "/live/clip/get/playing_position", self._on_playing_position
         )
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
@@ -272,12 +281,43 @@ class AbletonBridge:
         # the "no clip playing on this track" signal — clear it from state
         # so the FE's ``playing_clips[trackIdx] != null`` checks read as
         # "stopped" rather than "playing scene -1".
+        #
+        # Also manages playing_position subscriptions: subscribe when a clip
+        # starts, unsubscribe when it stops or is replaced. Keeps OSC
+        # traffic scoped to what's actually firing.
         if len(args) >= 2:
             track, scene = int(args[0]), int(args[1])
+            prev_scene = self.state.playing_clips.get(track)
             if scene < 0:
                 self.state.playing_clips.pop(track, None)
+                self.state.playing_positions.pop(track, None)
+                if prev_scene is not None and prev_scene >= 0:
+                    try:
+                        self.client.stop_listen_clip_position(track, prev_scene)
+                    except OSError:  # pragma: no cover - best-effort
+                        pass
             else:
                 self.state.playing_clips[track] = scene
+                # Replaced the clip on this track? Drop the old subscription.
+                if prev_scene is not None and prev_scene != scene:
+                    try:
+                        self.client.stop_listen_clip_position(track, prev_scene)
+                    except OSError:  # pragma: no cover
+                        pass
+                try:
+                    self.client.start_listen_clip_position(track, scene)
+                except OSError:  # pragma: no cover - best-effort
+                    pass
+            self._broadcast()
+
+    def _on_playing_position(self, _address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, position_beats). Live throttles to
+        # the project's transport rate (~30 Hz). We just store per-track and
+        # broadcast.
+        if len(args) >= 3:
+            track = int(args[0])
+            pos = float(args[2])
+            self.state.playing_positions[track] = pos
             self._broadcast()
 
     def _on_track_volume(self, _address: str, args: tuple[Any, ...]) -> None:
