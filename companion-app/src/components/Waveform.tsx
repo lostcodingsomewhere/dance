@@ -34,19 +34,29 @@ const SECTION_FILL: Record<string, string> = {
   other: "rgba(115, 115, 115, 0.15)",
 };
 
-/** Section_label → solid color for the start-marker line + label text.
- * Punchier than SECTION_FILL so the user can read "this is a DROP coming
- * up" at a glance against the muted band. */
-const SECTION_ACCENT: Record<string, { stroke: string; label: string }> = {
-  intro:     { stroke: "rgba(212, 212, 216, 0.85)", label: "rgba(228, 228, 231, 0.95)" },
-  buildup:   { stroke: "rgba(250, 204, 21, 0.85)",  label: "rgba(253, 224, 71, 0.95)" },
-  drop:      { stroke: "rgba(248, 113, 113, 0.95)", label: "rgba(252, 165, 165, 0.95)" },
-  breakdown: { stroke: "rgba(34, 211, 238, 0.85)",  label: "rgba(103, 232, 249, 0.95)" },
-  bridge:    { stroke: "rgba(192, 132, 252, 0.85)", label: "rgba(216, 180, 254, 0.95)" },
-  outro:     { stroke: "rgba(212, 212, 216, 0.85)", label: "rgba(228, 228, 231, 0.95)" },
-  verse:     { stroke: "rgba(96, 165, 250, 0.85)",  label: "rgba(147, 197, 253, 0.95)" },
-  chorus:    { stroke: "rgba(251, 191, 36, 0.85)",  label: "rgba(253, 224, 71, 0.95)" },
-  other:     { stroke: "rgba(163, 163, 163, 0.7)",  label: "rgba(212, 212, 212, 0.9)" },
+/** Section_label → start-marker line color + small glyph icon + tooltip
+ * name. Each section starts gets a small colored icon at the top of the
+ * waveform (no inline text — narrow cards turn it into noise) and a
+ * native tooltip on hover showing the section's name.
+ *
+ * Icons are single-char unicode picked for "what's this part of the
+ * track doing" semantics, not literal music notation:
+ *   ▷ intro     ▲ buildup   ▼ drop     ◌ breakdown
+ *   ◇ bridge    ◁ outro     ● verse    ★ chorus
+ */
+const SECTION_ACCENT: Record<
+  string,
+  { stroke: string; icon: string; name: string }
+> = {
+  intro:     { stroke: "rgba(212, 212, 216, 0.85)", icon: "▷", name: "Intro" },
+  buildup:   { stroke: "rgba(250, 204, 21, 0.85)",  icon: "▲", name: "Buildup" },
+  drop:      { stroke: "rgba(248, 113, 113, 0.95)", icon: "▼", name: "Drop" },
+  breakdown: { stroke: "rgba(34, 211, 238, 0.85)",  icon: "◌", name: "Breakdown" },
+  bridge:    { stroke: "rgba(192, 132, 252, 0.85)", icon: "◇", name: "Bridge" },
+  outro:     { stroke: "rgba(212, 212, 216, 0.85)", icon: "◁", name: "Outro" },
+  verse:     { stroke: "rgba(96, 165, 250, 0.85)",  icon: "●", name: "Verse" },
+  chorus:    { stroke: "rgba(251, 191, 36, 0.85)",  icon: "★", name: "Chorus" },
+  other:     { stroke: "rgba(163, 163, 163, 0.7)",  icon: "•", name: "Section" },
 };
 
 /**
@@ -98,7 +108,8 @@ export function Waveform({
               fill,
               label,
               markerStroke: accent.stroke,
-              labelFill: accent.label,
+              icon: accent.icon,
+              name: accent.name,
             };
           })
       : [];
@@ -245,36 +256,48 @@ export function Waveform({
         />
       )}
     </svg>
-      {/* Section labels — rendered as HTML overlays so they don't get
-          stretched by the SVG's preserveAspectRatio="none". One badge
-          per section, positioned at the section's start as a % of the
-          waveform's width. Skips bands too narrow to fit text. */}
-      {sectionBands
-        .filter((b) => b.w > 4)
-        .map((b) => (
-          <div
-            key={`label-${b.id}`}
-            data-testid="waveform-section-label"
-            style={{
-              position: "absolute",
-              left: `${b.x}%`,
-              top: 1,
-              color: b.labelFill,
-              fontSize: Math.max(8, Math.min(11, H * 0.36)),
-              fontFamily: "ui-monospace, monospace",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
-              lineHeight: 1,
-              paddingLeft: 2,
-              pointerEvents: "none",
-              userSelect: "none",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {b.label.slice(0, 4)}
-          </div>
-        ))}
+      {/* Section icons — rendered as HTML overlays so they don't get
+          stretched by the SVG's preserveAspectRatio="none". One small
+          icon per section start, positioned via percent of the
+          waveform's width. The native ``title`` attribute gives a
+          hover tooltip without extra React state.
+          ``pointerEvents: auto`` so the title fires; the icons sit
+          above the SVG but the SVG's onClick still bubbles up because
+          the icons cover only a tiny rect. */}
+      {sectionBands.map((b) => (
+        <div
+          key={`icon-${b.id}`}
+          data-testid="waveform-section-icon"
+          title={b.name}
+          onClick={
+            onSeek
+              ? (e) => {
+                  e.stopPropagation();
+                  // Seek to this section's start specifically. The
+                  // click-anywhere snap in the parent would also land
+                  // here, but doing it explicitly avoids rounding from
+                  // the icon's bounding rect.
+                  onSeek(b.x / 100);
+                }
+              : undefined
+          }
+          style={{
+            position: "absolute",
+            left: `${b.x}%`,
+            top: 0,
+            color: b.markerStroke,
+            fontSize: Math.max(9, Math.min(12, H * 0.42)),
+            lineHeight: 1,
+            paddingLeft: 1,
+            pointerEvents: "auto",
+            userSelect: "none",
+            cursor: onSeek ? "pointer" : undefined,
+            textShadow: "0 0 2px rgba(0,0,0,0.8)",
+          }}
+        >
+          {b.icon}
+        </div>
+      ))}
     </div>
   );
 }

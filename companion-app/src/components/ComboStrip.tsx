@@ -197,12 +197,21 @@ function ComboCard({
     }
   }
 
-  // Click-to-jump: convert the ratio (0-1) back into clip beats using
-  // the analyzed BPM (same coordinate system Live's clip uses), then
-  // POST /transport/seek (which sets loop_start + start_marker + refire).
+  // Click-to-jump: SNAPS the click to the start of the section it
+  // landed in, then converts that section-start to clip beats and
+  // POSTs /transport/seek. Snap-to-section is more useful for live
+  // performance than pixel-precise seeking — DJs think in "drop,
+  // breakdown, drop" sections, not "180.4 seconds in." Falls back to
+  // ratio=0 (clip start) when the click is before any section.
   function handleSeek(ratio: number) {
     if (!duration || !clipBpm || clipBpm <= 0) return;
-    const beats = ratio * duration * (clipBpm / 60);
+    const sectionStarts = (regions.data ?? [])
+      .filter((r) => r.region_type === "section")
+      .map((r) => r.position_ms / 1000 / duration)
+      .filter((s) => s <= ratio + 0.001) // small epsilon for click on icon
+      .sort((a, b) => b - a);
+    const snapped = sectionStarts.length > 0 ? sectionStarts[0] : 0;
+    const beats = snapped * duration * (clipBpm / 60);
     onSeek(beats);
   }
 
