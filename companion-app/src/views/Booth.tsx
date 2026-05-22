@@ -1,7 +1,6 @@
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
 import { ComboStrip } from "../components/ComboStrip";
 import { CueStrip } from "../components/CueStrip";
-import { MasterVisualizer } from "../components/MasterVisualizer";
 import { PlayedStrip } from "../components/PlayedStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { useAutoLog } from "../hooks/useAutoLog";
@@ -16,11 +15,14 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
  *
  *   ┌─ MasterStrip (BPM · KEY · energy arc · OSC heartbeat · view tabs) ┐
  *   ├─────────────────────────────────────────────────────────────────┤
- *   │ ComboStrip (5 cards: what's playing per role, source-tracked)    │
+ *   │ 8×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows)     │
+ *   │                                                                  │
+ *   │ ComboStrip (5 cards: track identity + scrubbable waveform per    │
+ *   │             role, anchor hint, click-to-jump)                    │
+ *   │                                                                  │
+ *   │ CueStrip (prelisten — same waveform features, headphones out)    │
  *   │                                                                  │
  *   │ Per-column rec banners (5 across)                                │
- *   │                                                                  │
- *   │ 8×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows)     │
  *   ├─────────────────────────────────────────────────────────────────┤
  *   │ PlayedStrip (set name · plays · history scroll · end set)        │
  *   └─────────────────────────────────────────────────────────────────┘
@@ -42,7 +44,6 @@ export function Booth() {
           </div>
           <SceneGrid />
         </div>
-        <MasterVisualizer />
         <ComboStrip />
         <CueStrip />
         <div>

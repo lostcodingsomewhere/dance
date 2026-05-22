@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
-import { useTrackWaveform } from "../hooks/useWaveform";
+import { useRegions } from "../hooks/useRegions";
+import { useSeekClip } from "../hooks/useTransport";
+import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
 import { RoleIcon } from "./RoleIcon";
@@ -18,20 +20,28 @@ const ROLE_ACCENT: Record<StemRole, { dot: string; chip: string }> = {
 /**
  * Horizontal 5-card row showing the *current active combo* — one card per
  * stem role with the source-track metadata of whatever's playing in that
- * role. In live-remixing there's no single "now playing" track; this strip
- * makes that honest by showing the source of each stem independently.
+ * role plus a full-featured interactive waveform (playhead, section bands,
+ * cue ticks, click-to-jump). In live-remixing there's no single "now
+ * playing" track; this strip makes that honest by showing the source of
+ * each stem independently AND lets the DJ scrub each one.
  *
  * Anchor mode: when all non-empty cells in a single scene point at the
  * same source track, the user has fired a whole row. We surface that
  * explicitly so they know the combo is the original song-as-recorded.
+ *
+ * Merged the old MasterVisualizer's rich waveform features into the cards
+ * (sections + cues + click-to-jump + Live playing_position playhead) so
+ * the Booth has one canonical "what's playing" surface instead of two.
  */
 export function ComboStrip() {
   const ableton = useAbletonState();
   const deckMap = useDeckMap();
+  const seek = useSeekClip();
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
   const playing = ableton.playing_clips ?? {};
+  const positions = ableton.playing_positions ?? {};
   const tempo = ableton.tempo;
   const beat = ableton.beat;
 
@@ -42,8 +52,8 @@ export function ComboStrip() {
     return m;
   }, [cells]);
 
-  // Per-role: { sceneIdx, cell } for whatever's currently playing in that
-  // role's column. Drives one card.
+  // Per-role: { sceneIdx, cell, trackIdx, livePosBeats } for whatever's
+  // currently playing in that role's column. Drives one card.
   const cards = useMemo(() => {
     if (!columns) return null;
     return STEM_COLUMNS.map((role) => {
@@ -51,9 +61,11 @@ export function ComboStrip() {
       const sceneIdx = trackIdx != null ? playing[trackIdx] : undefined;
       const cell =
         sceneIdx != null ? cellAt.get(`${sceneIdx}|${role}`) : undefined;
-      return { role, sceneIdx, cell };
+      const livePosBeats =
+        trackIdx != null ? positions[String(trackIdx)] : undefined;
+      return { role, sceneIdx, cell, trackIdx, livePosBeats };
     });
-  }, [columns, playing, cellAt]);
+  }, [columns, playing, positions, cellAt]);
 
   // Anchor detection — every non-empty card pointing at the same scene AND
   // that scene's stem cells all sourced from the same track.
@@ -85,7 +97,7 @@ export function ComboStrip() {
     <div className="flex flex-col gap-1" data-testid="combo-strip">
       <div className="flex items-baseline justify-between px-1">
         <div className="text-[10px] uppercase tracking-widest text-neutral-500">
-          Current combo
+          Current combo · click waveforms to scrub
         </div>
         {anchor ? (
           <div className="text-[10px] text-emerald-300/90 uppercase tracking-widest">
@@ -106,9 +118,19 @@ export function ComboStrip() {
             key={c.role}
             role={c.role}
             cell={c.cell}
+            trackIdx={c.trackIdx}
+            livePosBeats={c.livePosBeats}
             isAnchorPart={anchor != null && c.sceneIdx === anchor.sceneIdx}
             tempo={tempo}
             beat={beat}
+            onSeek={(beats) => {
+              if (c.trackIdx == null || c.cell == null) return;
+              seek.mutate({
+                track: c.trackIdx,
+                slot: c.cell.scene_index,
+                positionBeats: beats,
+              });
+            }}
           />
         ))}
       </div>
@@ -119,37 +141,63 @@ export function ComboStrip() {
 function ComboCard({
   role,
   cell,
+  trackIdx,
+  livePosBeats,
   isAnchorPart,
   tempo,
   beat,
+  onSeek,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
+  trackIdx: number | undefined;
+  livePosBeats: number | undefined;
   isAnchorPart: boolean;
   tempo: number | null;
   beat: number | null;
+  onSeek: (beats: number) => void;
 }) {
   const accent = ROLE_ACCENT[role];
-  // Waveform per playing cell — fetches the track's full-mix peaks (sidecar-
-  // cached server-side). Disabled when nothing is playing so we don't hit
-  // the endpoint for empty cells.
-  const waveform = useTrackWaveform(cell?.track_id);
+  // Stem waveform when this cell has a stem (drums/bass/vocals/other);
+  // fall back to the full-track waveform for the mix/song column. Both
+  // hooks no-op via ``enabled`` when their id is null/undefined, so it's
+  // safe to call them unconditionally on every render.
+  const stemWf = useStemWaveform(cell?.stem_file_id);
+  const trackWf = useTrackWaveform(
+    cell != null && cell.stem_file_id == null ? cell.track_id : null,
+  );
+  const waveform = cell?.stem_file_id != null ? stemWf : trackWf;
+  // Regions come from the *source track* — sections + cues are detected
+  // on the mix, and the stems share that structure.
+  const regions = useRegions(cell?.track_id ?? null);
+
+  // Playhead position 0-1. Prefer Live's per-clip playing_position (beat-
+  // accurate, respects loop wraps automatically) over our master-beat
+  // estimate. Fall back to the estimate when subscription data hasn't
+  // landed yet — keeps the playhead from flickering on cold start.
+  const duration = waveform.data?.duration_seconds;
   let position: number | undefined = undefined;
-  if (
-    tempo != null &&
-    beat != null &&
-    waveform.data?.duration_seconds &&
-    waveform.data.duration_seconds > 0
-  ) {
-    const elapsedSec = (beat / tempo) * 60;
-    position =
-      (elapsedSec % waveform.data.duration_seconds) /
-      waveform.data.duration_seconds;
+  if (cell && duration && duration > 0 && tempo != null) {
+    if (livePosBeats != null) {
+      const elapsedSec = (livePosBeats / tempo) * 60;
+      position = (elapsedSec % duration) / duration;
+    } else if (beat != null) {
+      const elapsedSec = (beat / tempo) * 60;
+      position = (elapsedSec % duration) / duration;
+    }
+  }
+
+  // Click-to-jump: convert the ratio (0-1) back into beats and let the
+  // parent POST /transport/seek (sets loop_start + start_marker + refire).
+  function handleSeek(ratio: number) {
+    if (!duration || !tempo) return;
+    const beats = ratio * duration * (tempo / 60);
+    onSeek(beats);
   }
 
   if (!cell) {
     return (
-      <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-20 flex flex-col">
+      <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-24 flex flex-col">
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-neutral-700">
           <RoleIcon role={role} size={12} className="opacity-40" />
           {roleLabel(role)}
@@ -160,7 +208,7 @@ function ComboCard({
   }
   return (
     <div
-      className={`rounded-md border px-2 py-2 h-20 flex flex-col ${
+      className={`rounded-md border px-2 py-2 h-24 flex flex-col ${
         isAnchorPart
           ? "border-emerald-500/30 bg-emerald-500/5"
           : "border-neutral-800 bg-neutral-900/40"
@@ -181,9 +229,12 @@ function ComboCard({
       <Waveform
         peaks={waveform.data?.peaks ?? []}
         position={position}
-        height={16}
-        className={`${accent.chip} opacity-80 mt-auto`}
+        height={32}
+        className={`${accent.chip} opacity-90 mt-auto`}
         playheadColor="rgba(255,255,255,0.9)"
+        regions={regions.data ?? undefined}
+        durationSeconds={duration}
+        onSeek={trackIdx != null ? handleSeek : undefined}
       />
     </div>
   );
