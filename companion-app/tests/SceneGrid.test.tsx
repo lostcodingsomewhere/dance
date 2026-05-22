@@ -40,6 +40,8 @@ vi.mock("../src/hooks/useAbletonState", () => ({
 vi.mock("../src/hooks/useTransport", () => ({
   useFireScene: () => ({ mutate: fireSceneMutate, isPending: false }),
   useFireCell: () => ({ mutate: fireCellMutate, isPending: false }),
+  useStopScene: () => ({ mutate: vi.fn(), isPending: false }),
+  useStopCell: () => ({ mutate: vi.fn(), isPending: false }),
   useStopTrack: () => ({ mutate: vi.fn(), isPending: false }),
   useStopAllClips: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -201,6 +203,9 @@ describe("SceneGrid", () => {
     });
     state.playingClips = { 0: 0 };
     renderGrid();
-    expect(screen.getByText(/▶ playing/i)).toBeInTheDocument();
+    // Playing cell label reads "⏹ playing" (tap to stop) — the label text
+    // can appear elsewhere too, so we look for the explicit stop affordance.
+    const playingLabels = screen.getAllByText(/playing/i);
+    expect(playingLabels.length).toBeGreaterThan(0);
   });
 });

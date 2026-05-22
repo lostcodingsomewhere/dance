@@ -107,6 +107,27 @@ def stop_all_clips(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return {"ok": True}
 
 
+@router.post("/transport/stop-cell/{track_index}/{slot_index}")
+def stop_cell(
+    track_index: int,
+    slot_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Stop a single cell. Used by tap-to-stop on the SceneGrid — tapping
+    a playing cell stops it, parallel to tapping a stopped cell to fire."""
+    bridge.client.stop_clip(track_index, slot_index)
+    return {"ok": True, "track_index": track_index, "slot_index": slot_index}
+
+
+@router.post("/transport/stop-scene/{scene_index}")
+def stop_scene(
+    scene_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Stop every deck-column cell on a scene (anchor mode off-switch)."""
+    return bridge.stop_scene(scene_index)
+
+
 @router.post("/volume")
 def volume(
     body: VolumeRequest,

@@ -35,6 +35,12 @@ export function Booth() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <main className="flex-1 flex flex-col min-h-0 gap-3 px-4 py-3 overflow-y-auto">
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
+            Scene grid · tap to fire / stop (mirrors APC40)
+          </div>
+          <SceneGrid />
+        </div>
         <ComboStrip />
         <CueStrip />
         <div>
@@ -46,12 +52,6 @@ export function Booth() {
               <ColumnRecBanner key={c} column={c} k={3} />
             ))}
           </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
-            Scene grid · tap to fire (mirrors APC40)
-          </div>
-          <SceneGrid />
         </div>
       </main>
       <PlayedStrip />

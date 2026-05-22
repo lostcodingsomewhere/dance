@@ -25,13 +25,6 @@ export function MasterStrip() {
   const view = useAppStore((s) => s.currentView);
   const deckMap = useDeckMap();
   const heartbeat = useBridgeHeartbeat();
-  // Prefer backend truth for the chip count; fall back to the local mirror
-  // when the backend hasn't responded yet (zero round-trip on initial paint).
-  const localCount = useAppStore((s) => Object.keys(s.loadedDecks).length);
-  // Number of distinct scenes the backend knows about (any cell at all).
-  const loadedCount =
-    new Set((deckMap.data?.cells ?? []).map((c) => c.scene_index)).size ||
-    localCount;
 
   // Camelot key of the dominant playing cell — the harmonic anchor for compat
   // math. We scan playing_clips against the deck columns and pick the first
@@ -163,19 +156,11 @@ export function MasterStrip() {
       {/* Set-arc energy sparkline — ambient view of the trajectory so far. */}
       <EnergySparkline />
 
-      {/* Deck-count chip — what we've staged in Live */}
-      <DeckCountChip count={loadedCount} />
-      <DeckSyncIndicator
-        backendCount={
-          deckMap.data
-            ? new Set((deckMap.data.cells ?? []).map((c) => c.scene_index))
-                .size
-            : null
-        }
-        localCount={localCount}
-      />
-
-      {/* AbletonOSC heartbeat — red when the bridge has gone stale. */}
+      {/* Live bridge heartbeat — red when AbletonOSC has gone stale. The
+          deck-count and out-of-sync chips were removed: the SceneGrid mirror
+          below already shows what's loaded, so the chip was redundant; and
+          the "out-of-sync" warning surfaced stale localStorage state more
+          confusingly than usefully. */}
       <HeartbeatDot alive={heartbeat.alive} />
 
 
@@ -216,15 +201,6 @@ export function MasterStrip() {
   );
 }
 
-function DeckCountChip({ count }: { count: number }) {
-  return (
-    <div className="px-2 text-[11px] text-neutral-500">
-      <span className="text-neutral-300 font-semibold">{count}</span> deck
-      {count === 1 ? "" : "s"} loaded
-    </div>
-  );
-}
-
 function KeyDisplay({ camelot }: { camelot: string | null }) {
   return (
     <div
@@ -252,11 +228,11 @@ function KeyDisplay({ camelot }: { camelot: string | null }) {
 function HeartbeatDot({ alive }: { alive: boolean }) {
   return (
     <div
-      className="flex items-center gap-1 text-[10px]"
+      className="flex items-center gap-1.5 text-[11px]"
       title={
         alive
-          ? "AbletonOSC alive — bridge responding"
-          : "AbletonOSC stale or unreachable — alt-tab to Live to check"
+          ? "Ableton Live + AbletonOSC bridge responding"
+          : "Ableton Live unreachable — check that Live is open with AbletonOSC enabled as a Control Surface"
       }
     >
       <span
@@ -264,30 +240,10 @@ function HeartbeatDot({ alive }: { alive: boolean }) {
           alive ? "bg-emerald-400" : "bg-rose-500 animate-pulse"
         }`}
       />
-      <span className={alive ? "text-neutral-600" : "text-rose-300"}>
-        {alive ? "OSC" : "OSC stale"}
+      <span className={alive ? "text-neutral-400" : "text-rose-300"}>
+        {alive ? "Live" : "Live offline"}
       </span>
     </div>
-  );
-}
-
-/** Tiny indicator when localStorage diverges from backend truth. */
-function DeckSyncIndicator({
-  backendCount,
-  localCount,
-}: {
-  backendCount: number | null;
-  localCount: number;
-}) {
-  if (backendCount == null) return null;
-  if (backendCount === localCount) return null;
-  return (
-    <span
-      className="text-[10px] text-amber-400/80"
-      title={`Backend sees ${backendCount} staged scene(s); local mirror has ${localCount}. The Scene Map shows backend truth.`}
-    >
-      ⚠ out-of-sync
-    </span>
   );
 }
 

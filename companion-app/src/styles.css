@@ -45,13 +45,14 @@ button,
 }
 
 /* SceneGrid playing-cell beat pulse — opacity dips on every beat. The
-   animation-duration is set inline from AbletonState.tempo. */
+   animation-duration is set inline from AbletonState.tempo. Bumped to a
+   more dramatic dip so "playing" is unmistakable at a glance. */
 @keyframes dance-beat-pulse {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.78;
+    opacity: 0.55;
   }
 }

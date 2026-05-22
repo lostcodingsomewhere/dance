@@ -39,3 +39,20 @@ export function useStopAllClips() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
+
+export function useStopCell() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ track, slot }: { track: number; slot: number }) =>
+      api.abletonStopCell(track, slot),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
+  });
+}
+
+export function useStopScene() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sceneIndex: number) => api.abletonStopScene(sceneIndex),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
+  });
+}

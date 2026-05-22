@@ -1,7 +1,12 @@
 import { useMemo } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
-import { useFireCell, useFireScene } from "../hooks/useTransport";
+import {
+  useFireCell,
+  useFireScene,
+  useStopCell,
+  useStopScene,
+} from "../hooks/useTransport";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
 import { RoleIcon } from "./RoleIcon";
@@ -33,6 +38,8 @@ export function SceneGrid() {
   const ableton = useAbletonState();
   const fireScene = useFireScene();
   const fireCell = useFireCell();
+  const stopScene = useStopScene();
+  const stopCell = useStopCell();
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -101,8 +108,12 @@ export function SceneGrid() {
               loaded={anyLoaded}
               anchorReady={isAnchorReady}
               playing={anyPlaying}
-              onFire={() => fireScene.mutate(sceneIdx)}
-              pending={fireScene.isPending}
+              onTap={() =>
+                anyPlaying
+                  ? stopScene.mutate(sceneIdx)
+                  : fireScene.mutate(sceneIdx)
+              }
+              pending={fireScene.isPending || stopScene.isPending}
             />
             {STEM_COLUMNS.map((role) => {
               const trackIdx = columns[role];
@@ -117,10 +128,12 @@ export function SceneGrid() {
                   loaded={cell != null}
                   playing={isPlaying}
                   beatMs={beatMs}
-                  onFire={
+                  onTap={
                     cell != null && trackIdx != null
                       ? () =>
-                          fireCell.mutate({ track: trackIdx, slot: sceneIdx })
+                          isPlaying
+                            ? stopCell.mutate({ track: trackIdx, slot: sceneIdx })
+                            : fireCell.mutate({ track: trackIdx, slot: sceneIdx })
                       : undefined
                   }
                 />
@@ -138,31 +151,33 @@ function RowLabel({
   loaded,
   anchorReady,
   playing,
-  onFire,
+  onTap,
   pending,
 }: {
   sceneIdx: number;
   loaded: boolean;
   anchorReady: boolean;
   playing: boolean;
-  onFire: () => void;
+  onTap: () => void;
   pending: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={onFire}
+      onClick={onTap}
       disabled={pending || !loaded}
       title={
-        anchorReady
+        playing
+          ? `Stop scene ${sceneIdx + 1}`
+          : anchorReady
           ? `Fire scene ${sceneIdx + 1} — play the original combo (anchor mode)`
           : loaded
-          ? `Fire scene ${sceneIdx + 1} — plays whatever cells are loaded in this row`
+          ? `Fire scene ${sceneIdx + 1} — plays whatever cells are loaded`
           : `Scene ${sceneIdx + 1} (empty)`
       }
       className={`flex items-center justify-center rounded-md text-xs font-mono font-semibold transition-colors ${
         playing
-          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+          ? "bg-emerald-500/40 text-emerald-50 border border-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.5)] hover:bg-emerald-500/60 cursor-pointer"
           : anchorReady
           ? "bg-neutral-900/70 text-emerald-300/70 border border-emerald-500/30 hover:border-emerald-500/60 hover:text-emerald-300 cursor-pointer"
           : loaded
@@ -170,7 +185,7 @@ function RowLabel({
           : "bg-neutral-950 text-neutral-700 border border-neutral-900"
       }`}
     >
-      {sceneIdx + 1}
+      {playing ? "⏹" : sceneIdx + 1}
     </button>
   );
 }
@@ -181,14 +196,14 @@ function Cell({
   loaded,
   playing,
   beatMs,
-  onFire,
+  onTap,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
   loaded: boolean;
   playing: boolean;
   beatMs: number;
-  onFire: (() => void) | undefined;
+  onTap: (() => void) | undefined;
 }) {
   const color = ROLE_COLOR[role];
 
@@ -204,16 +219,18 @@ function Cell({
   return (
     <button
       type="button"
-      onClick={onFire}
-      disabled={!onFire}
+      onClick={onTap}
+      disabled={!onTap}
       title={
-        cell
+        playing
+          ? `Stop ${roleLabel(role).toLowerCase()} (${cell?.title ?? "loaded"})`
+          : cell
           ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`} — tap to fire`
           : `${roleLabel(role)} (loaded)`
       }
       className={`rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
         playing
-          ? `border-emerald-500/60 ${color.bg} shadow-[0_0_12px_rgba(16,185,129,0.25)]`
+          ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
           : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
       }`}
       style={
@@ -224,11 +241,12 @@ function Cell({
           : undefined
       }
     >
-      <div className={`text-[10px] uppercase tracking-wider ${playing ? "text-emerald-300" : color.text}`}>
-        {playing ? "▶ playing" : roleLabel(role)}
+      <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 ${playing ? "text-emerald-100" : color.text}`}>
+        {playing && <span className="text-emerald-200">⏹</span>}
+        {playing ? "playing" : roleLabel(role)}
       </div>
       {cell && (
-        <div className="text-xs text-neutral-200 truncate font-medium leading-tight mt-0.5">
+        <div className={`text-xs truncate font-medium leading-tight mt-0.5 ${playing ? "text-emerald-50" : "text-neutral-200"}`}>
           {cell.title ?? `Track #${cell.track_id}`}
         </div>
       )}

@@ -301,6 +301,22 @@ export function abletonStopAllClips(): Promise<void> {
   return request<void>("/ableton/transport/stop-all", { method: "POST" });
 }
 
+export function abletonStopCell(
+  trackIndex: number,
+  slotIndex: number,
+): Promise<void> {
+  return request<void>(
+    `/ableton/transport/stop-cell/${trackIndex}/${slotIndex}`,
+    { method: "POST" },
+  );
+}
+
+export function abletonStopScene(sceneIndex: number): Promise<void> {
+  return request<void>(`/ableton/transport/stop-scene/${sceneIndex}`, {
+    method: "POST",
+  });
+}
+
 export function abletonPreview(body: PreviewRequest): Promise<PreviewResult> {
   return request<PreviewResult>("/ableton/preview", {
     method: "POST",

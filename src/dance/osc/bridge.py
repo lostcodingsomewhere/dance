@@ -369,6 +369,20 @@ class AbletonBridge:
             i += 1
         return i
 
+    def stop_scene(self, scene_index: int) -> dict[str, Any]:
+        """Stop every deck-column cell on a scene. Live has no 'stop scene'
+        primitive, so we iterate the 5 deck-column tracks and stop_clip on
+        each at the given scene index. Idempotent on cells that aren't
+        playing (no-op at the OSC layer)."""
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        for track_idx in self._deck_columns.values():
+            try:
+                self.client.stop_clip(track_idx, scene_index)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        return {"ok": True, "scene_index": scene_index}
+
     def next_free_row(self) -> int:
         """Lowest scene index where ALL stem kinds are empty.
 
