@@ -68,7 +68,10 @@ describe("Waveform", () => {
     expect(sections[0].getAttribute("width")).toBe("30");
     const ticks = screen.getAllByTestId("waveform-cue");
     expect(ticks.length).toBe(1);
-    expect(ticks[0].getAttribute("x1")).toBe("30");
+    // The tick is now a <g> wrapping a <line> + a triangle <polygon>.
+    // Read the inner line's x1 to confirm horizontal position.
+    const tickLine = ticks[0].querySelector("line");
+    expect(tickLine?.getAttribute("x1")).toBe("30");
   });
 
   it("omits region overlays when durationSeconds is missing", () => {

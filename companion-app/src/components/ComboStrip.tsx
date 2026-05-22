@@ -175,23 +175,34 @@ function ComboCard({
   // accurate, respects loop wraps automatically) over our master-beat
   // estimate. Fall back to the estimate when subscription data hasn't
   // landed yet — keeps the playhead from flickering on cold start.
+  //
+  // IMPORTANT: convert via the *clip's* nominal BPM (cell.bpm = the
+  // source track's analyzed BPM), NOT Live's project tempo. Our .als
+  // writer sets ``end_beats = duration * analyzed_bpm / 60`` and warps
+  // the clip — so ``playing_position`` is in clip-beats indexed against
+  // analyzed_bpm. Using Live's tempo would scale the playhead by
+  // ``live_tempo / analyzed_bpm`` when the user tempo'd up or down.
   const duration = waveform.data?.duration_seconds;
+  const clipBpm = cell?.bpm ?? tempo;
   let position: number | undefined = undefined;
-  if (cell && duration && duration > 0 && tempo != null) {
+  if (cell && duration && duration > 0 && clipBpm != null && clipBpm > 0) {
     if (livePosBeats != null) {
-      const elapsedSec = (livePosBeats / tempo) * 60;
+      const elapsedSec = (livePosBeats / clipBpm) * 60;
       position = (elapsedSec % duration) / duration;
-    } else if (beat != null) {
+    } else if (beat != null && tempo != null) {
+      // Master-beat fallback uses project tempo since beat is in
+      // project-time, not clip-time.
       const elapsedSec = (beat / tempo) * 60;
       position = (elapsedSec % duration) / duration;
     }
   }
 
-  // Click-to-jump: convert the ratio (0-1) back into beats and let the
-  // parent POST /transport/seek (sets loop_start + start_marker + refire).
+  // Click-to-jump: convert the ratio (0-1) back into clip beats using
+  // the analyzed BPM (same coordinate system Live's clip uses), then
+  // POST /transport/seek (which sets loop_start + start_marker + refire).
   function handleSeek(ratio: number) {
-    if (!duration || !tempo) return;
-    const beats = ratio * duration * (tempo / 60);
+    if (!duration || !clipBpm || clipBpm <= 0) return;
+    const beats = ratio * duration * (clipBpm / 60);
     onSeek(beats);
   }
 

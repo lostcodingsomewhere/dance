@@ -34,6 +34,21 @@ const SECTION_FILL: Record<string, string> = {
   other: "rgba(115, 115, 115, 0.15)",
 };
 
+/** Section_label → solid color for the start-marker line + label text.
+ * Punchier than SECTION_FILL so the user can read "this is a DROP coming
+ * up" at a glance against the muted band. */
+const SECTION_ACCENT: Record<string, { stroke: string; label: string }> = {
+  intro:     { stroke: "rgba(212, 212, 216, 0.85)", label: "rgba(228, 228, 231, 0.95)" },
+  buildup:   { stroke: "rgba(250, 204, 21, 0.85)",  label: "rgba(253, 224, 71, 0.95)" },
+  drop:      { stroke: "rgba(248, 113, 113, 0.95)", label: "rgba(252, 165, 165, 0.95)" },
+  breakdown: { stroke: "rgba(34, 211, 238, 0.85)",  label: "rgba(103, 232, 249, 0.95)" },
+  bridge:    { stroke: "rgba(192, 132, 252, 0.85)", label: "rgba(216, 180, 254, 0.95)" },
+  outro:     { stroke: "rgba(212, 212, 216, 0.85)", label: "rgba(228, 228, 231, 0.95)" },
+  verse:     { stroke: "rgba(96, 165, 250, 0.85)",  label: "rgba(147, 197, 253, 0.95)" },
+  chorus:    { stroke: "rgba(251, 191, 36, 0.85)",  label: "rgba(253, 224, 71, 0.95)" },
+  other:     { stroke: "rgba(163, 163, 163, 0.7)",  label: "rgba(212, 212, 212, 0.9)" },
+};
+
 /**
  * Pure presentational waveform. Renders an inline SVG of normalized peak
  * amplitudes that stretches to its container's width via
@@ -75,7 +90,16 @@ export function Waveform({
             );
             const label = r.section_label ?? "other";
             const fill = SECTION_FILL[label] ?? SECTION_FILL.other;
-            return { id: r.id, x, w, fill };
+            const accent = SECTION_ACCENT[label] ?? SECTION_ACCENT.other;
+            return {
+              id: r.id,
+              x,
+              w,
+              fill,
+              label,
+              markerStroke: accent.stroke,
+              labelFill: accent.label,
+            };
           })
       : [];
   const cueTicks =
@@ -155,19 +179,53 @@ export function Waveform({
           fill={b.fill}
         />
       ))}
-      {/* Cue / phrase ticks — thin vertical lines for hard boundaries. */}
+      {/* Section start-line + label badge at the top of each band so
+          DJs can see WHAT section is coming up, not just a colored blob.
+          Label uses the section_label (drop / buildup / breakdown / ...)
+          truncated to first 4 chars to fit narrow combo cards. */}
+      {sectionBands.map((b) => (
+        <g key={`section-marker-${b.id}`} data-testid="waveform-section-marker">
+          <line
+            x1={b.x}
+            x2={b.x}
+            y1={0}
+            y2={H}
+            stroke={b.markerStroke}
+            strokeWidth="0.4"
+          />
+          {b.w > 6 && (
+            <text
+              x={b.x + 0.6}
+              y={H * 0.32}
+              fill={b.labelFill}
+              fontSize={H * 0.36}
+              fontFamily="ui-monospace, monospace"
+              fontWeight="600"
+              style={{ textTransform: "uppercase", letterSpacing: "0.5px" }}
+            >
+              {b.label.slice(0, 4)}
+            </text>
+          )}
+        </g>
+      ))}
+      {/* Cue / phrase ticks — solid lines for hard boundaries, with a
+          small downward-pointing triangle at the top so they read as
+          "markers" rather than just stripes. */}
       {cueTicks.map((t) => (
-        <line
-          key={`cue-${t.id}`}
-          data-testid="waveform-cue"
-          x1={t.x}
-          x2={t.x}
-          y1={0}
-          y2={H}
-          stroke="rgba(255,255,255,0.35)"
-          strokeWidth="0.25"
-          strokeDasharray="1 1"
-        />
+        <g key={`cue-${t.id}`} data-testid="waveform-cue">
+          <line
+            x1={t.x}
+            x2={t.x}
+            y1={H * 0.15}
+            y2={H}
+            stroke="rgba(255,255,255,0.55)"
+            strokeWidth="0.35"
+          />
+          <polygon
+            points={`${t.x - 0.7},0 ${t.x + 0.7},0 ${t.x},${H * 0.18}`}
+            fill="rgba(255,255,255,0.8)"
+          />
+        </g>
       ))}
       {peaks.map((p, i) => {
         const clamped = Math.max(0, Math.min(1, p));
