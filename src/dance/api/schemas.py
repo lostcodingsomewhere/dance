@@ -258,6 +258,8 @@ class AbletonStateOut(BaseModel):
     beat: float | None = None
     playing_clips: dict[int, int] = Field(default_factory=dict)
     track_volumes: dict[int, float] = Field(default_factory=dict)
+    # track_index → output meter level 0-1, subscribed on deck columns.
+    track_meters: dict[int, float] = Field(default_factory=dict)
 
 
 class TempoRequest(BaseModel):
@@ -320,6 +322,9 @@ class DeckCellOut(BaseModel):
     scene_index: int
     kind: str  # "drums" | "bass" | "vocals" | "other"
     track_id: int
+    # The StemFile the cell points at — lets the FE fetch the stem-specific
+    # waveform for visualization without a separate track→stem lookup.
+    stem_file_id: int | None = None
     title: str | None = None
     artist: str | None = None
     bpm: float | None = None

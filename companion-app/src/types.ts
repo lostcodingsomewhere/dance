@@ -156,6 +156,8 @@ export interface AbletonState {
   beat: number | null;
   playing_clips: Record<string, number>;
   track_volumes: Record<string, number>;
+  /** track_index → output meter level 0-1. Subscribed on deck columns. */
+  track_meters: Record<string, number>;
 }
 
 export const EMPTY_ABLETON_STATE: AbletonState = {
@@ -164,6 +166,7 @@ export const EMPTY_ABLETON_STATE: AbletonState = {
   beat: null,
   playing_clips: {},
   track_volumes: {},
+  track_meters: {},
 };
 
 export interface TrackFilters {
@@ -203,6 +206,7 @@ export interface DeckCell {
   scene_index: number;
   kind: string; // "drums" | "bass" | "vocals" | "other"
   track_id: number;
+  stem_file_id: number | null;
   title: string | null;
   artist: string | null;
   bpm: number | null;

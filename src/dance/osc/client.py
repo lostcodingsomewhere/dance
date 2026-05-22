@@ -228,6 +228,15 @@ class AbletonOSCClient:
     def start_listen_playing_clip(self, track: int) -> None:
         self._send("/live/track/start_listen/playing_slot_index", track)
 
+    def start_listen_track_meter(self, track: int) -> None:
+        """Subscribe to a track's output meter level. AbletonOSC pushes
+        ``/live/track/get/output_meter_level`` replies at Live's meter rate
+        (~30 Hz); we throttle FE re-renders separately."""
+        self._send("/live/track/start_listen/output_meter_level", track)
+
+    def stop_listen_track_meter(self, track: int) -> None:
+        self._send("/live/track/stop_listen/output_meter_level", track)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

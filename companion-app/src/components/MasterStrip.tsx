@@ -8,6 +8,7 @@ import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
 import { BpmSlider } from "./BpmSlider";
 import { EnergySparkline } from "./EnergySparkline";
+import { VuMeter } from "./VuMeter";
 
 const VIEWS: { id: ViewName; label: string; hint: string }[] = [
   { id: "booth", label: "Booth", hint: "Live performance — now / next / set" },
@@ -152,6 +153,9 @@ export function MasterStrip() {
 
       {/* Camelot key of the dominant playing scene (the anchor for compat). */}
       <KeyDisplay camelot={currentKey} />
+
+      {/* Live combo VU — bouncing bar fed by deck-column output meters. */}
+      <VuMeter />
 
       {/* Set-arc energy sparkline — ambient view of the trajectory so far. */}
       <EnergySparkline />

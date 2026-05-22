@@ -248,6 +248,22 @@ def deck_map(
         track_cache[track_id] = (track, analysis)
         return track, analysis
 
+    # Per-cell stem_file_id: look up StemFile by (track_id, kind). Cache
+    # by (track_id, kind) so repeated cells across scenes only query once.
+    stem_cache: dict[tuple[int, str], int | None] = {}
+
+    def _stem_id(track_id: int, kind: str) -> int | None:
+        key = (track_id, kind)
+        if key in stem_cache:
+            return stem_cache[key]
+        stem = (
+            session.query(StemFile)
+            .filter(StemFile.track_id == track_id, StemFile.kind == kind)
+            .one_or_none()
+        )
+        stem_cache[key] = stem.id if stem else None
+        return stem_cache[key]
+
     cells: list[DeckCellOut] = []
     for cell in raw_cells:
         track_id = cell["track_id"]
@@ -257,6 +273,7 @@ def deck_map(
                 scene_index=cell["scene_index"],
                 kind=cell["kind"],
                 track_id=track_id,
+                stem_file_id=_stem_id(track_id, cell["kind"]),
                 title=getattr(track, "title", None),
                 artist=getattr(track, "artist", None),
                 bpm=getattr(analysis, "bpm", None),

@@ -1,6 +1,7 @@
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
 import { ComboStrip } from "../components/ComboStrip";
 import { CueStrip } from "../components/CueStrip";
+import { MasterVisualizer } from "../components/MasterVisualizer";
 import { PlayedStrip } from "../components/PlayedStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { useAutoLog } from "../hooks/useAutoLog";
@@ -41,6 +42,7 @@ export function Booth() {
           </div>
           <SceneGrid />
         </div>
+        <MasterVisualizer />
         <ComboStrip />
         <CueStrip />
         <div>

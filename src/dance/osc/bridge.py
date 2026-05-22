@@ -33,8 +33,12 @@ class AbletonState:
     beat: float | None = None
     # track_index -> playing scene_index (or -1 if no clip playing)
     playing_clips: dict[int, int] = field(default_factory=dict)
-    # track_index -> volume 0-1
+    # track_index -> volume 0-1 (fader position, not audio level)
     track_volumes: dict[int, float] = field(default_factory=dict)
+    # track_index -> output meter level 0-1 (actual audio amplitude).
+    # Subscribed on deck columns so the FE can render a VU meter that
+    # represents what's coming out of our live-remixing combo.
+    track_meters: dict[int, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +47,7 @@ class AbletonState:
             "beat": self.beat,
             "playing_clips": dict(self.playing_clips),
             "track_volumes": dict(self.track_volumes),
+            "track_meters": dict(self.track_meters),
         }
 
 
@@ -113,6 +118,9 @@ class AbletonBridge:
             "/live/track/get/playing_slot_index", self._on_playing_clip
         )
         self.listener.on("/live/track/get/volume", self._on_track_volume)
+        self.listener.on(
+            "/live/track/get/output_meter_level", self._on_track_meter
+        )
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
 
@@ -189,6 +197,12 @@ class AbletonBridge:
         if len(args) >= 2:
             track, vol = int(args[0]), float(args[1])
             self.state.track_volumes[track] = vol
+            self._broadcast()
+
+    def _on_track_meter(self, _address: str, args: tuple[Any, ...]) -> None:
+        if len(args) >= 2:
+            track, level = int(args[0]), float(args[1])
+            self.state.track_meters[track] = level
             self._broadcast()
 
     def _on_num_tracks(self, address: str, args: tuple[Any, ...]) -> None:
@@ -272,6 +286,7 @@ class AbletonBridge:
         # renamed one) are confusing — better to create a fresh set.
         if len(recovered) == len(self._DECK_DISPLAY_NAMES):
             self._deck_columns = recovered
+            self._subscribe_deck_meters(recovered)
             return recovered
         return None
 
@@ -539,7 +554,21 @@ class AbletonBridge:
             self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
             columns[kind] = idx
             idx += 1
+        self._subscribe_deck_meters(columns)
         return columns
+
+    def _subscribe_deck_meters(self, columns: dict[str, int]) -> None:
+        """Ask AbletonOSC to push output-meter updates for each deck column.
+
+        Idempotent on Live's side — re-subscribing is a no-op. Best-effort:
+        if OSC isn't reachable we just won't get meter data; the FE renders
+        a flat VU until subscriptions land.
+        """
+        for track_idx in columns.values():
+            try:
+                self.client.start_listen_track_meter(track_idx)
+            except OSError:  # pragma: no cover - best-effort
+                pass
 
     # ------------------------------------------------------------------
     # Cue / preview — audition a candidate clip in headphones without
