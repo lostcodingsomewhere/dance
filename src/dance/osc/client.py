@@ -253,6 +253,12 @@ class AbletonOSCClient:
     def stop_listen_clip_position(self, track: int, slot: int) -> None:
         self._send("/live/clip/stop_listen/playing_position", track, slot)
 
+    def set_clip_loop_start(self, track: int, slot: int, beats: float) -> None:
+        """Move just the loop_start of a clip (in beats). Used by scrub —
+        we set start_marker AND loop_start together so the loop wraps to
+        the clicked position rather than resetting to 0."""
+        self._send("/live/clip/set/loop_start", track, slot, beats)
+
     def set_clip_start_marker(self, track: int, slot: int, beats: float) -> None:
         """Set where the clip's playback begins on next fire. Takes effect
         only after the clip is re-fired; doesn't seek a currently-playing

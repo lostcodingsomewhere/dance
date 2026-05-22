@@ -136,18 +136,28 @@ def seek_clip(
     position: float,
     bridge: AbletonBridge = Depends(get_bridge),
 ) -> dict:
-    """Jump a clip's playback to ``position`` beats. Sets the clip's
-    start_marker (the LOM has no live-playhead setter) and immediately
-    re-fires the clip so the new marker takes effect. Live's clip-launch
-    quantization snaps the actual start to the next bar boundary.
+    """Jump a clip's playback to ``position`` beats. Sets BOTH the clip's
+    ``loop_start`` and ``start_marker`` to ``position`` and re-fires —
+    so on refire the clip plays from there, AND when the loop wraps it
+    returns to the same point (not 0). Live's clip-launch quantization
+    still snaps the audible jump to the next bar boundary.
+
+    Why both: our stem clips have ``loop_start = 0, loop_end = clip
+    length, loop_on = true``. Setting only ``start_marker`` lets the
+    clip play once from ``position`` then wrap to 0 — visually "the
+    loop resets." Bumping ``loop_start`` along with start_marker makes
+    the clip loop indefinitely from the new position forward (the
+    boundary moves with the click). ``loop_end`` is left at the clip's
+    natural end.
 
     Used by the FE's click-to-jump on Waveform — tap a position on the
     stem-waveform of a playing cell to seek there.
 
-    NOTE: setting start_marker is persistent — next time you fire this
-    clip naturally it'll start from this point. Re-set to 0 to "reset
-    to top" before stopping.
+    NOTE: this is persistent for the session — both markers move and
+    stay there until another seek (or a reload). To "reset to top"
+    you'd need to seek to 0 explicitly.
     """
+    bridge.client.set_clip_loop_start(track_index, slot_index, position)
     bridge.client.set_clip_start_marker(track_index, slot_index, position)
     bridge.client.fire_clip(track_index, slot_index)
     return {
