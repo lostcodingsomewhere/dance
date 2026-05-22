@@ -134,6 +134,7 @@ class AbletonBridge:
         try:
             self.client.start_listen_tempo()
             self.client.start_listen_beat()
+            self.client.start_listen_is_playing()
         except OSError as exc:
             # Live isn't listening; that's fine in dev/test.
             logger.info("Could not subscribe to Live (%s) — continuing without push state", exc)
@@ -187,10 +188,16 @@ class AbletonBridge:
             self._broadcast()
 
     def _on_playing_clip(self, _address: str, args: tuple[Any, ...]) -> None:
-        # AbletonOSC sends (track_index, scene_index)
+        # AbletonOSC sends (track_index, scene_index). scene_index == -1 is
+        # the "no clip playing on this track" signal — clear it from state
+        # so the FE's ``playing_clips[trackIdx] != null`` checks read as
+        # "stopped" rather than "playing scene -1".
         if len(args) >= 2:
             track, scene = int(args[0]), int(args[1])
-            self.state.playing_clips[track] = scene
+            if scene < 0:
+                self.state.playing_clips.pop(track, None)
+            else:
+                self.state.playing_clips[track] = scene
             self._broadcast()
 
     def _on_track_volume(self, _address: str, args: tuple[Any, ...]) -> None:
@@ -286,7 +293,7 @@ class AbletonBridge:
         # renamed one) are confusing — better to create a fresh set.
         if len(recovered) == len(self._DECK_DISPLAY_NAMES):
             self._deck_columns = recovered
-            self._subscribe_deck_meters(recovered)
+            self._subscribe_deck_columns(recovered)
             return recovered
         return None
 
@@ -554,19 +561,27 @@ class AbletonBridge:
             self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
             columns[kind] = idx
             idx += 1
-        self._subscribe_deck_meters(columns)
+        self._subscribe_deck_columns(columns)
         return columns
 
-    def _subscribe_deck_meters(self, columns: dict[str, int]) -> None:
-        """Ask AbletonOSC to push output-meter updates for each deck column.
+    def _subscribe_deck_columns(self, columns: dict[str, int]) -> None:
+        """Ask AbletonOSC to push meter + playing-clip updates for each deck
+        column. Without the playing-clip subscription AbletonState.playing_clips
+        never populates, so the FE thinks nothing is firing even when audio
+        is flowing — that's why a fresh backend boot would render "silent"
+        across the MasterVisualizer + SceneGrid despite the VU bouncing.
 
         Idempotent on Live's side — re-subscribing is a no-op. Best-effort:
-        if OSC isn't reachable we just won't get meter data; the FE renders
-        a flat VU until subscriptions land.
+        if OSC isn't reachable we just won't get push updates; FE renders
+        the empty state until subscriptions land.
         """
         for track_idx in columns.values():
             try:
                 self.client.start_listen_track_meter(track_idx)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+            try:
+                self.client.start_listen_playing_clip(track_idx)
             except OSError:  # pragma: no cover - best-effort
                 pass
 

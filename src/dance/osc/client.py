@@ -225,6 +225,9 @@ class AbletonOSCClient:
     def start_listen_beat(self) -> None:
         self._send("/live/song/start_listen/beat")
 
+    def start_listen_is_playing(self) -> None:
+        self._send("/live/song/start_listen/is_playing")
+
     def start_listen_playing_clip(self, track: int) -> None:
         self._send("/live/track/start_listen/playing_slot_index", track)
 
