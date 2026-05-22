@@ -96,10 +96,25 @@ describe("SceneGrid", () => {
     expect(screen.getByText(/Waiting for Ableton deck columns/i)).toBeInTheDocument();
   });
 
-  it("renders 8 rows once deck columns exist, even with no scenes loaded", () => {
+  it("renders 4 rows by default once deck columns exist, with an expand toggle", () => {
     state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
     renderGrid();
-    // Row labels are buttons numbered 1..8.
+    // Default-collapsed: rows 1..4 visible, 5..8 hidden behind expand toggle.
+    for (let i = 1; i <= 4; i++) {
+      expect(screen.getByRole("button", { name: String(i) })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: "5" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /show all 8 rows/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("expands to 8 rows when the toggle is clicked", () => {
+    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+    renderGrid();
+    fireEvent.click(
+      screen.getByRole("button", { name: /show all 8 rows/i }),
+    );
     for (let i = 1; i <= 8; i++) {
       expect(screen.getByRole("button", { name: String(i) })).toBeInTheDocument();
     }

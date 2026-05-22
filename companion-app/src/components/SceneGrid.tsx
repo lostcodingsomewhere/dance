@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import {
@@ -11,7 +11,8 @@ import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
 import { RoleIcon } from "./RoleIcon";
 
-const GRID_ROWS = 8;
+const COLLAPSED_ROWS = 4;
+const EXPANDED_ROWS = 8;
 
 const ROLE_COLOR: Record<StemRole, { dot: string; text: string; border: string; bg: string }> = {
   drums:  { dot: "bg-red-500",    text: "text-red-300",    border: "border-red-500/30",    bg: "bg-red-500/10" },
@@ -40,6 +41,7 @@ export function SceneGrid() {
   const fireCell = useFireCell();
   const stopScene = useStopScene();
   const stopCell = useStopCell();
+  const [expanded, setExpanded] = useState(false);
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -53,7 +55,18 @@ export function SceneGrid() {
     return m;
   }, [cells]);
 
-  const rows = Array.from({ length: GRID_ROWS }, (_, i) => i);
+  // Default to 4 visible rows; expand to 8 if user wants more headroom.
+  // If they've loaded cells in higher rows, auto-bump the visible count so
+  // loaded scenes are never hidden behind the collapse.
+  const highestLoadedIdx = useMemo(() => {
+    if (cells.length === 0) return -1;
+    return Math.max(...cells.map((c) => c.scene_index));
+  }, [cells]);
+  const visibleRows = expanded
+    ? EXPANDED_ROWS
+    : Math.max(COLLAPSED_ROWS, highestLoadedIdx + 1);
+  const rows = Array.from({ length: visibleRows }, (_, i) => i);
+  const hiddenRows = EXPANDED_ROWS - visibleRows;
 
   // Beat-pulse animation duration in ms. One pulse per beat.
   const beatMs = Math.max(200, Math.round(60_000 / Math.max(40, tempo)));
@@ -142,6 +155,26 @@ export function SceneGrid() {
           </div>
         );
       })}
+
+      {/* Expand / collapse — saves vertical space for the recs banners
+          when you only have a few rows in play. Loaded rows always show
+          (highestLoadedIdx+1 floor), so collapse never hides content. */}
+      {(hiddenRows > 0 || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="mt-1 mx-auto text-[10px] uppercase tracking-widest text-neutral-500 hover:text-neutral-300 transition-colors"
+          title={
+            expanded
+              ? "Show fewer rows"
+              : `Show all ${EXPANDED_ROWS} rows (currently showing ${visibleRows})`
+          }
+        >
+          {expanded
+            ? "▴ show fewer"
+            : `▾ show all ${EXPANDED_ROWS} rows`}
+        </button>
+      )}
     </div>
   );
 }

@@ -217,8 +217,10 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
         </button>
         {/* Row 2: song escape hatch — only on stem cards. ♪ previews the
             whole song through cue; Load song commits all 4 stems to a
-            fresh row regardless of which stem column we're sitting in. */}
-        {!isSongCard && (
+            fresh row regardless of which stem column we're sitting in.
+            Song-column cards get invisible spacers in this row instead, so
+            all 5 columns' cards align vertically in the banner strip. */}
+        {!isSongCard ? (
           <>
             <button
               type="button"
@@ -248,6 +250,25 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
             >
               {loadSong.isPending ? "loading…" : "Load song"}
             </button>
+          </>
+        ) : (
+          // Invisible spacer row so song cards match stem-card height. The
+          // elements replicate the stem-card buttons' box sizing (text-[10px]
+          // + py-1 + border) so the layout is pixel-identical; ``invisible``
+          // keeps them off-screen.
+          <>
+            <span
+              aria-hidden
+              className="invisible w-7 text-[10px] py-1 border border-transparent rounded"
+            >
+              ⏹
+            </span>
+            <span
+              aria-hidden
+              className="invisible text-[10px] py-1 border border-transparent rounded"
+            >
+              spacer
+            </span>
           </>
         )}
       </div>
