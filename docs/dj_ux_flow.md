@@ -75,15 +75,19 @@ What's happening: the user is shaping the trajectory across many swaps. Decision
 
 ## Surfaces in the live-remixing Booth
 
+Top-to-bottom layout (current; mirrors what's in `views/Booth.tsx`):
+
 | Surface | Where | What it answers |
 |---|---|---|
-| MasterStrip | Top bar | BPM · KEY anchor · energy arc · OSC heartbeat · view tabs · vibe search |
-| ComboStrip | Below MasterStrip | "What's playing right now?" — one card per stem role, surfaces the source track of each playing stem; flags anchor mode when present |
-| Per-column rec banners | Above the grid, 5 across | "What should I swap into each column next?" — live-rescored against the active combo |
-| SceneGrid (8×5) | Center, full width | Canonical APC40 mirror — tap a cell to fire one stem, tap a row to anchor a whole song |
-| PlayedStrip | Bottom footer | Set name, play count, recent plays history, end-set |
+| MasterStrip | Top bar | BPM (click → genre-anchored slider with explicit Apply) · KEY · combo VU meter · energy arc · Live-bridge heartbeat · resync · vibe search · view tabs |
+| SceneGrid (5 cols × 4 rows, expandable to 8) | Just below MasterStrip — the centerpiece | Canonical APC40 mirror. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. |
+| MasterVisualizer (stacked stems) | Below the grid | 4 horizontal rows (drums/bass/vocals/melody), each showing the *actual stem audio* waveform with a wrapping playhead synced to Live's master clock. 🔁 badge per playing row to make looping explicit. |
+| ComboStrip | Below the visualizer | "What's playing right now?" — one card per stem role, surfaces the source track of each playing stem; flags anchor mode when all playing cells point at the same scene + same source track. |
+| CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's waveform, ⏹ stop, and a "→ Load … to master" one-click commit. |
+| Per-column rec banners (5 across) | Below the cue strip | "What should I swap into each column next?" — live-rescored against the active combo. Per card: ▶ stem preview · ♪ song preview · Load stem · Load song. |
+| PlayedStrip | Bottom footer | Set name, play count, recent plays history, end-set. |
 
-There are no sidebars. Glanceable signals (energy arc, played history) live in slim strips so the grid + banners own the center.
+There are no sidebars. Glanceable signals (energy arc, played history) live in slim strips so the grid + banners own the center. The grid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8.
 
 ## What information must be co-located
 

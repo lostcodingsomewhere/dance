@@ -9,7 +9,7 @@ Instructions for Claude Code working on this repo. Keep brief — the docs alrea
 Three pieces:
 1. **Python pipeline** (`src/dance/`) — Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST + WebSocket for live Ableton state + OSC passthrough.
-3. **React companion app** (`companion-app/`) — Vite + TS + Tailwind. iPad-landscape UI: Now Playing, Up Next, Library, Session History.
+3. **React companion app** (`companion-app/`) — Vite + TS + Tailwind. Three views: **Booth** (live performance: SceneGrid mirror + MasterVisualizer stacked-stem waveforms + ComboStrip + per-column rec banners + CueStrip + PlayedStrip), **Crate** (pre-set library curation), **Pipeline** (ingest/processing status). All recs scoped per-column and re-scored against the active stem combo. See [`docs/dj_ux_flow.md`](docs/dj_ux_flow.md) for the full surfaces map.
 
 Full architecture: [`docs/architecture.md`](docs/architecture.md). Repo layout: [`docs/dev.md`](docs/dev.md).
 

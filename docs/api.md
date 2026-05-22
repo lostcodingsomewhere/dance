@@ -30,6 +30,8 @@ Response/request shapes live in `src/dance/api/schemas.py`.
 | GET    | `/api/v1/tracks/{id}`                 | -                                                                            | `TrackOut`                        | 404 |
 | GET    | `/api/v1/tracks/{id}/regions`         | `region_type, stem_file_id`                                                  | `list[RegionOut]`                 | 404 |
 | GET    | `/api/v1/tracks/{id}/stems`           | -                                                                            | `list[StemFileOut]`               | 404 |
+| GET    | `/api/v1/tracks/{id}/waveform`        | `num_peaks` (query, default 200, range 50-1000)                              | `WaveformOut`                     | 404, 422, 503 |
+| GET    | `/api/v1/stems/{stem_file_id}/waveform` | `num_peaks` (query, default 200, range 50-1000)                            | `WaveformOut`                     | 404, 422, 503 |
 | POST   | `/api/v1/tracks/{id}/tag`             | query: `deep` (bool)                                                         | `TrackOut`                        | 404, 502, 503 |
 | POST   | `/api/v1/tracks/{id}/als`             | `AlsExportRequest` (`out_path?`)                                             | `AlsExportResult`                 | 400, 403, 404 |
 
@@ -40,6 +42,7 @@ Notes:
 - `tag?deep=true` requires `DANCE_DEEP_TAGGER_ENABLED=true` and returns 503 otherwise (`tracks.py:126`).
 - `tag` returns 502 if the tagger raises (model load failure, audio missing, etc.).
 - `als` returns 403 when `out_path` resolves outside `settings.als_output_dir` (`tracks.py:175`), 400 for missing analysis / no stems / not COMPLETE.
+- `waveform` endpoints decimate the audio (librosa) into `num_peaks` amplitude windows normalized to `[0, 1]`. Result is cached as a `{path}.waveform.json` sidecar so subsequent calls are ~instant. 422 for out-of-range `num_peaks`; 404 if the audio file is missing on disk; 503 on decode failure.
 
 ---
 
@@ -50,6 +53,7 @@ Notes:
 | POST   | `/api/v1/recommend`                   | `RecommendRequest`                                 | `list[RecommendationOut]`         | 400 |
 | GET    | `/api/v1/recommend/by-seed/{id}`      | `k` (query, default 10)                            | `list[RecommendationOut]`         |     |
 | POST   | `/api/v1/recommend/text`              | `TextRecommendRequest`                             | `list[RecommendationOut]`         | 400, 503 |
+| POST   | `/api/v1/recommend/by-column`         | `ColumnRecsRequest`                                | `ColumnRecsResponse`              | 400 |
 
 `RecommendRequest`:
 
@@ -66,6 +70,8 @@ Notes:
 `kinds` must be valid `EdgeKind` values (`src/dance/core/database.py:148`) — invalid -> 400. Weights default to 1.0 per kind.
 
 `/recommend/text` accepts a free-text `query` ("punchy techy with vocals") and ranks by CLAP cosine. First call lazy-loads the CLAP model — slow (~5-10 s); subsequent calls are cached on `app.state.embedding_stage`. Returns 503 if the model fails to load.
+
+`/recommend/by-column` is the live-remixing rec stream: takes a `column` (`drums` / `bass` / `vocals` / `other` / `mix`) plus the active combo's `combo_stem_ids` + `master_bpm` and returns top-K candidates filtered by stem kind, scored against the combo via per-stem embedding cosine + Camelot key compat + BPM proximity. Returns 400 for unknown column. Used by the FE per-column banners — one query per column, re-run on combo change.
 
 ---
 
@@ -85,21 +91,50 @@ Notes:
 
 ## Ableton — `src/dance/api/routers/ableton.py`
 
-All endpoints are fire-and-forget OSC sends except `/state` and `/load-track`.
+All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/decks*`, `/preview`, and `/transport/stop-scene` (which wait or return structured data).
 
-| Method | Path                                  | Body                | Response              | 4xx |
-|--------|---------------------------------------|---------------------|-----------------------|-----|
-| POST   | `/api/v1/ableton/play`                | -                   | `{"ok": true}`        |     |
-| POST   | `/api/v1/ableton/stop`                | -                   | `{"ok": true}`        |     |
-| POST   | `/api/v1/ableton/tempo`               | `TempoRequest`      | `{"ok": true}`        |     |
-| POST   | `/api/v1/ableton/fire`                | `FireClipRequest`   | `{"ok": true}`        |     |
-| POST   | `/api/v1/ableton/volume`              | `VolumeRequest`     | `{"ok": true}`        |     |
-| GET    | `/api/v1/ableton/state`               | -                   | `AbletonStateOut`     |     |
-| POST   | `/api/v1/ableton/load-track`          | `LoadTrackRequest`  | `LoadTrackResult`     | 404, 503 |
+**Transport + state:**
 
-`/state` returns the latest snapshot held by `AbletonBridge` — last observed tempo/beat/is_playing + per-track playing clip + volume. If Live isn't running, the fields are `null`.
+| Method | Path                                            | Body                | Response              | 4xx |
+|--------|-------------------------------------------------|---------------------|-----------------------|-----|
+| POST   | `/api/v1/ableton/play`                          | -                   | `{"ok": true}`        |     |
+| POST   | `/api/v1/ableton/stop`                          | -                   | `{"ok": true}`        |     |
+| POST   | `/api/v1/ableton/tempo`                         | `TempoRequest`      | `{"ok": true}`        |     |
+| POST   | `/api/v1/ableton/fire`                          | `FireClipRequest`   | `{"ok": true}`        |     |
+| POST   | `/api/v1/ableton/volume`                        | `VolumeRequest`     | `{"ok": true}`        |     |
+| GET    | `/api/v1/ableton/state`                         | -                   | `AbletonStateOut`     |     |
+| POST   | `/api/v1/ableton/transport/fire-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/fire-clip/{t}/{s}`   | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/stop-cell/{t}/{s}`   | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/stop-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/stop-track/{idx}`    | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/stop-all`            | -                   | `{"ok": true}`        |     |
 
-`/load-track` creates empty named/colored audio tracks in Live (1 for mix + 1 per stem) and returns their indices. Cannot actually load samples (Live API limitation); the React UI typically follows up with `POST /files/reveal` so the user can drag the stems in. 503 when the OSC send raises `OSError`.
+**Decks + loading + cue/preview:**
+
+| Method | Path                                  | Body                | Response                | 4xx |
+|--------|---------------------------------------|---------------------|-------------------------|-----|
+| POST   | `/api/v1/ableton/load-track`          | `LoadTrackRequest`  | `LoadTrackResult`       | 404, 503 |
+| GET    | `/api/v1/ableton/decks`               | -                   | `DeckMapOut`            |     |
+| POST   | `/api/v1/ableton/decks/reset`         | -                   | `{"ok": true}`          |     |
+| POST   | `/api/v1/ableton/decks/clean`         | -                   | `{"ok": true, ...}`     |     |
+| POST   | `/api/v1/ableton/decks/resync`        | -                   | `{ok, scanned, adopted, unmatched}` |     |
+| POST   | `/api/v1/ableton/preview`             | `PreviewRequest`    | `PreviewResult`         | 400, 404, 503 |
+| POST   | `/api/v1/ableton/preview/stop`        | -                   | `PreviewResult`         |     |
+
+`/state` returns the latest snapshot held by `AbletonBridge` — tempo/beat/is_playing + per-track playing clip + volume + output-meter level (subscribed on deck columns). If Live isn't running, the fields are `null`.
+
+`/load-track` populates clip slots in Live's deck-column session view. `kinds=None` loads all 4 stems into a fresh row (anchor mode); `kinds=["drums"]` loads just one stem into the next free drums slot (live-remixing mode). 503 on OSC errors.
+
+`/decks` is the canonical view of "which (scene, kind) cells have which source-track loaded". Returns `cells` with stem_file_id populated. Polled by the FE every 2 s.
+
+`/decks/resync` is non-destructive: walks each deck-column's first 16 scenes via `/live/clip/get/name` queries, parses each clip name (`"{title} ({kind})"`), matches to a `Track` by title, rebuilds `_deck_cells`. Returns counts + any unmatched clips so the UI can surface them. Use after a backend restart drifted state from Live's actual session.
+
+`/preview` auditions a track or stem through a dedicated **Cue** track in Live whose output is routed to Scarlett 4i4 outs 3/4 (headphones, not master). The Cue track is created lazily on first preview. `column="mix"` previews the full-track audio; stem columns preview just that stem. 404 when no audio file resolves.
+
+`/decks/clean` deletes every `Deck *` + `Cue` track in Live and resets bridge state. Use as a nuclear option when things have drifted irrecoverably.
+
+**Bridge persistence**: deck columns / cells / cue-track index are persisted to `{settings.data_dir}/deck_state.json` atomically on every mutation and restored on bridge `start()`. A backend restart no longer loses state.
 
 ---
 

@@ -110,6 +110,25 @@ Append to the top. Use this template:
 **Next time:** one thing to try
 ```
 
+### 2026-05-22 — Booth UX hardening + visualizers + deck-state persistence
+
+**Played:** No DJing yet — UX iteration pass.
+**Worked:**
+- SceneGrid at top of Booth (was buried below banners), tap-to-stop on cells + row labels (was fire-only), bigger emerald playing-state visual + 🔁 loop badge.
+- VU meter in MasterStrip (sum of deck-column meters via AbletonOSC subscription — a separate output_meter_level per deck column).
+- Master Stacked Stems visualizer below the grid: one row per stem role (drums/bass/vocals/melody), each rendering the *actual stem audio* waveform with a wrapping playhead derived from Live's master beat clock.
+- CueStrip surfaces what's auditioning in headphones (parallel to ComboStrip's master surface), with `→ Load … to master` one-click commit.
+- BPM editor became a slider popover with genre-anchored ticks (chill / hip-hop / house / techno / trance / d&b), explicit Apply button so glancing drags can't change tempo mid-set.
+- Cell-level loads: rec card buttons are now column-specific (`Load drums` / `Load bass` / etc.) and only load that stem; a separate `Load song` button on stem cards loads all 4 stems anchor-style.
+- "OSC" → "Live" relabel + heartbeat green-dot tooltip; dropped the confusing "X decks loaded · out-of-sync" chip.
+**Broke:**
+- Bridge restart was wiping `_deck_cells` even though Live still had the clips loaded → SceneGrid showed empty. Fixed two ways: (a) bridge persists state to `{settings.data_dir}/deck_state.json` atomically on every mutation + restores on `start()`, and (b) new `POST /api/v1/ableton/decks/resync` scans Live's deck-column clip slots, parses clip names back to `Track` ids via DB lookup, and adopts them into bridge state. A small `↻ resync` button in MasterStrip triggers the latter.
+- `playing_slot_index` wasn't subscribed per-deck-column → `AbletonState.playing_clips` stayed empty so the FE never saw firing cells (VU meter worked but visuals showed "silent"). Fixed by subscribing in `_subscribe_deck_columns` alongside the meter subscription.
+**Next time:**
+1. Wire up the Scarlett 4i4 physically when it arrives (outs 1/2 master, 3/4 cue) and confirm preview audio leaves on 3/4 only.
+2. Try a 30-min real set — see what breaks and what needs rethinking.
+3. Set/crate refactor — pre-curated track pool that constrains rec scoring during a set. Proposal pending.
+
 ### 2026-05-18 — Scarlett 2i2 → 4i4 swap (cue routing unlocked)
 
 **Played:** No DJing yet — hardware change session.

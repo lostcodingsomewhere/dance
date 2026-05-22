@@ -1,42 +1,52 @@
 # Proposal — Frontend as the primary DJ surface
 
-**Status:** implemented (rev 3 — layout reshaped to drop song-mode artifacts)
-**Date:** 2026-05-17 (initial); 2026-05-18 (rev 3)
+**Status:** implemented (rev 4 — grid-on-top, tap-to-stop, master visualizer, cue strip, BPM slider, cell-level loads, deck-state persistence)
+**Date:** 2026-05-17 (initial); 2026-05-22 (rev 4)
 **Builds on:** [`../vision.md`](../vision.md), [`../dj_ux_flow.md`](../dj_ux_flow.md)
 
 ## TL;DR
 
-The companion app is the only screen the user looks at during a set. The screen is full-width: a top **MasterStrip** (BPM, KEY, energy arc, OSC heartbeat, view nav), a horizontal **ComboStrip** under it (one card per stem role, showing what's playing per role with its source-track metadata), then **five per-column rec banners** above the **8×5 SceneGrid** (the APC40 mirror), and a thin **PlayedStrip** footer for set history. Ableton is the invisible audio engine; the APC40 is the hands.
+The companion app is the only screen the user looks at during a set. Top-to-bottom layout (current; see `companion-app/src/views/Booth.tsx`):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ MasterStrip   BPM 124  KEY 5A   Arc▁▂▄▆█  0 decks  •OSC   ⌘K   Booth Crate    │
+│ MasterStrip   BPM 124 (click→slider)  KEY 5A   Lvl▰▰▰▰░  Arc▁▂▄▆█  •Live  ↻  ⌘K  Booth Crate │
 ├──────────────────────────────────────────────────────────────────────────────┤
+│ SCENE GRID · TAP TO FIRE / STOP (MIRRORS APC40)                                │
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │ scene 1  ▶ ▶ ▶ ▶  (anchor)                                               │ │
+│ │ scene 2     ▶  ▶                                                         │ │
+│ │ scene 3                                                                  │ │
+│ │ scene 4                                                                  │ │
+│ │ ▾ show all 8 rows                                                        │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                │
+│ MASTER · STACKED STEMS                                                         │
+│ ┌─ drums  🔁  ~~~~~~|~~~~~~~~~~~~~~  ──────────────────────────────────────┐ │
+│ ├─ bass   🔁  ~~~~~~~~|~~~~~~~~~~~~  ──────────────────────────────────────┤ │
+│ ├─ vocals      silent                                                        │ │
+│ └─ melody 🔁  ~~~~~~~~~~~~~~~~|~~~~  ──────────────────────────────────────┘ │
+│                                                                                │
 │ CURRENT COMBO                                                  live remix     │
-│ ┌─ drums ──┐┌─ bass ───┐┌─ vocals ─┐┌─ other ──┐┌─ mix ─────┐                  │
-│ │ Track A  ││ Track B  ││ silent   ││ Track C  ││ silent    │   (per-role)    │
-│ │ 124 · 8A ││ 124 · 8B ││          ││ 122 · 7A ││           │                  │
-│ └──────────┘└──────────┘└──────────┘└──────────┘└───────────┘                  │
+│ ┌─ drums ──┐┌─ bass ───┐┌─ vocals ─┐┌─ melody ─┐┌─ song ─────┐                 │
+│ │ Track A  ││ Track B  ││ silent   ││ Track C  ││ silent     │   (per-role)   │
+│ └──────────┘└──────────┘└──────────┘└──────────┘└────────────┘                 │
+│                                                                                │
+│ IN CUE · DRUMS  (conditional — only when previewing)                          │
+│ ┌── waveform ─────────────────────────────────────────────────┐ ⏹  →Load     │
 │                                                                                │
 │ NEXT PER COLUMN · LIVE RE-SCORED AGAINST THE COMBO                            │
-│ ┌── drums ──┐┌── bass ──┐┌── vocals ─┐┌── other ─┐┌── mix ──┐                  │
-│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │  ← banners      │
-│ │ rec rec   ││ rec rec  ││ rec rec   ││ rec rec  ││ rec rec │                  │
-│ └───────────┘└──────────┘└───────────┘└──────────┘└─────────┘                  │
-│                                                                                │
-│ SCENE GRID · TAP TO FIRE (MIRRORS APC40)                                       │
-│ ┌──────────────────────────────────────────────────────────────────────────┐ │
-│ │  row 1  ▶  (drums)                                                       │ │
-│ │  row 2          ▶            ▶                                           │ │
-│ │  ...                                                                     │ │
-│ │  row 8                                                                   │ │
-│ └──────────────────────────────────────────────────────────────────────────┘ │
+│ ┌── drums ──┐┌── bass ──┐┌── vocals ─┐┌── melody ┐┌── song ──┐                 │
+│ │ rec       ││ rec      ││ rec       ││ rec      ││ rec      │  ← banners     │
+│ │ [▶][Load] ││ [▶][Load]││ [▶][Load] ││ [▶][Load]││ [▶][Load]│   2×2 grid:    │
+│ │ [♪][Song] ││ [♪][Song]││ [♪][Song] ││ [♪][Song]││  ·····   │   stem · song  │
+│ └───────────┘└──────────┘└───────────┘└──────────┘└──────────┘                 │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ PlayedStrip   Set · 12 plays · 02:27 AM   [#1 Hyph][#2 Mort][#3 …]   end set  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-No sidebars. The COMBO STRIP makes "what's playing" honest (per-role, not per-track), and everything glanceable (energy arc, history) goes into thin strips at the edges so the grid + banners own the center.
+The SceneGrid is the dominant visual at the top — that's the canonical APC40 mirror. The MasterVisualizer right below shows the actual stem audio with wrapping playheads. ComboStrip honestly reports source-track per role. CueStrip materializes only when something's in headphones. Recs banners sit at the bottom near where you'd reach for them next. No sidebars; everything glanceable lives in slim strips.
 
 ## Problem
 
