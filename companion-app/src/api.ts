@@ -361,6 +361,17 @@ export function abletonCleanDecks(): Promise<CleanDecksResult> {
   return request<CleanDecksResult>("/ableton/decks/clean", { method: "POST" });
 }
 
+export interface ResyncDecksResult {
+  ok: boolean;
+  scanned: number;
+  adopted: number;
+  unmatched: Array<{ scene_index: number; kind: string; clip_name: string; tried_title: string }>;
+}
+
+export function abletonResyncDecks(): Promise<ResyncDecksResult> {
+  return request<ResyncDecksResult>("/ableton/decks/resync", { method: "POST" });
+}
+
 // "Push to Live" — creates audio tracks in Live for a (track, stems) bundle.
 // AbletonOSC can't load samples programmatically, so this only prepares the
 // empty tracks; the React caller typically also reveals the stems folder in

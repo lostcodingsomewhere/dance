@@ -41,7 +41,13 @@ def create_app(
 
     settings = settings or get_settings()
     own_bridge = bridge is None
-    bridge = bridge or AbletonBridge()
+    # Persist deck-column / cell / cue-track state inside the user's data
+    # dir so a backend restart can restore what was loaded in Live. Path
+    # is plumbed through here so tests using a tmp data_dir don't share
+    # the production ``~/.dance/deck_state.json``.
+    bridge = bridge or AbletonBridge(
+        state_file=settings.data_dir / "deck_state.json"
+    )
     session_factory = session_factory or get_session_factory(settings.db_url)
 
     # Swap the global JobRegistry for one that persists to data_dir.

@@ -4,7 +4,9 @@ the latest observed state. This is what the FastAPI backend talks to.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -77,12 +79,20 @@ class AbletonBridge:
         host: str = "127.0.0.1",
         send_port: int = ABLETON_RECEIVE_PORT,
         listen_port: int = ABLETON_SEND_PORT,
+        state_file: Path | None = None,
     ) -> None:
         self.client = AbletonOSCClient(host=host, port=send_port)
         self.listener = AbletonOSCListener(host=host, port=listen_port)
         self.state = AbletonState()
         self._subscribers: list[StateListener] = []
         self._lock = threading.Lock()
+
+        # Persistence path for deck columns / cells / cue-track index. Pass
+        # an explicit path to enable atomic save/restore across backend
+        # restarts; pass ``None`` (the test default) to disable persistence
+        # entirely. Production wires this via api/app.py from
+        # ``settings.data_dir / "deck_state.json"``.
+        self._state_file = state_file
 
         # Request/reply scratchpad: handlers stash results here, callers
         # ``threading.Event``-wait for them. Keyed by OSC reply address.
@@ -123,6 +133,7 @@ class AbletonBridge:
         )
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
+        self.listener.on("/live/clip/get/name", self._on_clip_name)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -130,6 +141,10 @@ class AbletonBridge:
 
     def start(self) -> None:
         self.listener.start()
+        # First, restore from disk: deck columns + cells + cue-track from
+        # the last session. Lets the FE render the correct grid immediately
+        # on backend restart, before Live has a chance to confirm.
+        self._load_state()
         # Ask AbletonOSC to start pushing the things we care about.
         try:
             self.client.start_listen_tempo()
@@ -139,14 +154,79 @@ class AbletonBridge:
             # Live isn't listening; that's fine in dev/test.
             logger.info("Could not subscribe to Live (%s) — continuing without push state", exc)
         # Best-effort adopt existing Deck columns so a backend restart
-        # doesn't create duplicates in Live. Silent on timeout — Live may
-        # not be running yet.
+        # doesn't create duplicates in Live. If the persisted columns and
+        # Live's actual track-name layout disagree, Live wins. Silent on
+        # timeout — Live may not be running yet.
         try:
             recovered = self.recover_deck_columns(timeout=1.0)
             if recovered is not None:
                 logger.info("Adopted existing deck columns: %s", recovered)
+            # Also subscribe meters + playing-clip on whatever columns we
+            # have (recovered OR persisted-from-disk) so the FE state
+            # populates immediately without a fresh load.
+            if self._deck_columns:
+                self._subscribe_deck_columns(self._deck_columns)
         except Exception:  # noqa: BLE001 — never let recovery crash boot
             logger.exception("Deck-column recovery failed")
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _persist_state(self) -> None:
+        """Atomically write deck columns/cells/cue-track to disk. Called on
+        every mutation so a backend restart can reconstruct the grid.
+        Best-effort: write failures are logged but don't crash.
+        No-op when state_file is None (test default)."""
+        if self._state_file is None:
+            return
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "deck_columns": self._deck_columns,
+                # Tuples aren't JSON; serialize as list-of-triples.
+                "deck_cells": [
+                    [s, k, tid] for (s, k), tid in self._deck_cells.items()
+                ],
+                "cue_track_idx": self._cue_track_idx,
+            }
+            tmp = self._state_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, self._state_file)
+        except OSError as exc:  # pragma: no cover - best-effort
+            logger.warning("Could not persist bridge state: %s", exc)
+
+    def _load_state(self) -> None:
+        """Restore deck columns/cells/cue-track from disk. Best-effort: on
+        any error (missing file, malformed JSON, schema drift) we just keep
+        the defaults and move on — the bridge will rebuild as the user
+        loads tracks. No-op when state_file is None (test default)."""
+        if self._state_file is None:
+            return
+        try:
+            raw = self._state_file.read_text()
+        except OSError:
+            return
+        try:
+            data = json.loads(raw)
+            cols = data.get("deck_columns")
+            if isinstance(cols, dict):
+                self._deck_columns = {str(k): int(v) for k, v in cols.items()}
+            cells = data.get("deck_cells", [])
+            if isinstance(cells, list):
+                self._deck_cells = {
+                    (int(s), str(k)): int(tid) for s, k, tid in cells
+                }
+            cue = data.get("cue_track_idx")
+            if isinstance(cue, int):
+                self._cue_track_idx = cue
+            logger.info(
+                "Restored bridge state: %d columns, %d cells",
+                len(self._deck_columns or {}),
+                len(self._deck_cells),
+            )
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning("Could not parse persisted bridge state: %s", exc)
 
     def stop(self) -> None:
         self.listener.stop()
@@ -226,6 +306,20 @@ class AbletonBridge:
         if evt is not None:
             evt.set()
 
+    def _on_clip_name(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, name) for /live/clip/get/name. Used
+        # by scan_live_for_cells() to adopt clips that were already in Live
+        # before the bridge knew about them.
+        if len(args) >= 3:
+            self._reply_values[address] = (
+                int(args[0]),
+                int(args[1]),
+                str(args[2]) if args[2] is not None else "",
+            )
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     # ------------------------------------------------------------------
     # Request/reply helpers
     # ------------------------------------------------------------------
@@ -294,6 +388,7 @@ class AbletonBridge:
         if len(recovered) == len(self._DECK_DISPLAY_NAMES):
             self._deck_columns = recovered
             self._subscribe_deck_columns(recovered)
+            self._persist_state()
             return recovered
         return None
 
@@ -318,6 +413,7 @@ class AbletonBridge:
         self._deck_columns = None
         self._deck_cells = {}
         self._cue_track_idx = None
+        self._persist_state()
         return {"deleted": len(deck_indices), "indices": sorted(deck_indices)}
 
     # ------------------------------------------------------------------
@@ -364,6 +460,7 @@ class AbletonBridge:
         """
         self._deck_columns = None
         self._deck_cells = {}
+        self._persist_state()
 
     def get_deck_state(self) -> dict[str, Any]:
         """Snapshot of which Ableton tracks are our deck columns and which
@@ -382,6 +479,74 @@ class AbletonBridge:
             "columns": dict(self._deck_columns) if self._deck_columns else None,
             "cells": cells,
         }
+
+    def scan_live_for_cells(
+        self,
+        *,
+        num_slots: int = 16,
+        timeout_per_slot: float = 0.15,
+    ) -> list[dict[str, Any]]:
+        """Walk each deck-column track's first ``num_slots`` clip slots and
+        return what's there. Sequential one-shot OSC queries to
+        ``/live/clip/get/name``; empty slots return no reply (we time out
+        quickly and move on).
+
+        Returns a list of ``{"scene_index": int, "kind": str, "clip_name":
+        str}`` for every populated cell. Caller is responsible for matching
+        the clip names back to dance Track ids (we set names to
+        ``"{title} ({kind})"`` when loading).
+
+        Used by the resync endpoint to adopt clips that were placed in
+        Live before the bridge knew about them — e.g. after a backend
+        restart with persistence missing.
+        """
+        if self._deck_columns is None:
+            return []
+        found: list[dict[str, Any]] = []
+        for kind, track_idx in self._deck_columns.items():
+            for slot in range(num_slots):
+                name = self._get_clip_name(
+                    track_idx, slot, timeout=timeout_per_slot
+                )
+                if name:
+                    found.append(
+                        {"scene_index": slot, "kind": kind, "clip_name": name}
+                    )
+        return found
+
+    def _get_clip_name(
+        self, track: int, slot: int, *, timeout: float = 0.15
+    ) -> str | None:
+        """One-shot clip-name query. Returns None on timeout / empty slot.
+
+        Verifies the reply matches the requested (track, slot) so a delayed
+        reply for an earlier slot doesn't bleed into the next query.
+        """
+        addr = "/live/clip/get/name"
+        # Fresh event so we don't accidentally observe a stale reply.
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_clip_name(track, slot)
+        except OSError:
+            return None
+        if not evt.wait(timeout):
+            return None
+        result = self._reply_values.get(addr)
+        if not isinstance(result, tuple) or len(result) < 3:
+            return None
+        reply_track, reply_slot, reply_name = result
+        if reply_track != track or reply_slot != slot:
+            return None
+        return reply_name or None
+
+    def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
+        """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
+        and persist. Caller pre-resolves track_ids via DB lookup; we just
+        store + persist."""
+        self._deck_cells = dict(cells)
+        self._persist_state()
 
     def next_free_slot(self, kind: str) -> int:
         """Lowest scene index where the given kind's cell is empty."""
@@ -539,6 +704,10 @@ class AbletonBridge:
         except OSError:  # pragma: no cover - best-effort UI
             pass
 
+        # Persist after every load so a backend restart can reconstruct
+        # the grid without losing what's in Live.
+        self._persist_state()
+
         return {
             "scene_index": scene_index,
             "track_indices": deck_columns,
@@ -623,6 +792,7 @@ class AbletonBridge:
         self.client.set_track_output_routing_type(idx, self._CUE_OUTPUT_TYPE)
         self.client.set_track_output_routing_channel(idx, self._CUE_OUTPUT_CHANNEL)
         self._cue_track_idx = idx
+        self._persist_state()
         return idx
 
     def preview_audio(

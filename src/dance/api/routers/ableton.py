@@ -7,6 +7,7 @@ Live's actual state arrives asynchronously via the bridge listener.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -301,6 +302,60 @@ def clean_decks(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     deck columns the companion no longer knows about — typically after a
     backend restart that lost its in-memory cache."""
     return {"ok": True, **bridge.clean_live_decks()}
+
+
+@router.post("/decks/resync")
+def resync_decks(
+    bridge: AbletonBridge = Depends(get_bridge),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Scan Live's deck-column clip slots and rebuild ``_deck_cells`` from
+    what's actually there. Useful when the in-memory cell map drifts from
+    Live's session view (typical case: backend restart without persistence,
+    or user manually placed clips outside our Load endpoint).
+
+    Workflow:
+      1. ``bridge.scan_live_for_cells()`` walks each deck column × scene,
+         queries the clip name, returns a list of populated cells.
+      2. We parse each clip name (format we set on load: ``"{title} ({kind})"``)
+         and resolve the title to a dance Track id via DB lookup.
+      3. ``bridge.adopt_cells(new_map)`` replaces the in-memory cell map
+         and persists.
+
+    Returns ``{ok, scanned, adopted, unmatched: [...] }`` so the UI can
+    surface "we found 12 clips, matched 10 to your library" — the user
+    knows which clips couldn't be resolved.
+    """
+    scanned = bridge.scan_live_for_cells()
+    adopted: dict[tuple[int, str], int] = {}
+    unmatched: list[dict[str, Any]] = []
+
+    for entry in scanned:
+        clip_name: str = entry["clip_name"]
+        kind: str = entry["kind"]
+        # Reverse the load-format: "{title} ({kind})". Pull "{kind}" from
+        # the trailing parenthetical (last "(...)"); the rest is title.
+        title = clip_name
+        if clip_name.endswith(")") and "(" in clip_name:
+            opener = clip_name.rfind("(")
+            paren = clip_name[opener + 1 : -1].strip().lower()
+            if paren == kind:
+                title = clip_name[:opener].strip()
+        track = (
+            session.query(Track).filter(Track.title == title).one_or_none()
+        )
+        if track is None:
+            unmatched.append({**entry, "tried_title": title})
+            continue
+        adopted[(entry["scene_index"], kind)] = int(track.id)
+
+    bridge.adopt_cells(adopted)
+    return {
+        "ok": True,
+        "scanned": len(scanned),
+        "adopted": len(adopted),
+        "unmatched": unmatched,
+    }
 
 
 # ---------------------------------------------------------------------------

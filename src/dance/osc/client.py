@@ -194,6 +194,11 @@ class AbletonOSCClient:
     def set_clip_name(self, track: int, slot: int, name: str) -> None:
         self._send("/live/clip/set/name", track, slot, name)
 
+    def get_clip_name(self, track: int, slot: int) -> None:
+        """Ask Live to push the clip's name back via /live/clip/get/name.
+        Reply args: (track, slot, name) or no reply if the slot is empty."""
+        self._send("/live/clip/get/name", track, slot)
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------

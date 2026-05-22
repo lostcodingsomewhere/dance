@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
-import { useDeckMap } from "../hooks/useDeckMap";
+import { useDeckMap, useResyncDecks } from "../hooks/useDeckMap";
 import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
 import { BpmSlider } from "./BpmSlider";
@@ -26,6 +26,7 @@ export function MasterStrip() {
   const view = useAppStore((s) => s.currentView);
   const deckMap = useDeckMap();
   const heartbeat = useBridgeHeartbeat();
+  const resync = useResyncDecks();
 
   // Camelot key of the dominant playing cell — the harmonic anchor for compat
   // math. We scan playing_clips against the deck columns and pick the first
@@ -160,12 +161,29 @@ export function MasterStrip() {
       {/* Set-arc energy sparkline — ambient view of the trajectory so far. */}
       <EnergySparkline />
 
-      {/* Live bridge heartbeat — red when AbletonOSC has gone stale. The
-          deck-count and out-of-sync chips were removed: the SceneGrid mirror
-          below already shows what's loaded, so the chip was redundant; and
-          the "out-of-sync" warning surfaced stale localStorage state more
-          confusingly than usefully. */}
+      {/* Live bridge heartbeat — red when AbletonOSC has gone stale. */}
       <HeartbeatDot alive={heartbeat.alive} />
+
+      {/* Resync — non-destructive: scans Live's deck-column clips and
+          adopts whatever's there into bridge state. Use when the
+          SceneGrid looks empty but Live has clips loaded. */}
+      <button
+        type="button"
+        onClick={() => resync.mutate()}
+        disabled={resync.isPending}
+        title={
+          resync.data
+            ? `Last resync: adopted ${resync.data.adopted}/${resync.data.scanned} clips from Live`
+            : "Adopt clips already in Live into the SceneGrid (non-destructive)"
+        }
+        className="h-7 px-2 rounded text-[10px] uppercase tracking-widest text-neutral-500 hover:text-amber-300 hover:bg-neutral-900 border border-transparent hover:border-neutral-800 transition-colors disabled:opacity-50"
+      >
+        {resync.isPending
+          ? "scanning…"
+          : resync.data
+          ? `↻ ${resync.data.adopted}/${resync.data.scanned}`
+          : "↻ resync"}
+      </button>
 
 
       {/* Command bar trigger */}
