@@ -264,19 +264,22 @@ export function Waveform({
           ``pointerEvents: auto`` so the title fires; the icons sit
           above the SVG but the SVG's onClick still bubbles up because
           the icons cover only a tiny rect. */}
+      {/* Per-section hover overlays. Each covers its full band so
+          hovering ANYWHERE inside the colored region reveals the
+          section name via native tooltip (Drop / Breakdown / etc.) —
+          not just the tiny icon. Click anywhere in a band seeks to
+          its start (parent's snap logic also does this, but doing it
+          explicitly here is cleaner & avoids the SVG onClick when
+          the band overlay captures the click). */}
       {sectionBands.map((b) => (
         <div
-          key={`icon-${b.id}`}
-          data-testid="waveform-section-icon"
+          key={`band-${b.id}`}
+          data-testid="waveform-section-band"
           title={b.name}
           onClick={
             onSeek
               ? (e) => {
                   e.stopPropagation();
-                  // Seek to this section's start specifically. The
-                  // click-anywhere snap in the parent would also land
-                  // here, but doing it explicitly avoids rounding from
-                  // the icon's bounding rect.
                   onSeek(b.x / 100);
                 }
               : undefined
@@ -285,13 +288,30 @@ export function Waveform({
             position: "absolute",
             left: `${b.x}%`,
             top: 0,
+            width: `${b.w}%`,
+            height: "100%",
+            pointerEvents: "auto",
+            cursor: onSeek ? "pointer" : undefined,
+          }}
+        />
+      ))}
+      {/* Section icons (visual only). pointerEvents: none so they
+          don't capture hover/click — the band overlay below them
+          handles all interaction. */}
+      {sectionBands.map((b) => (
+        <div
+          key={`icon-${b.id}`}
+          data-testid="waveform-section-icon"
+          style={{
+            position: "absolute",
+            left: `${b.x}%`,
+            top: 0,
             color: b.markerStroke,
             fontSize: Math.max(9, Math.min(12, H * 0.42)),
             lineHeight: 1,
             paddingLeft: 1,
-            pointerEvents: "auto",
+            pointerEvents: "none",
             userSelect: "none",
-            cursor: onSeek ? "pointer" : undefined,
             textShadow: "0 0 2px rgba(0,0,0,0.8)",
           }}
         >

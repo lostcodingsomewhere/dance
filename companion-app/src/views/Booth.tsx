@@ -50,7 +50,10 @@ export function Booth() {
           <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
             Next per column · live re-scored against the combo
           </div>
-          <div className="grid grid-cols-5 gap-1.5">
+          <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1">
+            {/* Leading spacer mirrors SceneGrid's row-label column so
+                the 5 rec banners line up under the 5 stem columns. */}
+            <div aria-hidden="true" />
             {STEM_COLUMNS.map((c) => (
               <ColumnRecBanner key={c} column={c} k={3} />
             ))}

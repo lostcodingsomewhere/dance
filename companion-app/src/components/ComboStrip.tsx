@@ -112,7 +112,11 @@ export function ComboStrip() {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-5 gap-1.5">
+      <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1">
+        {/* Empty leading cell — matches SceneGrid's row-label column so
+            the 5 stem cards line up vertically with the 5 stem cols in
+            the grid above. */}
+        <div aria-hidden="true" />
         {cards?.map((c) => (
           <ComboCard
             key={c.role}
