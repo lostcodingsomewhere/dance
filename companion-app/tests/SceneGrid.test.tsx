@@ -44,6 +44,7 @@ vi.mock("../src/hooks/useTransport", () => ({
   useStopCell: () => ({ mutate: vi.fn(), isPending: false }),
   useStopTrack: () => ({ mutate: vi.fn(), isPending: false }),
   useStopAllClips: () => ({ mutate: vi.fn(), isPending: false }),
+  useSoloTrack: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 function renderGrid() {

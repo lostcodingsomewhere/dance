@@ -56,3 +56,12 @@ export function useStopScene() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
+
+export function useSoloTrack() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ track, soloed }: { track: number; soloed: boolean }) =>
+      api.abletonSoloTrack(track, soloed),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
+  });
+}

@@ -129,6 +129,22 @@ def stop_scene(
     return bridge.stop_scene(scene_index)
 
 
+@router.post("/transport/solo-track/{track_index}")
+def solo_track(
+    track_index: int,
+    soloed: bool = True,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Toggle a track's solo state. With Live's solo mode set to Cue (PFL),
+    the soloed track routes to outs 3/4 (headphones) without muting master
+    — i.e. "iso listen, don't disrupt the mix." Use ``?soloed=false`` to
+    clear the solo.
+
+    Wraps ``/live/track/set/solo``."""
+    bridge.client.set_track_solo(track_index, soloed)
+    return {"ok": True, "track_index": track_index, "soloed": soloed}
+
+
 @router.post("/volume")
 def volume(
     body: VolumeRequest,

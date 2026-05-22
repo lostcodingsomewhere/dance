@@ -4,6 +4,7 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import {
   useFireCell,
   useFireScene,
+  useSoloTrack,
   useStopCell,
   useStopScene,
 } from "../hooks/useTransport";
@@ -41,7 +42,22 @@ export function SceneGrid() {
   const fireCell = useFireCell();
   const stopScene = useStopScene();
   const stopCell = useStopCell();
+  const soloTrack = useSoloTrack();
   const [expanded, setExpanded] = useState(false);
+  // Locally-tracked solo state per role. The bridge doesn't push solo
+  // status back, so this is "what the FE asked for" — works for the
+  // common case where solo toggles happen via this UI. Resets if the
+  // SceneGrid unmounts (e.g., tab switch).
+  const [soloedRoles, setSoloedRoles] = useState<Set<string>>(new Set());
+
+  function toggleSolo(role: StemRole, trackIdx: number) {
+    const wasSoloed = soloedRoles.has(role);
+    const next = new Set(soloedRoles);
+    if (wasSoloed) next.delete(role);
+    else next.add(role);
+    setSoloedRoles(next);
+    soloTrack.mutate({ track: trackIdx, soloed: !wasSoloed });
+  }
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -85,15 +101,39 @@ export function SceneGrid() {
       {/* Column header */}
       <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1 mb-1">
         <div /> {/* spacer over the row labels */}
-        {STEM_COLUMNS.map((role) => (
-          <div
-            key={role}
-            className={`flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-widest ${ROLE_COLOR[role].text}`}
-          >
-            <RoleIcon role={role} size={12} />
-            {roleLabel(role)}
-          </div>
-        ))}
+        {STEM_COLUMNS.map((role) => {
+          const trackIdx = columns[role];
+          const isSoloed = soloedRoles.has(role);
+          return (
+            <div
+              key={role}
+              className={`flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-widest ${ROLE_COLOR[role].text}`}
+            >
+              <RoleIcon role={role} size={12} />
+              <span className="flex-1">{roleLabel(role)}</span>
+              {trackIdx != null && (
+                <button
+                  type="button"
+                  onClick={() => toggleSolo(role, trackIdx)}
+                  title={
+                    isSoloed
+                      ? `Unsolo ${roleLabel(role).toLowerCase()} — return to normal routing`
+                      : `Solo ${roleLabel(role).toLowerCase()} → cue out (Live's solo button must be in Cue/PFL mode)`
+                  }
+                  className={`text-[10px] leading-none rounded px-1 transition-colors ${
+                    isSoloed
+                      ? "bg-amber-400/30 text-amber-100 border border-amber-300/60"
+                      : "text-neutral-600 hover:text-amber-200 border border-transparent"
+                  }`}
+                  aria-label={isSoloed ? `unsolo ${role}` : `solo ${role}`}
+                  aria-pressed={isSoloed}
+                >
+                  S
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Rows */}

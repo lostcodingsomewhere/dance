@@ -317,6 +317,16 @@ export function abletonStopScene(sceneIndex: number): Promise<void> {
   });
 }
 
+export function abletonSoloTrack(
+  trackIndex: number,
+  soloed: boolean,
+): Promise<void> {
+  return request<void>(
+    `/ableton/transport/solo-track/${trackIndex}?soloed=${soloed}`,
+    { method: "POST" },
+  );
+}
+
 export function abletonPreview(body: PreviewRequest): Promise<PreviewResult> {
   return request<PreviewResult>("/ableton/preview", {
     method: "POST",
