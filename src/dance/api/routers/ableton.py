@@ -330,6 +330,22 @@ def deck_map(
     return DeckMapOut(columns=state["columns"], cells=cells)
 
 
+@router.delete("/decks/cell/{track_index}/{slot_index}")
+def delete_cell(
+    track_index: int,
+    slot_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Remove a single stem-clip from one (track, slot) in the deck columns.
+
+    Stops the clip first (in case it's playing), then deletes it from the
+    slot via OSC, then drops the cell from the bridge's ``_deck_cells``
+    cache and persists. The slot itself stays — it just becomes empty,
+    ready to receive the next ``Load to Live`` for that kind.
+    """
+    return bridge.delete_cell(track_index, slot_index)
+
+
 @router.post("/decks/reset")
 def reset_decks(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     """Forget which Ableton tracks we used as deck columns and which scenes

@@ -338,6 +338,21 @@ export function abletonSeekClip(
   );
 }
 
+/**
+ * Delete one stem-clip from one (track, slot) in the deck columns. Stops
+ * the clip if it's playing, then removes the clip from the slot. The
+ * slot itself stays — it becomes empty, ready for the next "Load to
+ * Live" of that kind.
+ */
+export function abletonDeleteCell(
+  trackIndex: number,
+  slotIndex: number,
+): Promise<{ ok: boolean; kind?: string; removed_track_id?: number | null }> {
+  return request(`/ableton/decks/cell/${trackIndex}/${slotIndex}`, {
+    method: "DELETE",
+  });
+}
+
 export function abletonPreview(body: PreviewRequest): Promise<PreviewResult> {
   return request<PreviewResult>("/ableton/preview", {
     method: "POST",

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import {
+  useDeleteCell,
   useFireCell,
   useFireScene,
   useSoloTrack,
@@ -42,6 +43,7 @@ export function SceneGrid() {
   const fireCell = useFireCell();
   const stopScene = useStopScene();
   const stopCell = useStopCell();
+  const deleteCell = useDeleteCell();
   const soloTrack = useSoloTrack();
   const [expanded, setExpanded] = useState(false);
   // Locally-tracked solo state per role. The bridge doesn't push solo
@@ -189,6 +191,12 @@ export function SceneGrid() {
                             : fireCell.mutate({ track: trackIdx, slot: sceneIdx })
                       : undefined
                   }
+                  onRemove={
+                    cell != null && trackIdx != null
+                      ? () =>
+                          deleteCell.mutate({ track: trackIdx, slot: sceneIdx })
+                      : undefined
+                  }
                 />
               );
             })}
@@ -270,6 +278,7 @@ function Cell({
   playing,
   beatMs,
   onTap,
+  onRemove,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
@@ -277,6 +286,10 @@ function Cell({
   playing: boolean;
   beatMs: number;
   onTap: (() => void) | undefined;
+  /** Optional: remove the clip from this slot. When set, an X button
+   * appears on hover. The X stops + deletes via the bridge — the slot
+   * stays, ready to receive the next ``Load to Live``. */
+  onRemove?: () => void;
 }) {
   const color = ROLE_COLOR[role];
 
@@ -289,41 +302,60 @@ function Cell({
     );
   }
 
+  // Wrap in a relative div so the X can absolute-position over the
+  // <button>. Using a sibling instead of a nested button keeps HTML
+  // valid (no button-in-button).
   return (
-    <button
-      type="button"
-      onClick={onTap}
-      disabled={!onTap}
-      title={
-        playing
-          ? `Stop ${roleLabel(role).toLowerCase()} (${cell?.title ?? "loaded"})`
-          : cell
-          ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`} — tap to fire`
-          : `${roleLabel(role)} (loaded)`
-      }
-      className={`rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
-        playing
-          ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
-          : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
-      }`}
-      style={
-        playing
-          ? {
-              animation: `dance-beat-pulse ${beatMs}ms ease-in-out infinite`,
-            }
-          : undefined
-      }
-    >
-      <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 ${playing ? "text-emerald-100" : color.text}`}>
-        {playing && <span className="text-emerald-200">⏹</span>}
-        {playing ? "playing" : roleLabel(role)}
-        {playing && <span className="ml-auto text-[9px] text-emerald-200/80" title="Clip loops by default">🔁</span>}
-      </div>
-      {cell && (
-        <div className={`text-xs truncate font-medium leading-tight mt-0.5 ${playing ? "text-emerald-50" : "text-neutral-200"}`}>
-          {cell.title ?? `Track #${cell.track_id}`}
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={onTap}
+        disabled={!onTap}
+        title={
+          playing
+            ? `Stop ${roleLabel(role).toLowerCase()} (${cell?.title ?? "loaded"})`
+            : cell
+            ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`} — tap to fire`
+            : `${roleLabel(role)} (loaded)`
+        }
+        className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
+          playing
+            ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
+            : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
+        }`}
+        style={
+          playing
+            ? {
+                animation: `dance-beat-pulse ${beatMs}ms ease-in-out infinite`,
+              }
+            : undefined
+        }
+      >
+        <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 ${playing ? "text-emerald-100" : color.text}`}>
+          {playing && <span className="text-emerald-200">⏹</span>}
+          {playing ? "playing" : roleLabel(role)}
+          {playing && <span className="ml-auto text-[9px] text-emerald-200/80" title="Clip loops by default">🔁</span>}
         </div>
+        {cell && (
+          <div className={`text-xs truncate font-medium leading-tight mt-0.5 ${playing ? "text-emerald-50" : "text-neutral-200"}`}>
+            {cell.title ?? `Track #${cell.track_id}`}
+          </div>
+        )}
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          title={`Remove ${roleLabel(role).toLowerCase()} from this scene`}
+          aria-label={`Remove ${roleLabel(role)} clip from scene`}
+          className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100 focus:outline-none"
+        >
+          ×
+        </button>
       )}
-    </button>
+    </div>
   );
 }

@@ -66,6 +66,22 @@ export function useSoloTrack() {
   });
 }
 
+/**
+ * Delete a single cell (one stem in one scene). Invalidates ``ableton``
+ * + ``decks`` so the SceneGrid re-renders without the removed cell.
+ */
+export function useDeleteCell() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ track, slot }: { track: number; slot: number }) =>
+      api.abletonDeleteCell(track, slot),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ableton", "state"] });
+      qc.invalidateQueries({ queryKey: ["decks"] });
+    },
+  });
+}
+
 export function useSeekClip() {
   const qc = useQueryClient();
   return useMutation({

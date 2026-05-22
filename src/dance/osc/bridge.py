@@ -596,6 +596,56 @@ class AbletonBridge:
             i += 1
         return i
 
+    def delete_cell(self, track_index: int, slot_index: int) -> dict[str, Any]:
+        """Stop + delete a single clip slot in one of the deck columns.
+
+        - Looks up ``kind`` from ``_deck_columns`` so we can drop the matching
+          entry from ``_deck_cells`` (the bridge's in-memory deck map).
+        - Stops the clip first (no-op if already stopped), then deletes the
+          clip from the slot via the OSC primitive — leaving the *slot* in
+          place (an empty slot, ready for the next ``Load to Live``).
+        - Persists the updated ``_deck_cells`` so a bridge restart doesn't
+          resurrect the dead cell.
+
+        Safe on slots that don't belong to a deck column (returns ``ok:
+        False`` with a warning rather than blowing up) — keeps the API
+        idempotent for retries.
+        """
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        # Reverse-lookup the kind from the deck columns map.
+        kind: str | None = None
+        for k, idx in self._deck_columns.items():
+            if idx == track_index:
+                kind = k
+                break
+        if kind is None:
+            return {
+                "ok": False,
+                "warning": f"track {track_index} is not a deck column",
+            }
+        try:
+            self.client.stop_clip(track_index, slot_index)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        try:
+            self.client.delete_clip(track_index, slot_index)
+        except OSError as exc:  # pragma: no cover - best-effort
+            logger.warning("delete_clip(%d, %d) failed: %s", track_index, slot_index, exc)
+            return {"ok": False, "warning": str(exc)}
+        # Drop from our deck-cells cache + persist. Use pop with default so
+        # we don't KeyError when the cache was already empty for that slot
+        # (e.g. user clicked X on a stale UI).
+        removed = self._deck_cells.pop((slot_index, kind), None)
+        self._persist_state()
+        return {
+            "ok": True,
+            "track_index": track_index,
+            "slot_index": slot_index,
+            "kind": kind,
+            "removed_track_id": removed,
+        }
+
     def stop_scene(self, scene_index: int) -> dict[str, Any]:
         """Stop every deck-column cell on a scene. Live has no 'stop scene'
         primitive, so we iterate the 5 deck-column tracks and stop_clip on
