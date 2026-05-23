@@ -8,19 +8,16 @@ import {
   useStopCell,
   useStopScene,
 } from "../hooks/useTransport";
-import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
+import {
+  ROLE_STYLES,
+  STEM_COLUMNS,
+  roleLabel,
+  type StemRole,
+} from "../lib/roles";
 import type { DeckCell } from "../types";
 
 const COLLAPSED_ROWS = 3;
 const EXPANDED_ROWS = 8;
-
-const ROLE_COLOR: Record<StemRole, { dot: string; text: string; border: string; bg: string }> = {
-  drums:  { dot: "bg-red-500",    text: "text-red-300",    border: "border-red-500/30",    bg: "bg-red-500/10" },
-  bass:   { dot: "bg-amber-500",  text: "text-amber-300",  border: "border-amber-500/30",  bg: "bg-amber-500/10" },
-  vocals: { dot: "bg-lime-400",   text: "text-lime-300",   border: "border-lime-500/30",   bg: "bg-lime-500/10" },
-  other:  { dot: "bg-sky-400",    text: "text-sky-300",    border: "border-sky-500/30",    bg: "bg-sky-500/10" },
-  mix:    { dot: "bg-neutral-200", text: "text-neutral-200", border: "border-neutral-500/30", bg: "bg-neutral-500/10" },
-};
 
 /**
  * The 8×5 scene grid — the canonical visual representation of what the APC40
@@ -239,12 +236,12 @@ function Cell({
    * stays, ready to receive the next ``Load to Live``. */
   onRemove?: () => void;
 }) {
-  const color = ROLE_COLOR[role];
+  const styles = ROLE_STYLES[role];
 
   if (!loaded) {
     return (
       <div
-        className="rounded-md border border-neutral-900 bg-neutral-950 h-14"
+        className={`rounded-md border h-14 ${styles.border} ${styles.bg} opacity-50`}
         aria-label={`${roleLabel(role)} (empty)`}
       />
     );
@@ -269,7 +266,7 @@ function Cell({
         className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
           playing
             ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
-            : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
+            : `${styles.border} ${styles.bg} hover:bg-neutral-900/60 hover:border-neutral-700`
         }`}
         style={
           playing

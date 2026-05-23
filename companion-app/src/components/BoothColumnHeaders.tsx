@@ -1,19 +1,8 @@
 import { useState } from "react";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { useSoloTrack } from "../hooks/useTransport";
-import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
+import { ROLE_STYLES, STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import { RoleIcon } from "./RoleIcon";
-
-/** Per-column accent — same colors used elsewhere in the Booth so the
- * header tint matches the rec-banner header tint matches the SceneGrid
- * cell border tint. One source of truth for "the drums column is red." */
-const ROLE_ACCENT: Record<StemRole, string> = {
-  drums:  "bg-red-500/15 border-red-500/35 text-red-200",
-  bass:   "bg-amber-500/15 border-amber-500/35 text-amber-200",
-  vocals: "bg-lime-500/15 border-lime-500/35 text-lime-200",
-  other:  "bg-sky-500/15 border-sky-500/35 text-sky-200",
-  mix:    "bg-neutral-700/35 border-neutral-500/40 text-neutral-100",
-};
 
 /**
  * The single column header strip at the top of the Booth — labels each
@@ -56,11 +45,10 @@ export function BoothColumnHeaders() {
       {STEM_COLUMNS.map((role) => {
         const trackIdx = columns[role];
         const isSoloed = soloedRoles.has(role);
-        const accent = ROLE_ACCENT[role];
         return (
           <div
             key={role}
-            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-[11px] uppercase tracking-widest font-semibold ${accent}`}
+            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-[11px] uppercase tracking-widest font-semibold ${ROLE_STYLES[role].header}`}
           >
             <RoleIcon role={role} size={14} />
             <span className="flex-1">{roleLabel(role)}</span>

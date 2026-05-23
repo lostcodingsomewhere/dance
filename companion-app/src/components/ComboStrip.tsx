@@ -4,17 +4,14 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
-import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
+import {
+  ROLE_STYLES,
+  STEM_COLUMNS,
+  roleLabel,
+  type StemRole,
+} from "../lib/roles";
 import type { DeckCell } from "../types";
 import { Waveform } from "./Waveform";
-
-const ROLE_ACCENT: Record<StemRole, { dot: string; chip: string }> = {
-  drums:  { dot: "bg-red-500",    chip: "text-red-300" },
-  bass:   { dot: "bg-amber-500",  chip: "text-amber-300" },
-  vocals: { dot: "bg-lime-400",   chip: "text-lime-300" },
-  other:  { dot: "bg-sky-400",    chip: "text-sky-300" },
-  mix:    { dot: "bg-neutral-200", chip: "text-neutral-200" },
-};
 
 /**
  * Horizontal 5-card row showing the *current active combo* — one card per
@@ -66,24 +63,6 @@ export function ComboStrip() {
     });
   }, [columns, playing, positions, cellAt]);
 
-  // Anchor detection — every non-empty card pointing at the same scene AND
-  // that scene's stem cells all sourced from the same track.
-  const anchor = useMemo(() => {
-    if (!cards) return null;
-    const occupied = cards.filter((c) => c.sceneIdx != null && c.cell != null);
-    if (occupied.length === 0) return null;
-    const sceneIdx = occupied[0].sceneIdx;
-    if (!occupied.every((c) => c.sceneIdx === sceneIdx)) return null;
-    const trackIds = occupied.map((c) => c.cell?.track_id);
-    if (new Set(trackIds).size !== 1) return null;
-    const sample = occupied[0].cell!;
-    return {
-      sceneIdx,
-      title: sample.title,
-      track_id: sample.track_id,
-    };
-  }, [cards]);
-
   if (!columns) {
     return (
       <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-3 text-xs text-neutral-600">
@@ -94,27 +73,12 @@ export function ComboStrip() {
 
   return (
     <div className="flex flex-col gap-1" data-testid="combo-strip">
-      <div className="flex items-baseline justify-between px-1">
-        <div className="text-[10px] uppercase tracking-widest text-neutral-500">
-          Current combo · click waveforms to scrub
-        </div>
-        {anchor ? (
-          <div className="text-[10px] text-emerald-300/90 uppercase tracking-widest">
-            ⚓ anchored to scene {anchor.sceneIdx! + 1} ·{" "}
-            <span className="text-neutral-200 normal-case tracking-normal">
-              {anchor.title ?? `Track #${anchor.track_id}`}
-            </span>
-          </div>
-        ) : (
-          <div className="text-[10px] text-neutral-600 uppercase tracking-widest">
-            live remix
-          </div>
-        )}
-      </div>
       <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1">
         {/* Empty leading cell — matches SceneGrid's row-label column so
             the 5 stem cards line up vertically with the 5 stem cols in
-            the grid above. */}
+            the grid above. Header text + anchor hint stripped per the
+            unified-column-color redesign: the colored column headers
+            up top now carry the section's identity. */}
         <div aria-hidden="true" />
         {cards?.map((c) => (
           <ComboCard
@@ -123,7 +87,6 @@ export function ComboStrip() {
             cell={c.cell}
             trackIdx={c.trackIdx}
             livePosBeats={c.livePosBeats}
-            isAnchorPart={anchor != null && c.sceneIdx === anchor.sceneIdx}
             tempo={tempo}
             beat={beat}
             onSeek={(beats) => {
@@ -146,7 +109,6 @@ function ComboCard({
   cell,
   trackIdx,
   livePosBeats,
-  isAnchorPart,
   tempo,
   beat,
   onSeek,
@@ -155,12 +117,11 @@ function ComboCard({
   cell: DeckCell | undefined;
   trackIdx: number | undefined;
   livePosBeats: number | undefined;
-  isAnchorPart: boolean;
   tempo: number | null;
   beat: number | null;
   onSeek: (beats: number) => void;
 }) {
-  const accent = ROLE_ACCENT[role];
+  const styles = ROLE_STYLES[role];
   // Stem waveform when this cell has a stem (drums/bass/vocals/other);
   // fall back to the full-track waveform for the mix/song column. Both
   // hooks no-op via ``enabled`` when their id is null/undefined, so it's
@@ -221,7 +182,7 @@ function ComboCard({
   if (!cell) {
     return (
       <div
-        className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-24 flex items-center justify-center"
+        className={`rounded-md border px-2 py-2 h-24 flex items-center justify-center ${styles.border} ${styles.bg}`}
         aria-label={`${roleLabel(role)} (silent)`}
       >
         <div className="text-[11px] text-neutral-700 italic">silent</div>
@@ -230,18 +191,14 @@ function ComboCard({
   }
   return (
     <div
-      className={`rounded-md border px-2 py-2 h-24 flex flex-col ${
-        isAnchorPart
-          ? "border-emerald-500/30 bg-emerald-500/5"
-          : "border-neutral-800 bg-neutral-900/40"
-      }`}
+      className={`rounded-md border px-2 py-2 h-24 flex flex-col ${styles.border} ${styles.bg}`}
     >
       <div className="flex items-baseline gap-1.5">
         <div className="text-xs text-neutral-100 truncate font-medium leading-tight flex-1">
           {cell.title ?? `Track #${cell.track_id}`}
         </div>
         {cell.key_camelot && (
-          <span className={`text-[10px] font-mono ${accent.chip}`}>
+          <span className={`text-[10px] font-mono ${styles.text}`}>
             {cell.key_camelot}
           </span>
         )}
@@ -255,7 +212,7 @@ function ComboCard({
         peaks={waveform.data?.peaks ?? []}
         position={position}
         height={32}
-        className={`${accent.chip} opacity-90 mt-auto`}
+        className={`${styles.text} opacity-90 mt-auto`}
         playheadColor="rgba(255,255,255,0.9)"
         regions={regions.data ?? undefined}
         durationSeconds={duration}

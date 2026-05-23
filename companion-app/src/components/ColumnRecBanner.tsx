@@ -7,17 +7,9 @@ import {
   useStopPreview,
   usePreviewState,
 } from "../hooks/usePreview";
-import { roleLabel } from "../lib/roles";
+import { ROLE_STYLES, roleLabel } from "../lib/roles";
 import type { ColumnRec } from "../types";
 import { store } from "../store";
-
-const ROLE_ACCENT: Record<string, string> = {
-  drums: "bg-red-500/15 border-red-500/30 text-red-300",
-  bass: "bg-amber-500/15 border-amber-500/30 text-amber-300",
-  vocals: "bg-lime-500/15 border-lime-500/30 text-lime-300",
-  other: "bg-sky-500/15 border-sky-500/30 text-sky-300",
-  mix: "bg-neutral-700/30 border-neutral-500/40 text-neutral-200",
-};
 
 /**
  * One column's live-rescoring rec stream. Renders as a vertical stack of
@@ -29,19 +21,12 @@ const ROLE_ACCENT: Record<string, string> = {
  */
 export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number }) {
   const q = useColumnRecs(column, { k });
-  const accent = ROLE_ACCENT[column] ?? ROLE_ACCENT.mix;
 
   return (
     <div className="flex flex-col gap-1" data-testid={`rec-banner-${column}`}>
-      {/* The role label + icon lives in BoothColumnHeaders at the top
-          of the booth — repeating it inside every rec banner was
-          redundant. Keep just the count chip so the section still
-          telegraphs "how many candidates here?". */}
-      <div
-        className={`flex items-center justify-end px-2 py-1 rounded-md border text-[10px] uppercase tracking-widest ${accent}`}
-      >
-        <span className="opacity-60">{q.data?.recs.length ?? 0} recs</span>
-      </div>
+      {/* No header chip — the role label + count are redundant with the
+          unified column headers up top. The per-card tint inherited
+          from ROLE_STYLES carries the column identity down. */}
       {q.isLoading && (
         <div className="text-[10px] text-neutral-600 px-2 py-2">…</div>
       )}
@@ -142,12 +127,13 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
   }
 
   const energy = rec.floor_energy;
+  const styles = ROLE_STYLES[column as keyof typeof ROLE_STYLES] ?? ROLE_STYLES.mix;
   return (
     <div
       className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${
         isPreviewing || isPreviewingSong
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
-          : "border-neutral-800/70 bg-neutral-900/40"
+          : `${styles.border} ${styles.bg}`
       }`}
     >
       <div className="flex items-baseline gap-1.5">
