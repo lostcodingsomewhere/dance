@@ -6,7 +6,6 @@ import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { STEM_COLUMNS, roleLabel, type StemRole } from "../lib/roles";
 import type { DeckCell } from "../types";
-import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
 
 const ROLE_ACCENT: Record<StemRole, { dot: string; chip: string }> = {
@@ -221,12 +220,11 @@ function ComboCard({
 
   if (!cell) {
     return (
-      <div className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-24 flex flex-col">
-        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-neutral-700">
-          <RoleIcon role={role} size={12} className="opacity-40" />
-          {roleLabel(role)}
-        </div>
-        <div className="text-[11px] text-neutral-700 italic mt-1">silent</div>
+      <div
+        className="rounded-md border border-neutral-900 bg-neutral-950/60 px-2 py-2 h-24 flex items-center justify-center"
+        aria-label={`${roleLabel(role)} (silent)`}
+      >
+        <div className="text-[11px] text-neutral-700 italic">silent</div>
       </div>
     );
   }
@@ -238,18 +236,21 @@ function ComboCard({
           : "border-neutral-800 bg-neutral-900/40"
       }`}
     >
-      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wider ${accent.chip}`}>
-        <RoleIcon role={role} size={12} />
-        <span>{roleLabel(role)}</span>
+      <div className="flex items-baseline gap-1.5">
+        <div className="text-xs text-neutral-100 truncate font-medium leading-tight flex-1">
+          {cell.title ?? `Track #${cell.track_id}`}
+        </div>
         {cell.key_camelot && (
-          <span className="ml-auto font-mono text-neutral-400">
+          <span className={`text-[10px] font-mono ${accent.chip}`}>
             {cell.key_camelot}
           </span>
         )}
       </div>
-      <div className="text-xs text-neutral-100 truncate font-medium leading-tight mt-0.5">
-        {cell.title ?? `Track #${cell.track_id}`}
-      </div>
+      {cell.artist && (
+        <div className="text-[10px] text-neutral-400 truncate leading-tight">
+          {cell.artist}
+        </div>
+      )}
       <Waveform
         peaks={waveform.data?.peaks ?? []}
         position={position}

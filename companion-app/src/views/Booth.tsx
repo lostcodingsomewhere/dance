@@ -1,3 +1,4 @@
+import { BoothColumnHeaders } from "../components/BoothColumnHeaders";
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
 import { ComboStrip } from "../components/ComboStrip";
 import { CueStrip } from "../components/CueStrip";
@@ -15,10 +16,14 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
  *
  *   ┌─ MasterStrip (BPM · KEY · energy arc · OSC heartbeat · view tabs) ┐
  *   ├─────────────────────────────────────────────────────────────────┤
- *   │ 8×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows)     │
+ *   │ BoothColumnHeaders (5 colored chips: DRUMS · BASS · VOCALS ·    │
+ *   │   MELODY · SONG with per-column Solo "S" buttons)                │
  *   │                                                                  │
  *   │ ComboStrip (5 cards: track identity + scrubbable waveform per    │
- *   │             role, anchor hint, click-to-jump)                    │
+ *   │             role, anchor hint, click-to-snap-to-section)         │
+ *   │                                                                  │
+ *   │ 3×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows;     │
+ *   │              ▾ expand to 8 rows)                                 │
  *   │                                                                  │
  *   │ CueStrip (prelisten — same waveform features, headphones out)    │
  *   │                                                                  │
@@ -26,6 +31,11 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
  *   ├─────────────────────────────────────────────────────────────────┤
  *   │ PlayedStrip (set name · plays · history scroll · end set)        │
  *   └─────────────────────────────────────────────────────────────────┘
+ *
+ * ColumnHeaders → ComboStrip → SceneGrid → recs all share the same
+ * ``[2.5rem leading + 5 stem cols] gap-1`` grid template, so the 5
+ * stem columns line up vertically and the labels at the top govern
+ * everything beneath them.
  *
  * Side effects:
  *   - Auto-creates a session on first Ableton play.
@@ -38,13 +48,14 @@ export function Booth() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <main className="flex-1 flex flex-col min-h-0 gap-3 px-4 py-3 overflow-y-auto">
+        <BoothColumnHeaders />
+        <ComboStrip />
         <div>
           <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
             Scene grid · tap to fire / stop (mirrors APC40)
           </div>
           <SceneGrid />
         </div>
-        <ComboStrip />
         <CueStrip />
         <div>
           <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
