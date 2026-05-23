@@ -163,9 +163,13 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           <span className="ml-1.5 text-neutral-600">· E{energy}</span>
         )}
       </div>
-      {/* One row of actions: preview stem · load stem · (song shortcuts
-          on stem cards only). All buttons share the same small height so
-          the card stops being a vertical wall of buttons. */}
+      {/* Action row — all icons, no text labels. The column header up
+          top already tells you what role you're loading; repeating
+          "Load vocals" inside every card was redundant. Stem cards get
+          4 buttons (preview stem · load stem · preview song · load
+          song); song cards get 2 (preview · load). Primary action (load
+          stem) is the WIDE button — same visual weight that "Load
+          vocals" had before, but now an icon-only canvas. */}
       <div
         className={`mt-1 grid gap-1 ${
           isSongCard
@@ -184,7 +188,7 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
               ? "Preview the song in headphones"
               : `Preview the ${roleLabel(column).toLowerCase()} stem in headphones`
           }
-          className={`shrink-0 w-6 h-6 text-[10px] rounded transition-colors disabled:opacity-50 ${
+          className={`shrink-0 w-7 h-7 text-xs rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center ${
             isPreviewing
               ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
               : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
@@ -200,19 +204,21 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           title={
             isSongCard
               ? "Load all 4 stems into a fresh row (anchor-ready)"
-              : `Load only the ${roleLabel(column).toLowerCase()} stem into the next free slot`
+              : `Load the ${roleLabel(column).toLowerCase()} stem into the next free slot`
           }
-          className="h-6 text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white transition-colors disabled:opacity-50"
+          className="h-7 text-sm rounded bg-violet-700/70 hover:bg-violet-700 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center"
+          aria-label={
+            isSongCard
+              ? "load whole song"
+              : `load ${roleLabel(column).toLowerCase()}`
+          }
         >
-          {load.isPending
-            ? "loading…"
-            : isSongCard
-            ? "Load song"
-            : `Load ${roleLabel(column).toLowerCase()}`}
+          {load.isPending ? "…" : "⤓"}
         </button>
-        {/* Song escape hatch — only on stem cards. ♪ previews the whole
-            song through cue; Song button commits all 4 stems to a fresh
-            row. Compact icon + short label so the row stays one line. */}
+        {/* Song escape hatch — only on stem cards. Smaller buttons so
+            the stem-load (primary) stays visually dominant. Music note
+            paired with the action icon: ♪▶ = preview song, ♪⤓ = load
+            song. */}
         {!isSongCard && (
           <>
             <button
@@ -224,24 +230,32 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
                   ? "Stop song preview"
                   : "Preview the WHOLE SONG in headphones"
               }
-              className={`shrink-0 w-6 h-6 text-[10px] rounded transition-colors disabled:opacity-50 ${
+              className={`shrink-0 w-8 h-7 text-[11px] rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-0.5 ${
                 isPreviewingSong
                   ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
                   : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
               }`}
               aria-label={isPreviewingSong ? "stop song preview" : "preview song"}
             >
-              {isPreviewingSong ? "⏹" : "♪"}
+              <span className="opacity-70">♪</span>
+              <span>{isPreviewingSong ? "⏹" : "▶"}</span>
             </button>
             <button
               type="button"
               onClick={() => loadSong.mutate()}
               disabled={loadSong.isPending}
               title="Load the WHOLE SONG (all 4 stems) into a fresh row"
-              className="h-6 px-2 text-[10px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white transition-colors disabled:opacity-50 border border-neutral-700/60"
+              className="h-7 w-8 text-[11px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white transition-colors disabled:opacity-50 border border-neutral-700/60 inline-flex items-center justify-center gap-0.5"
               aria-label="load whole song"
             >
-              {loadSong.isPending ? "…" : "Song"}
+              {loadSong.isPending ? (
+                "…"
+              ) : (
+                <>
+                  <span className="opacity-70">♪</span>
+                  <span>⤓</span>
+                </>
+              )}
             </button>
           </>
         )}
