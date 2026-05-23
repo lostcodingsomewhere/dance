@@ -128,6 +128,14 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
 
   const energy = rec.floor_energy;
   const styles = ROLE_STYLES[column as keyof typeof ROLE_STYLES] ?? ROLE_STYLES.mix;
+  // Reasons + load tooltips collapsed into one rich hover-title on the
+  // card so the visible card stays minimal.
+  const scoreTooltip = [
+    `Score: ${Math.round(rec.score * 100)}`,
+    rec.reasons.length > 0 ? `Why: ${rec.reasons.join(" · ")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <div
       className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${
@@ -135,6 +143,7 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
           : `${styles.border} ${styles.bg}`
       }`}
+      title={scoreTooltip}
     >
       <div className="flex items-baseline gap-1.5">
         <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0">
@@ -144,37 +153,38 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           {rec.track_title ?? `Track #${rec.track_id}`}
         </span>
       </div>
-      <div className="text-xs text-neutral-300 truncate mt-0.5">
+      <div className="text-[11px] text-neutral-400 truncate leading-tight">
         {rec.track_artist ?? "—"}
       </div>
-      <div className="text-[10px] text-neutral-500 truncate font-mono mt-0.5">
-        {rec.bpm != null && <span>{rec.bpm.toFixed(1)} BPM</span>}
-        {rec.key_camelot && (
-          <span className="ml-1.5">· {rec.key_camelot}</span>
-        )}
+      <div className="text-[10px] text-neutral-500 truncate font-mono leading-tight">
+        {rec.bpm != null && <span>{rec.bpm.toFixed(0)}</span>}
+        {rec.key_camelot && <span className="ml-1.5">· {rec.key_camelot}</span>}
         {energy != null && (
           <span className="ml-1.5 text-neutral-600">· E{energy}</span>
         )}
       </div>
-      {rec.reasons.length > 0 && (
-        <div className="text-[9px] text-neutral-600 uppercase tracking-wide mt-0.5 truncate">
-          {rec.reasons.join(" · ")}
-        </div>
-      )}
-      <div className="mt-1 grid grid-cols-[auto_1fr] gap-1">
-        {/* Row 1: stem actions (or song actions on the song card). */}
+      {/* One row of actions: preview stem · load stem · (song shortcuts
+          on stem cards only). All buttons share the same small height so
+          the card stops being a vertical wall of buttons. */}
+      <div
+        className={`mt-1 grid gap-1 ${
+          isSongCard
+            ? "grid-cols-[auto_1fr]"
+            : "grid-cols-[auto_1fr_auto_auto]"
+        }`}
+      >
         <button
           type="button"
           onClick={onPreview}
           disabled={startPreview.isPending || stopPreview.isPending}
           title={
             isPreviewing
-              ? "Stop preview (Cue track → headphones)"
+              ? "Stop preview"
               : isSongCard
-              ? "Preview the song in headphones (Scarlett outs 3/4)"
-              : `Preview just the ${roleLabel(column).toLowerCase()} stem in headphones`
+              ? "Preview the song in headphones"
+              : `Preview the ${roleLabel(column).toLowerCase()} stem in headphones`
           }
-          className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
+          className={`shrink-0 w-6 h-6 text-[10px] rounded transition-colors disabled:opacity-50 ${
             isPreviewing
               ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
               : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
@@ -190,9 +200,9 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           title={
             isSongCard
               ? "Load all 4 stems into a fresh row (anchor-ready)"
-              : `Load only the ${roleLabel(column).toLowerCase()} stem into the next free ${roleLabel(column).toLowerCase()} slot`
+              : `Load only the ${roleLabel(column).toLowerCase()} stem into the next free slot`
           }
-          className="text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white py-1 transition-colors disabled:opacity-50"
+          className="h-6 text-[10px] rounded bg-violet-700/70 hover:bg-violet-700 text-white transition-colors disabled:opacity-50"
         >
           {load.isPending
             ? "loading…"
@@ -200,12 +210,10 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
             ? "Load song"
             : `Load ${roleLabel(column).toLowerCase()}`}
         </button>
-        {/* Row 2: song escape hatch — only on stem cards. ♪ previews the
-            whole song through cue; Load song commits all 4 stems to a
-            fresh row regardless of which stem column we're sitting in.
-            Song-column cards get invisible spacers in this row instead, so
-            all 5 columns' cards align vertically in the banner strip. */}
-        {!isSongCard ? (
+        {/* Song escape hatch — only on stem cards. ♪ previews the whole
+            song through cue; Song button commits all 4 stems to a fresh
+            row. Compact icon + short label so the row stays one line. */}
+        {!isSongCard && (
           <>
             <button
               type="button"
@@ -213,10 +221,10 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
               disabled={startPreview.isPending || stopPreview.isPending}
               title={
                 isPreviewingSong
-                  ? "Stop preview (whole song in headphones)"
-                  : "Preview the WHOLE SONG of this rec in headphones"
+                  ? "Stop song preview"
+                  : "Preview the WHOLE SONG in headphones"
               }
-              className={`shrink-0 w-7 text-[10px] rounded py-1 transition-colors disabled:opacity-50 ${
+              className={`shrink-0 w-6 h-6 text-[10px] rounded transition-colors disabled:opacity-50 ${
                 isPreviewingSong
                   ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
                   : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
@@ -229,31 +237,12 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
               type="button"
               onClick={() => loadSong.mutate()}
               disabled={loadSong.isPending}
-              title="Load the WHOLE SONG (all 4 stems) of this rec into a fresh row"
-              className="text-[10px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white py-1 transition-colors disabled:opacity-50 border border-neutral-700/60 hover:border-violet-500/0"
+              title="Load the WHOLE SONG (all 4 stems) into a fresh row"
+              className="h-6 px-2 text-[10px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white transition-colors disabled:opacity-50 border border-neutral-700/60"
               aria-label="load whole song"
             >
-              {loadSong.isPending ? "loading…" : "Load song"}
+              {loadSong.isPending ? "…" : "Song"}
             </button>
-          </>
-        ) : (
-          // Invisible spacer row so song cards match stem-card height. The
-          // elements replicate the stem-card buttons' box sizing (text-[10px]
-          // + py-1 + border) so the layout is pixel-identical; ``invisible``
-          // keeps them off-screen.
-          <>
-            <span
-              aria-hidden
-              className="invisible w-7 text-[10px] py-1 border border-transparent rounded"
-            >
-              ⏹
-            </span>
-            <span
-              aria-hidden
-              className="invisible text-[10px] py-1 border border-transparent rounded"
-            >
-              spacer
-            </span>
           </>
         )}
       </div>
