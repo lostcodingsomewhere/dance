@@ -138,23 +138,26 @@ function RecCard({
       className={`relative rounded-md border px-2 py-1.5 text-xs transition-colors ${
         isPreviewing
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
+          : isPinned
+          ? `${styles.border} ${styles.bg} border-l-2 border-l-emerald-400/60`
           : `${styles.border} ${styles.bg}`
       }`}
       title={scoreTooltip}
     >
-      {/* Pinned badge — only when this card is in the SONG column AND
-          was sent here via the ↗ button on a stem card. Click to
-          unpin (drops it from the local pinned list; backend recs
-          take it from there). */}
+      {/* Pinned: emerald left-edge accent + an × button in the corner
+          to unpin. The accent makes "this is a pinned card" obvious at
+          a glance even before hovering; the × is the universal "remove
+          this" affordance. Drops the track from the local pinned list;
+          backend recs take it from there. */}
       {isPinned && (
         <button
           type="button"
           onClick={() => store.unpinFromSong(rec.track_id)}
           title="Unpin from Song recs"
           aria-label="unpin from song recs"
-          className="absolute top-1 right-1 w-4 h-4 rounded text-[9px] leading-none inline-flex items-center justify-center text-emerald-300/80 bg-emerald-500/15 border border-emerald-400/30 hover:bg-rose-500/20 hover:text-rose-200 hover:border-rose-400/40 transition-colors"
+          className="absolute top-1 right-1 w-4 h-4 rounded-full text-[10px] leading-none inline-flex items-center justify-center text-emerald-200/80 bg-emerald-500/15 border border-emerald-400/40 hover:bg-rose-500/30 hover:text-rose-100 hover:border-rose-400/60 transition-colors"
         >
-          ↗
+          ×
         </button>
       )}
       <div className="flex items-baseline gap-1.5">
