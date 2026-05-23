@@ -109,6 +109,8 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | POST   | `/api/v1/ableton/transport/stop-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
 | POST   | `/api/v1/ableton/transport/stop-track/{idx}`    | -                   | `{"ok": true, ...}`   |     |
 | POST   | `/api/v1/ableton/transport/stop-all`            | -                   | `{"ok": true}`        |     |
+| POST   | `/api/v1/ableton/transport/seek/{t}/{s}`        | query: `position` (beats) | `{"ok": true, ...}` |     |
+| POST   | `/api/v1/ableton/transport/solo-track/{idx}`    | query: `soloed` (bool) | `{"ok": true, ...}`   |     |
 
 **Decks + loading + cue/preview:**
 
@@ -119,10 +121,17 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | POST   | `/api/v1/ableton/decks/reset`         | -                   | `{"ok": true}`          |     |
 | POST   | `/api/v1/ableton/decks/clean`         | -                   | `{"ok": true, ...}`     |     |
 | POST   | `/api/v1/ableton/decks/resync`        | -                   | `{ok, scanned, adopted, unmatched}` |     |
+| DELETE | `/api/v1/ableton/decks/cell/{t}/{s}`  | -                   | `{ok, kind, removed_track_id}` |     |
 | POST   | `/api/v1/ableton/preview`             | `PreviewRequest`    | `PreviewResult`         | 400, 404, 503 |
 | POST   | `/api/v1/ableton/preview/stop`        | -                   | `PreviewResult`         |     |
 
-`/state` returns the latest snapshot held by `AbletonBridge` — tempo/beat/is_playing + per-track playing clip + volume + output-meter level (subscribed on deck columns). If Live isn't running, the fields are `null`.
+`/state` returns the latest snapshot held by `AbletonBridge` — tempo/beat/is_playing + per-track playing clip + volume + output-meter level + per-clip `playing_position` in beats (subscribed on deck columns, drives the per-stem waveform playhead in ComboStrip). If Live isn't running, the fields are `null`.
+
+`/transport/seek/{track}/{slot}?position={beats}` sets BOTH the clip's `loop_start` and `start_marker` to `position` (in beats) and re-fires. Setting both is required for looping clips so playback doesn't wrap back to 0 on loop_end — the loop region moves with the seek. Wired to ComboStrip's click-to-scrub gesture (snaps to the section the click landed in before sending).
+
+`/transport/solo-track/{idx}?soloed=true|false` toggles Live's `track.solo` for the deck column. Per-column "S" buttons in SceneGrid headers use this to route a single stem through Live's Cue (PFL) bus → Scarlett 4i4 outs 3/4 → headphones, master untouched.
+
+`/decks/cell/{track}/{slot}` (DELETE) stops the clip if playing, deletes it from the slot, drops the cell from the bridge's `_deck_cells` cache, and persists. The slot itself stays — it just becomes empty, ready for the next `Load to Live` of that kind. Wired to the hover-`×` button on each occupied SceneGrid cell.
 
 `/load-track` populates clip slots in Live's deck-column session view. `kinds=None` loads all 4 stems into a fresh row (anchor mode); `kinds=["drums"]` loads just one stem into the next free drums slot (live-remixing mode). 503 on OSC errors.
 
@@ -166,9 +175,13 @@ Sample payload:
   "is_playing": true,
   "beat": 64.25,
   "playing_clips": {"0": 2, "1": 2, "2": -1},
-  "track_volumes": {"0": 0.85, "1": 0.85}
+  "track_volumes": {"0": 0.85, "1": 0.85},
+  "track_meters": {"5": 0.42, "6": 0.0, "7": 0.18},
+  "playing_positions": {"5": 128.5, "7": 64.0}
 }
 ```
+
+`track_meters` and `playing_positions` are subscribed only on deck-column tracks (typically tracks 5-9). `playing_positions` values are in clip-beats indexed against the clip's nominal BPM — i.e. the source track's analyzed BPM, NOT Live's project tempo. Consumers converting to file-seconds should use `cell.bpm`, not `tempo`.
 
 ---
 

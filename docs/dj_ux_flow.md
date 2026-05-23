@@ -80,12 +80,13 @@ Top-to-bottom layout (current; mirrors what's in `views/Booth.tsx`):
 | Surface | Where | What it answers |
 |---|---|---|
 | MasterStrip | Top bar | BPM (click → genre-anchored slider with explicit Apply) · KEY · combo VU meter · energy arc · Live-bridge heartbeat · resync · vibe search · view tabs |
-| SceneGrid (5 cols × 4 rows, expandable to 8) | Just below MasterStrip — the centerpiece | Canonical APC40 mirror. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. |
-| MasterVisualizer (stacked stems) | Below the grid | 4 horizontal rows (drums/bass/vocals/melody), each showing the *actual stem audio* waveform with a wrapping playhead synced to Live's master clock. 🔁 badge per playing row to make looping explicit. |
-| ComboStrip | Below the visualizer | "What's playing right now?" — one card per stem role, surfaces the source track of each playing stem; flags anchor mode when all playing cells point at the same scene + same source track. |
-| CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's waveform, ⏹ stop, and a "→ Load … to master" one-click commit. |
+| SceneGrid (5 cols × 4 rows, expandable to 8) | Just below MasterStrip — the centerpiece | Canonical APC40 mirror. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. Per-column "S" buttons in headers toggle solo (cue/PFL → headphones). Hover any loaded cell → small × in the top-right removes that one stem from the grid. |
+| ComboStrip | Below the grid | "What's playing right now?" — one card per stem role with the source track of each playing stem PLUS an interactive waveform. Each card shows: role chip + title/artist/key + a 32 px waveform with (a) live playhead from Live's per-clip `playing_position`, (b) faint colored section bands behind the peaks, (c) small unicode icons (▲ buildup, ▼ drop, ◌ breakdown, ◇ bridge, ▷ intro, ◁ outro, ● verse, ★ chorus) at section starts with hover-tooltips revealing the full name, (d) click-to-scrub that snaps to the section the click landed in. Flags anchor mode when all playing cells point at the same scene + same source track. (Replaced the earlier MasterVisualizer surface — same info, no duplication.) |
+| CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's full waveform (same section bands + cue icons as ComboStrip), ⏹ stop, and a "→ Load … to master" one-click commit. |
 | Per-column rec banners (5 across) | Below the cue strip | "What should I swap into each column next?" — live-rescored against the active combo. Per card: ▶ stem preview · ♪ song preview · Load stem · Load song. |
 | PlayedStrip | Bottom footer | Set name, play count, recent plays history, end-set. |
+
+All three column-style strips (SceneGrid, ComboStrip, per-column rec banners) share the same `[2.5rem leading + 5 stem cols] gap-1` grid template so the 5 stem columns line up vertically through the whole booth view.
 
 There are no sidebars. Glanceable signals (energy arc, played history) live in slim strips so the grid + banners own the center. The grid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8.
 
