@@ -225,7 +225,7 @@ function RecCard({
               : `load ${roleLabel(column).toLowerCase()}`
           }
         >
-          {load.isPending ? "…" : "⤓"}
+          {load.isPending ? "…" : "⤒"}
         </button>
         {!isSongCard && (
           <button
