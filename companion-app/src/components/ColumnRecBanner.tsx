@@ -9,7 +9,7 @@ import {
 } from "../hooks/usePreview";
 import { ROLE_STYLES, roleLabel } from "../lib/roles";
 import type { ColumnRec } from "../types";
-import { store } from "../store";
+import { store, useAppStore } from "../store";
 
 /**
  * One column's live-rescoring rec stream. Renders as a vertical stack of
@@ -21,6 +21,20 @@ import { store } from "../store";
  */
 export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number }) {
   const q = useColumnRecs(column, { k });
+  // User-pinned tracks (sent from stem cards via the ↗ button). Only
+  // surfaced in the SONG column — pinning IS "queue this as a whole-
+  // song candidate." Dedupe against backend recs so a pinned track
+  // that's also recommended by the backend appears once (pinned wins).
+  const pinned = useAppStore((s) => s.pinnedSongRecs);
+  const recs = column === "mix"
+    ? [
+        ...pinned,
+        ...(q.data?.recs ?? []).filter(
+          (r) => !pinned.some((p) => p.track_id === r.track_id),
+        ),
+      ]
+    : (q.data?.recs ?? []);
+  const pinnedIds = column === "mix" ? new Set(pinned.map((p) => p.track_id)) : new Set();
 
   return (
     <div className="flex flex-col gap-1" data-testid={`rec-banner-${column}`}>
@@ -35,14 +49,15 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
           Couldn't fetch recs
         </div>
       )}
-      {q.data?.recs.map((rec) => (
+      {recs.map((rec) => (
         <RecCard
           key={`${rec.track_id}-${rec.stem_file_id ?? "mix"}`}
           rec={rec}
           column={column}
+          isPinned={pinnedIds.has(rec.track_id)}
         />
       ))}
-      {q.data && q.data.recs.length === 0 && !q.isLoading && (
+      {!q.isLoading && recs.length === 0 && (
         <div className="text-[10px] text-neutral-600 px-2 py-2 italic">
           No candidates yet
         </div>
@@ -51,41 +66,25 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
   );
 }
 
-function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
+function RecCard({
+  rec,
+  column,
+  isPinned = false,
+}: {
+  rec: ColumnRec;
+  column: string;
+  isPinned?: boolean;
+}) {
   const qc = useQueryClient();
   const startPreview = useStartPreview();
   const stopPreview = useStopPreview();
   const previewing = usePreviewState();
   const isPreviewing =
     previewing?.trackId === rec.track_id && previewing?.column === column;
-  // Whole-song cue from a stem card: same track, but auditioned via the
-  // mix path (full original audio file). Lets the user follow "I like
-  // these drums — does the whole song hold up?" without leaving the card.
-  const isPreviewingSong =
-    previewing?.trackId === rec.track_id && previewing?.column === "mix";
 
   // Stem cards load only their own stem; the song-column card loads the
   // whole 4-stem combo into a fresh row.
   const isSongCard = column === "mix";
-
-  function onLoadSuccess(result: { scene_index: number; track_indices: Record<string, number> }, isFullSong: boolean) {
-    // Auto-stop any preview when committing — the candidate is now on
-    // master, so cue should go silent.
-    if (previewing) stopPreview.mutate();
-    // Register the deck locally only for whole-song commits. Single-stem
-    // loads don't form a "deck" — their row may have cells from other
-    // tracks and the backend is the source of truth.
-    if (isFullSong) {
-      store.registerDeck({
-        track_id: rec.track_id,
-        scene_index: result.scene_index,
-        stem_track_indices: Object.values(result.track_indices),
-        loaded_at: Date.now(),
-      });
-    }
-    qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
-    qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
-  }
 
   const load = useMutation({
     mutationFn: () =>
@@ -93,18 +92,27 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
         includeStems: true,
         kinds: isSongCard ? undefined : [column],
       }),
-    onSuccess: (result) => onLoadSuccess(result, isSongCard),
-  });
-
-  // "Load whole song" — only available on stem cards. Same target track as
-  // this rec, but commits all 4 stems into a fresh row (anchor-ready).
-  const loadSong = useMutation({
-    mutationFn: () =>
-      pushTrackToLive(rec.track_id, {
-        includeStems: true,
-        kinds: undefined,
-      }),
-    onSuccess: (result) => onLoadSuccess(result, true),
+    onSuccess: (result) => {
+      // Auto-stop any preview when committing — the candidate is now
+      // on master, so cue should go silent.
+      if (previewing) stopPreview.mutate();
+      // Register the deck locally only for whole-song commits. Single-
+      // stem loads don't form a "deck" — their row may have cells from
+      // other tracks and the backend is the source of truth.
+      if (isSongCard) {
+        store.registerDeck({
+          track_id: rec.track_id,
+          scene_index: result.scene_index,
+          stem_track_indices: Object.values(result.track_indices),
+          loaded_at: Date.now(),
+        });
+        // Clean up: if this song was pinned, drop it now that it's
+        // committed to a real deck.
+        store.unpinFromSong(rec.track_id);
+      }
+      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+      qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
+    },
   });
 
   function onPreview() {
@@ -112,17 +120,6 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
       stopPreview.mutate();
     } else {
       startPreview.mutate({ trackId: rec.track_id, column });
-    }
-  }
-
-  function onPreviewSong() {
-    if (isPreviewingSong) {
-      stopPreview.mutate();
-    } else {
-      // Replaces any in-flight preview (single-preview constraint on
-      // backend). The CueStrip auto-flips to song mode because the new
-      // preview state has column="mix".
-      startPreview.mutate({ trackId: rec.track_id, column: "mix" });
     }
   }
 
@@ -138,13 +135,28 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
     .join("\n");
   return (
     <div
-      className={`rounded-md border px-2 py-1.5 text-xs transition-colors ${
-        isPreviewing || isPreviewingSong
+      className={`relative rounded-md border px-2 py-1.5 text-xs transition-colors ${
+        isPreviewing
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
           : `${styles.border} ${styles.bg}`
       }`}
       title={scoreTooltip}
     >
+      {/* Pinned badge — only when this card is in the SONG column AND
+          was sent here via the ↗ button on a stem card. Click to
+          unpin (drops it from the local pinned list; backend recs
+          take it from there). */}
+      {isPinned && (
+        <button
+          type="button"
+          onClick={() => store.unpinFromSong(rec.track_id)}
+          title="Unpin from Song recs"
+          aria-label="unpin from song recs"
+          className="absolute top-1 right-1 w-4 h-4 rounded text-[9px] leading-none inline-flex items-center justify-center text-emerald-300/80 bg-emerald-500/15 border border-emerald-400/30 hover:bg-rose-500/20 hover:text-rose-200 hover:border-rose-400/40 transition-colors"
+        >
+          ↗
+        </button>
+      )}
       <div className="flex items-baseline gap-1.5">
         <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0">
           {Math.round(rec.score * 100)}
@@ -163,18 +175,15 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
           <span className="ml-1.5 text-neutral-600">· E{energy}</span>
         )}
       </div>
-      {/* Action row — all icons, no text labels. The column header up
-          top already tells you what role you're loading; repeating
-          "Load vocals" inside every card was redundant. Stem cards get
-          4 buttons (preview stem · load stem · preview song · load
-          song); song cards get 2 (preview · load). Primary action (load
-          stem) is the WIDE button — same visual weight that "Load
-          vocals" had before, but now an icon-only canvas. */}
+      {/* Two icon actions per card: preview + load. Both act on the
+          card's own column (stem cards load that stem, song card loads
+          the whole song). Stem cards get one extra tiny ↗ that sends
+          the track to the SONG column's rec list — unified action
+          model: every card just previews / loads its own column, and
+          ↗ is the "consider this for song mode too" gesture. */}
       <div
         className={`mt-1 grid gap-1 ${
-          isSongCard
-            ? "grid-cols-[auto_1fr]"
-            : "grid-cols-[auto_1fr_auto_auto]"
+          isSongCard ? "grid-cols-[auto_1fr]" : "grid-cols-[auto_1fr_auto]"
         }`}
       >
         <button
@@ -215,49 +224,16 @@ function RecCard({ rec, column }: { rec: ColumnRec; column: string }) {
         >
           {load.isPending ? "…" : "⤓"}
         </button>
-        {/* Song escape hatch — only on stem cards. Smaller buttons so
-            the stem-load (primary) stays visually dominant. Music note
-            paired with the action icon: ♪▶ = preview song, ♪⤓ = load
-            song. */}
         {!isSongCard && (
-          <>
-            <button
-              type="button"
-              onClick={onPreviewSong}
-              disabled={startPreview.isPending || stopPreview.isPending}
-              title={
-                isPreviewingSong
-                  ? "Stop song preview"
-                  : "Preview the WHOLE SONG in headphones"
-              }
-              className={`shrink-0 w-8 h-7 text-[11px] rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-0.5 ${
-                isPreviewingSong
-                  ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
-                  : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400"
-              }`}
-              aria-label={isPreviewingSong ? "stop song preview" : "preview song"}
-            >
-              <span className="opacity-70">♪</span>
-              <span>{isPreviewingSong ? "⏹" : "▶"}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => loadSong.mutate()}
-              disabled={loadSong.isPending}
-              title="Load the WHOLE SONG (all 4 stems) into a fresh row"
-              className="h-7 w-8 text-[11px] rounded bg-neutral-800 hover:bg-violet-700/70 text-neutral-300 hover:text-white transition-colors disabled:opacity-50 border border-neutral-700/60 inline-flex items-center justify-center gap-0.5"
-              aria-label="load whole song"
-            >
-              {loadSong.isPending ? (
-                "…"
-              ) : (
-                <>
-                  <span className="opacity-70">♪</span>
-                  <span>⤓</span>
-                </>
-              )}
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => store.pinToSong(rec)}
+            title="Send to Song recs (pin this track at the top of the SONG column)"
+            aria-label="send to song recs"
+            className="shrink-0 w-7 h-7 text-xs rounded bg-neutral-800/70 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700/60 transition-colors inline-flex items-center justify-center"
+          >
+            ↗
+          </button>
         )}
       </div>
     </div>

@@ -5,7 +5,7 @@
 // of plays possible without a backend change.
 
 import { useSyncExternalStore } from "react";
-import type { LoadedDeck, ViewName } from "./types";
+import type { ColumnRec, LoadedDeck, ViewName } from "./types";
 
 interface AppState {
   currentSessionId: number | null;
@@ -22,6 +22,13 @@ interface AppState {
    * Cue clip via the bridge.
    */
   previewing: { trackId: number; column: string } | null;
+  /**
+   * Tracks the user "shot" from a stem column into the SONG column's rec
+   * list — they want to load this as a whole-song candidate but haven't
+   * committed yet. Rendered above the backend's song recs in the SONG
+   * column. Persisted so a reload preserves the queue.
+   */
+  pinnedSongRecs: ColumnRec[];
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -35,6 +42,7 @@ function readPersisted(): Partial<AppState> {
     return {
       loadedDecks: parsed.loadedDecks ?? {},
       stack: parsed.stack ?? [],
+      pinnedSongRecs: parsed.pinnedSongRecs ?? [],
     };
   } catch {
     return {};
@@ -46,7 +54,11 @@ function persist(s: AppState): void {
   try {
     window.localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ loadedDecks: s.loadedDecks, stack: s.stack }),
+      JSON.stringify({
+        loadedDecks: s.loadedDecks,
+        stack: s.stack,
+        pinnedSongRecs: s.pinnedSongRecs,
+      }),
     );
   } catch {
     // localStorage full or unavailable — ignore.
@@ -60,6 +72,7 @@ const initial: AppState = {
   stack: [],
   commandBarOpen: false,
   previewing: null,
+  pinnedSongRecs: [],
   ...readPersisted(),
 };
 
@@ -171,6 +184,30 @@ export const store = {
   },
   setPreviewing(p: { trackId: number; column: string } | null): void {
     state = { ...state, previewing: p };
+    emit();
+  },
+  /**
+   * Pin a rec to the top of the SONG column's rec list. Used when the
+   * user is browsing stem recs (e.g. vocals candidates) and wants to
+   * remember "this whole track is worth a look in song mode." Stored
+   * with stem_file_id forced to null so the pinned card renders as a
+   * song candidate, not a stem one.
+   */
+  pinToSong(rec: ColumnRec): void {
+    if (state.pinnedSongRecs.some((r) => r.track_id === rec.track_id)) return;
+    const songified: ColumnRec = { ...rec, stem_file_id: null };
+    state = {
+      ...state,
+      pinnedSongRecs: [songified, ...state.pinnedSongRecs],
+    };
+    emit();
+  },
+  unpinFromSong(trackId: number): void {
+    if (!state.pinnedSongRecs.some((r) => r.track_id === trackId)) return;
+    state = {
+      ...state,
+      pinnedSongRecs: state.pinnedSongRecs.filter((r) => r.track_id !== trackId),
+    };
     emit();
   },
 };
