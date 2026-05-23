@@ -296,7 +296,7 @@ function Cell({
   if (!loaded) {
     return (
       <div
-        className="rounded-md border border-neutral-900 bg-neutral-950 h-16"
+        className="rounded-md border border-neutral-900 bg-neutral-950 h-14"
         aria-label={`${roleLabel(role)} (empty)`}
       />
     );
@@ -318,7 +318,7 @@ function Cell({
             ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
             : `${roleLabel(role)} (loaded)`
         }
-        className={`w-full rounded-md border h-16 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
+        className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
           playing
             ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
             : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
@@ -331,14 +331,9 @@ function Cell({
             : undefined
         }
       >
-        <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 leading-none ${playing ? "text-emerald-100" : color.text}`}>
-          {playing && <span className="text-emerald-200">⏹</span>}
-          {roleLabel(role)}
-          {playing && <span className="ml-auto text-[9px] text-emerald-200/80" title="Clip loops by default">🔁</span>}
-        </div>
         {cell && (
           <>
-            <div className={`text-xs truncate font-medium leading-tight mt-1 ${playing ? "text-emerald-50" : "text-neutral-100"}`}>
+            <div className={`text-xs truncate font-medium leading-tight ${playing ? "text-emerald-50" : "text-neutral-100"}`}>
               {cell.title ?? `Track #${cell.track_id}`}
             </div>
             {cell.artist && (
