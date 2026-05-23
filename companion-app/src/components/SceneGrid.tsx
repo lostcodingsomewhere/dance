@@ -333,7 +333,7 @@ function Cell({
       >
         <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 leading-none ${playing ? "text-emerald-100" : color.text}`}>
           {playing && <span className="text-emerald-200">⏹</span>}
-          {playing ? "playing" : roleLabel(role)}
+          {roleLabel(role)}
           {playing && <span className="ml-auto text-[9px] text-emerald-200/80" title="Clip loops by default">🔁</span>}
         </div>
         {cell && (
