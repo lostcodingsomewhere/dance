@@ -296,7 +296,7 @@ function Cell({
   if (!loaded) {
     return (
       <div
-        className="rounded-md border border-neutral-900 bg-neutral-950 h-14"
+        className="rounded-md border border-neutral-900 bg-neutral-950 h-16"
         aria-label={`${roleLabel(role)} (empty)`}
       />
     );
@@ -315,10 +315,10 @@ function Cell({
           playing
             ? `Stop ${roleLabel(role).toLowerCase()} (${cell?.title ?? "loaded"})`
             : cell
-            ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`} — tap to fire`
+            ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
             : `${roleLabel(role)} (loaded)`
         }
-        className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
+        className={`w-full rounded-md border h-16 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
           playing
             ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
             : `${color.border} bg-neutral-900/40 hover:bg-neutral-900/80 hover:border-neutral-700`
@@ -331,15 +331,33 @@ function Cell({
             : undefined
         }
       >
-        <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 ${playing ? "text-emerald-100" : color.text}`}>
+        <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 leading-none ${playing ? "text-emerald-100" : color.text}`}>
           {playing && <span className="text-emerald-200">⏹</span>}
           {playing ? "playing" : roleLabel(role)}
           {playing && <span className="ml-auto text-[9px] text-emerald-200/80" title="Clip loops by default">🔁</span>}
         </div>
         {cell && (
-          <div className={`text-xs truncate font-medium leading-tight mt-0.5 ${playing ? "text-emerald-50" : "text-neutral-200"}`}>
-            {cell.title ?? `Track #${cell.track_id}`}
-          </div>
+          <>
+            <div className={`text-xs truncate font-medium leading-tight mt-1 ${playing ? "text-emerald-50" : "text-neutral-100"}`}>
+              {cell.title ?? `Track #${cell.track_id}`}
+            </div>
+            {cell.artist && (
+              <div className={`text-[10px] truncate leading-tight ${playing ? "text-emerald-100/80" : "text-neutral-400"}`}>
+                {cell.artist}
+              </div>
+            )}
+            {(cell.bpm != null || cell.key_camelot || cell.floor_energy != null) && (
+              <div className={`text-[9px] truncate font-mono leading-none mt-0.5 ${playing ? "text-emerald-200/70" : "text-neutral-500"}`}>
+                {cell.bpm != null && <span>{cell.bpm.toFixed(1)}</span>}
+                {cell.key_camelot && (
+                  <span className="ml-1">· {cell.key_camelot}</span>
+                )}
+                {cell.floor_energy != null && (
+                  <span className="ml-1">· E{cell.floor_energy}</span>
+                )}
+              </div>
+            )}
+          </>
         )}
       </button>
       {onRemove && (
