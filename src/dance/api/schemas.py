@@ -256,6 +256,9 @@ class SetTrackOut(_Base):
     track_id: int
     position: int
     note: str | None = None
+    # Optional per-slot stem filter — when set, force-loading this slot
+    # only pushes these stems to Live. NULL = all 4 stems (default).
+    stem_kinds: list[str] | None = None
     added_at: datetime
     title: str | None = None
     artist: str | None = None
@@ -321,11 +324,17 @@ class SetTrackAddRequest(BaseModel):
     track_id: int
     position: int | None = None  # None = append to end
     note: str | None = None
+    # Optional stem filter — see SetTrackOut.stem_kinds. Pass null/omit
+    # to mean "all stems" (the default).
+    stem_kinds: list[str] | None = None
 
 
 class SetTrackUpdateRequest(BaseModel):
     position: int | None = None
     note: str | None = None
+    # When patching: omit/null = leave existing value untouched. An
+    # explicit empty list is rejected (use {"stem_kinds": null} to clear).
+    stem_kinds: list[str] | None = None
 
 
 class TailRecOut(_Base):

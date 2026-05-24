@@ -2529,3 +2529,127 @@ def test_search_tracks_respects_bpm_filter(client: TestClient, session, make_tra
     r = client.get("/api/v1/tracks/search", params={"q": "match", "bpm_min": 130})
     titles = [h["title"] for h in r.json()]
     assert titles == ["Match fast"]
+
+
+# ---------------------------------------------------------------------------
+# /sets — per-slot stem_kinds filter
+# ---------------------------------------------------------------------------
+
+
+def test_set_track_stem_kinds_default_null(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+    assert r.json()["tracks"][0]["stem_kinds"] is None
+
+
+def test_set_track_stem_kinds_set_on_add(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": ["drums", "vocals"]},
+    )
+    assert r.json()["tracks"][0]["stem_kinds"] == ["drums", "vocals"]
+
+
+def test_set_track_stem_kinds_dedupes_and_normalizes(
+    client: TestClient, session, make_track
+) -> None:
+    """Duplicates collapse and casing normalizes."""
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": ["DRUMS", "drums", "Bass"]},
+    )
+    assert r.json()["tracks"][0]["stem_kinds"] == ["drums", "bass"]
+
+
+def test_set_track_stem_kinds_rejects_unknown_kind(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": ["drums", "horn"]},
+    )
+    assert r.status_code == 400
+    assert "horn" in r.json()["detail"]
+
+
+def test_set_track_stem_kinds_rejects_empty_list_on_add(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": []},
+    )
+    assert r.status_code == 400
+
+
+def test_set_track_stem_kinds_patch_set(
+    client: TestClient, session, make_track
+) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+
+    r = client.patch(
+        f"/api/v1/sets/{sid}/tracks/{t.id}",
+        json={"stem_kinds": ["drums"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["tracks"][0]["stem_kinds"] == ["drums"]
+
+
+def test_set_track_stem_kinds_patch_omitted_keeps_existing(
+    client: TestClient, session, make_track
+) -> None:
+    """PATCH without stem_kinds in body leaves the existing value alone."""
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": ["vocals"]},
+    )
+
+    r = client.patch(
+        f"/api/v1/sets/{sid}/tracks/{t.id}",
+        json={"note": "cue here"},
+    )
+    assert r.json()["tracks"][0]["stem_kinds"] == ["vocals"]
+    assert r.json()["tracks"][0]["note"] == "cue here"
+
+
+def test_set_track_stem_kinds_patch_null_clears(
+    client: TestClient, session, make_track
+) -> None:
+    """PATCH with explicit null clears the filter."""
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "stem_kinds": ["drums"]},
+    )
+
+    r = client.patch(
+        f"/api/v1/sets/{sid}/tracks/{t.id}",
+        json={"stem_kinds": None},
+    )
+    assert r.json()["tracks"][0]["stem_kinds"] is None

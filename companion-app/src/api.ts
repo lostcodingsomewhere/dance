@@ -231,7 +231,7 @@ export function activateSet(id: number): Promise<DanceSet> {
 export function addTrackToSet(
   setId: number,
   trackId: number,
-  opts: { position?: number; note?: string } = {},
+  opts: { position?: number; note?: string; stem_kinds?: string[] | null } = {},
 ): Promise<DanceSet> {
   return request<DanceSet>(`/sets/${setId}/tracks`, {
     method: "POST",
@@ -239,6 +239,7 @@ export function addTrackToSet(
       track_id: trackId,
       position: opts.position ?? null,
       note: opts.note ?? null,
+      stem_kinds: opts.stem_kinds ?? null,
     }),
   });
 }
@@ -262,6 +263,19 @@ export function updateSetTrackNote(
   return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
     method: "PATCH",
     body: JSON.stringify({ note }),
+  });
+}
+
+/** Update a set track's stem filter. Pass null to clear (load all stems);
+ *  pass a non-empty subset of ["drums","bass","vocals","other"] to limit. */
+export function updateSetTrackStemKinds(
+  setId: number,
+  trackId: number,
+  stemKinds: string[] | null,
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ stem_kinds: stemKinds }),
   });
 }
 

@@ -27,6 +27,7 @@ import type { DanceSet, SetTrack, Track } from "../types";
 import { EnergyBar } from "../components/EnergyBar";
 import { KeyBadge } from "../components/KeyBadge";
 import { SetMenu } from "../components/SetMenu";
+import { StemKindsChip } from "../components/StemKindsChip";
 
 export function SetEditor() {
   const active = useActiveSet();
@@ -174,6 +175,12 @@ function EditableTrackRow({
           </div>
         </div>
         <EnergyBar energy={track.floor_energy ?? null} size="sm" />
+        <StemKindsChip
+          setId={setId}
+          trackId={track.track_id}
+          stemKinds={track.stem_kinds}
+          variant="full"
+        />
         <button
           type="button"
           disabled={index === 0 || move.isPending}

@@ -669,7 +669,14 @@ class Set(Base):
 
 
 class SetTrack(Base):
-    """A track entry within a Set, ordered by ``position`` (0-indexed)."""
+    """A track entry within a Set, ordered by ``position`` (0-indexed).
+
+    ``stem_kinds`` is an optional JSON-encoded list of stem kind strings
+    (``["drums", "vocals"]``); NULL = load all 4 stems (default). When set,
+    a force-load of this slot only pushes those stems to Live — lets the
+    DJ pre-plan stem-level intent ("this song appears only as drums") at
+    the planning layer instead of relying on live ⤧ splits.
+    """
 
     __tablename__ = "set_tracks"
     __table_args__ = (
@@ -682,6 +689,7 @@ class SetTrack(Base):
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
     position = Column(Integer, nullable=False)
     note = Column(Text, nullable=True)
+    stem_kinds = Column(Text, nullable=True)
     added_at = Column(DateTime, default=now_utc, nullable=False)
 
     set = relationship("Set", back_populates="tracks")

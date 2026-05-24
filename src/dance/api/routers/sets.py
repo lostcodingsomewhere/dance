@@ -10,6 +10,8 @@ Tail-rec scoring lives in :mod:`dance.recommender.tail` and is surfaced at
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -23,10 +25,62 @@ from dance.api.schemas import (
     SetUpdateRequest,
     TailRecsResponse,
 )
-from dance.core.database import AudioAnalysis, Set, SetTrack, Track, now_utc
+from dance.core.database import (
+    AudioAnalysis,
+    Set,
+    SetTrack,
+    StemKind,
+    Track,
+    now_utc,
+)
 from dance.recommender.tail import DEFAULT_WINDOW, tail_recs_for_set
 
 router = APIRouter(prefix="/sets", tags=["sets"])
+
+_VALID_STEM_KINDS = {k.value for k in StemKind}
+
+
+def _validate_stem_kinds(value: list[str] | None) -> str | None:
+    """Normalize + validate a stem_kinds input. Returns the JSON-encoded
+    string to store, or None for the all-stems default. Raises 400 for
+    invalid kinds or an empty list (use null to clear)."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="stem_kinds must be a non-empty list, or null to clear",
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"stem_kinds entries must be strings, got {type(raw).__name__}",
+            )
+        kind = raw.lower()
+        if kind not in _VALID_STEM_KINDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown stem kind {raw!r}; valid: {sorted(_VALID_STEM_KINDS)}",
+            )
+        if kind not in seen:
+            seen.add(kind)
+            normalized.append(kind)
+    return json.dumps(normalized)
+
+
+def _decode_stem_kinds(stored: str | None) -> list[str] | None:
+    if stored is None:
+        return None
+    try:
+        parsed = json.loads(stored)
+        if isinstance(parsed, list) and parsed:
+            return [str(x) for x in parsed]
+    except (ValueError, TypeError):
+        pass
+    return None
 
 
 def _set_to_out(session: Session, s: Set) -> dict:
@@ -57,6 +111,7 @@ def _set_to_out(session: Session, s: Set) -> dict:
                 "track_id": int(row.track_id),
                 "position": int(row.position),
                 "note": row.note,
+                "stem_kinds": _decode_stem_kinds(row.stem_kinds),
                 "added_at": row.added_at,
                 "title": track.title if track else None,
                 "artist": track.artist if track else None,
@@ -210,6 +265,7 @@ def add_track(
         track_id=body.track_id,
         position=target_pos,
         note=body.note,
+        stem_kinds=_validate_stem_kinds(body.stem_kinds),
     )
     session.add(row)
     s.updated_at = now_utc()
@@ -236,6 +292,14 @@ def update_track(
 
     if body.note is not None:
         row.note = body.note
+
+    # stem_kinds uses model_fields_set so we distinguish "field omitted"
+    # (leave alone) from "explicit null" (clear the filter).
+    if "stem_kinds" in body.model_fields_set:
+        if body.stem_kinds is None:
+            row.stem_kinds = None
+        else:
+            row.stem_kinds = _validate_stem_kinds(body.stem_kinds)
 
     if body.position is not None and body.position != row.position:
         siblings = (

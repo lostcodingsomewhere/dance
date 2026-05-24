@@ -191,6 +191,9 @@ export interface SetTrack {
   track_id: number;
   position: number;
   note: string | null;
+  /** Optional per-slot stem filter — null = all stems, otherwise the
+   *  subset that loads when this slot is force-loaded. */
+  stem_kinds: string[] | null;
   added_at: string; // ISO datetime
   title: string | null;
   artist: string | null;

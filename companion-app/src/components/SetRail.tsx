@@ -37,6 +37,7 @@ import { store, useAppStore } from "../store";
 import type { ColumnRec, DanceSet, SetTrack, TailRec } from "../types";
 import { KeyBadge } from "./KeyBadge";
 import { SetMenu } from "./SetMenu";
+import { StemKindsChip } from "./StemKindsChip";
 
 const RAIL_WIDTH = 320;
 const AUTO_COLLAPSE_MS = 3_000;
@@ -307,9 +308,14 @@ function SetTrackRow({
     store.pinToSong(rec);
   }
 
+  // Force-load respects the per-slot stem filter. null/missing = load all
+  // stems (the existing default).
   const forceLoad = useMutation({
     mutationFn: () =>
-      pushTrackToLive(track.track_id, { includeStems: true }),
+      pushTrackToLive(track.track_id, {
+        includeStems: true,
+        kinds: track.stem_kinds ?? undefined,
+      }),
   });
 
   function onTap(e: React.MouseEvent) {
@@ -359,7 +365,7 @@ function SetTrackRow({
             </span>
           )}
         </div>
-        <div className="flex items-baseline gap-1.5 pl-6">
+        <div className="flex items-center gap-1.5 pl-6">
           <span className="text-[10px] text-neutral-500 truncate flex-1">
             {track.artist ?? "—"}
           </span>
@@ -373,6 +379,19 @@ function SetTrackRow({
           )}
         </div>
       </button>
+      {/* Stem-filter chip sits in the bottom-right corner of the row,
+          outside the main click target so it doesn't trigger soft-pin. */}
+      <div
+        className="absolute right-1 bottom-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <StemKindsChip
+          setId={setId}
+          trackId={track.track_id}
+          stemKinds={track.stem_kinds}
+          variant="compact"
+        />
+      </div>
       {/* Hover actions — up / down / remove. Positioned absolute so the
           row's clickable area stays uninterrupted. */}
       <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-0.5">
