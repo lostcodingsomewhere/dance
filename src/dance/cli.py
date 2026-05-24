@@ -153,6 +153,17 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
 @click.option("--limit", "-n", type=int)
 @click.option("--skip-stems", is_flag=True)
 @click.option("--skip-embeddings", is_flag=True)
+@click.option(
+    "--skip-ingest",
+    is_flag=True,
+    help=(
+        "Skip the library-scan ingest pass and process only tracks already "
+        "in the DB. The API's /pipeline/process worker uses this when "
+        "advancing optimistically-ingested Spotify tracks — those rows "
+        "are pre-created, so a re-scan is redundant and can hang on large "
+        "libraries (see docs/troubleshooting.md)."
+    ),
+)
 @click.option("--track-id", "-t", type=int)
 @click.pass_context
 def process(
@@ -160,6 +171,7 @@ def process(
     limit: Optional[int],
     skip_stems: bool,
     skip_embeddings: bool,
+    skip_ingest: bool,
     track_id: Optional[int],
 ) -> None:
     """Run the pipeline on pending tracks.
@@ -177,9 +189,12 @@ def process(
 
     dispatcher = Dispatcher(settings, session_factory=SessionLocal)
 
-    # Ingest first
-    console.print("[cyan]Scanning for new files...[/cyan]")
-    dispatcher.ingest()
+    if not skip_ingest:
+        # Ingest first — scans library_dir, registers new audio files.
+        console.print("[cyan]Scanning for new files...[/cyan]")
+        dispatcher.ingest()
+    else:
+        console.print("[dim]Skipping library scan (--skip-ingest)[/dim]")
 
     # Run all enabled stages
     skip: set[str] = set()

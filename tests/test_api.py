@@ -1494,30 +1494,26 @@ def test_job_registry_caps_history(tmp_path) -> None:
 def test_pipeline_process_creates_job_with_stage_items(client: TestClient, monkeypatch) -> None:
     """The endpoint pre-populates 6 stage items so the UI has a layout from t=0."""
     import time
-    from dance.api.routers import pipeline as pipeline_router
 
-    # Stub the dispatcher path: don't actually load Demucs / CLAP in tests.
-    class _FakeDispatcher:
-        def __init__(self, *args, **kwargs):  # noqa: ANN001
-            from dance.pipeline.events import EventBus
+    # _run_dispatcher_job now shells out to ``python -m dance.cli process``
+    # to dodge a torch + uvicorn-thread deadlock. Stub subprocess.run so
+    # the test doesn't actually try to load Demucs / CLAP.
+    import dance.api.routers.pipeline as pipeline_mod
 
-            self.events = EventBus()
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
 
-        def ingest(self):
-            return {"new": 0, "updated": 0, "unchanged": 0, "errors": 0}
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **kw: _FakeProc()
+    )
+    # The worker imports subprocess at function scope; patch the module's
+    # global reference too so the lookup inside _run_dispatcher_job's
+    # function body resolves to the stub.
+    import subprocess as _sub
 
-        def run(self):
-            return {
-                "analyze": {"processed": 0, "errors": 0, "skipped": 0},
-                "separate": {"processed": 0, "errors": 0, "skipped": 0},
-                "analyze_stems": {"processed": 0, "errors": 0, "skipped": 0},
-                "detect_regions": {"processed": 0, "errors": 0, "skipped": 0},
-                "embed": {"processed": 0, "errors": 0, "skipped": 0},
-            }
-
-    import dance.pipeline.dispatcher as dispatcher_mod
-
-    monkeypatch.setattr(dispatcher_mod, "Dispatcher", _FakeDispatcher)
+    monkeypatch.setattr(_sub, "run", lambda *a, **kw: _FakeProc())
 
     r = client.post("/api/v1/pipeline/process")
     assert r.status_code == 200
@@ -2865,16 +2861,12 @@ def test_health_deps_reports_all_four_checks(client: TestClient) -> None:
 def test_health_deps_missing_yt_dlp_makes_ok_false(
     client: TestClient, monkeypatch
 ) -> None:
-    """When yt-dlp isn't on PATH the report flips ``ok`` false so the FE
-    can surface a red chip."""
-    import shutil as _shutil
+    """When yt-dlp isn't reachable the report flips ``ok`` false so the
+    FE can surface a red chip. Patches the resolver in the app module
+    (where _deps_status imports it) so the override actually takes."""
+    import dance.spotify.csv_importer as importer
 
-    real_which = _shutil.which
-    monkeypatch.setattr(
-        _shutil,
-        "which",
-        lambda name: None if name == "yt-dlp" else real_which(name),
-    )
+    monkeypatch.setattr(importer, "_resolve_yt_dlp", lambda: None)
     r = client.get("/api/v1/health/deps")
     body = r.json()
     assert body["ok"] is False

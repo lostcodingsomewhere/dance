@@ -153,11 +153,15 @@ def _deps_status(s) -> dict:  # noqa: ANN001
     """Inspect host tools + per-user creds. Returns a flat report the FE
     can render as a checklist. Each ``status`` is "ok" / "missing" /
     "optional"."""
-    import shutil
     from pathlib import Path
 
-    yt_dlp_path = shutil.which("yt-dlp")
-    ffmpeg_path = shutil.which("ffmpeg")
+    # Match the resolution logic in ``download_track`` so the chip never
+    # green-lights a tool that the worker would then fail to find.
+    from dance.spotify.csv_importer import _resolve_ffmpeg, _resolve_yt_dlp
+
+    yt_dlp_path = _resolve_yt_dlp()
+    ff = _resolve_ffmpeg(None)
+    ffmpeg_path = ff if Path(ff).exists() else None
     cookies = (
         s.youtube_cookies_file
         if s.youtube_cookies_file

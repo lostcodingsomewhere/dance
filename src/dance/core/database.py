@@ -711,12 +711,30 @@ _SessionLocal: Optional[sessionmaker] = None
 
 
 def _attach_sqlite_pragmas(engine) -> None:
-    """Enable foreign-key support on every SQLite connection."""
+    """Apply per-connection pragmas every time a SQLite connection opens.
+
+    - ``foreign_keys=ON``: cascade deletes work as declared in the schema.
+    - ``journal_mode=WAL``: allow concurrent readers + one writer. Default
+      ``DELETE`` mode forces exclusive locks across writes, which caused
+      the FastAPI uvicorn process + a sibling ``dance process`` subprocess
+      to deadlock on the first write — uvicorn held a read lock, the
+      subprocess waited indefinitely for a writer slot. WAL eliminates
+      that contention. (Once set, the journal_mode persists in the DB
+      header — subsequent opens read it back as WAL.)
+    - ``busy_timeout=5000``: 5 s grace period if a brief write contention
+      *does* happen (e.g. two CLI processes started at once). Beats the
+      default 0-ms which surfaces a SQLITE_BUSY error immediately.
+    - ``synchronous=NORMAL``: pairs well with WAL — durability is preserved
+      across crashes, throughput is much better than FULL.
+    """
 
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
 

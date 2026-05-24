@@ -188,7 +188,7 @@ class IngestStage:
             # Compute content hash
             file_hash = self.compute_audio_hash(file_path)
 
-            # Check if this content already exists
+            # First dedup pass: by content hash (the canonical identity).
             existing = session.query(Track).filter_by(file_hash=file_hash).first()
 
             if existing:
@@ -202,6 +202,32 @@ class IngestStage:
 
                 # Unchanged
                 return IngestResult(status="unchanged", track_id=existing.id)
+
+            # Second dedup pass: by file_path. The optimistic Spotify ingest
+            # creates a Track row with a placeholder ``pending:<spotify_id>``
+            # hash before the audio exists; once the download lands, the
+            # placeholder gets replaced with the real SHA256 — but if the
+            # scanner runs *before* that finalize step (or if the finalize
+            # raced), we'd create a duplicate. Path match recovers from
+            # either ordering by adopting the optimistic row.
+            optimistic = (
+                session.query(Track).filter_by(file_path=str(file_path)).first()
+            )
+            if optimistic is not None:
+                logger.info(
+                    f"Adopting optimistic Track {optimistic.id} "
+                    f"(was hash={optimistic.file_hash!r}): now {file_hash[:12]}…"
+                )
+                optimistic.file_hash = file_hash
+                optimistic.file_size_bytes = file_path.stat().st_size
+                # Trust whatever metadata was stamped at optimistic-add time
+                # (came from Spotify); only fill blanks from the file's tags.
+                meta = self.extract_metadata(file_path)
+                for k, v in meta.items():
+                    if getattr(optimistic, k, None) in (None, ""):
+                        setattr(optimistic, k, v)
+                session.commit()
+                return IngestResult(status="adopted", track_id=optimistic.id)
 
             # New file - extract metadata
             metadata = self.extract_metadata(file_path)

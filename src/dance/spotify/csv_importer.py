@@ -19,8 +19,40 @@ import io
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _resolve_yt_dlp() -> str | None:
+    """Find yt-dlp, preferring the active venv's copy.
+
+    spotDL installs yt-dlp as a pip dependency, so the venv's bin is the
+    most reliable location. If the venv isn't the calling process, fall
+    back to ``shutil.which`` for a system-wide install. Returns None if
+    neither path exists — callers should surface a helpful error then."""
+    venv_yt = Path(sys.executable).parent / "yt-dlp"
+    if venv_yt.exists():
+        return str(venv_yt)
+    return shutil.which("yt-dlp")
+
+
+def _resolve_ffmpeg(explicit: str | None) -> str:
+    """ffmpeg lives system-wide (brew /opt/homebrew/bin/ffmpeg on Apple
+    Silicon, /usr/local/bin on Intel). Honor an explicit override first,
+    then try the standard Homebrew prefixes, then fall back to the bare
+    name so yt-dlp's own PATH lookup gets a shot."""
+    if explicit and explicit != "ffmpeg":
+        return explicit
+    candidates = [
+        shutil.which("ffmpeg"),
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+    return "ffmpeg"
 
 
 @dataclass(frozen=True)
@@ -137,26 +169,27 @@ def download_track(
         default_cookies = Path.home() / ".dance" / "cookies.txt"
         if default_cookies.exists():
             cookies_file = default_cookies
-    if ffmpeg_location is None:
-        ffmpeg_location = "ffmpeg"
+    ffmpeg_location = _resolve_ffmpeg(ffmpeg_location)
 
     target = expected_target(library, row)
     if target.exists() and target.stat().st_size > 100 * 1024:
         return ("skip", "already downloaded")
 
-    # Fail fast with a helpful message when yt-dlp isn't installed.
-    if shutil.which("yt-dlp") is None:
+    # Prefer the venv's yt-dlp (installed via pip alongside spotdl) — this
+    # keeps the backend working even when launched without the venv on PATH.
+    yt_dlp_bin = _resolve_yt_dlp()
+    if yt_dlp_bin is None:
         return (
             "fail",
-            "yt-dlp not found on PATH — install with `brew install yt-dlp` "
-            "(macOS) or `pipx install yt-dlp`",
+            "yt-dlp not found — install with `pip install yt-dlp` into the "
+            "venv or `brew install yt-dlp` on the host",
         )
 
     output_template = str(library / f"{target.stem}.%(ext)s")
     query = f"ytsearch1:{row.artist} {row.title}"
 
     cmd = [
-        "yt-dlp",
+        yt_dlp_bin,
         "--js-runtimes", "node",
         "--ffmpeg-location", ffmpeg_location,
         "--default-search", "ytsearch",

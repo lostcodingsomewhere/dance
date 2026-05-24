@@ -22,6 +22,7 @@ DB-row semantics keep things consistent; it's just wasteful CPU.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -658,82 +659,92 @@ _DISPATCH_STAGES = (
 
 
 def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
-    """Background worker: build a Dispatcher in this thread, run it,
-    pipe its events into the JobRegistry.
+    """Background worker: spawn ``dance process`` as a SUBPROCESS so the
+    dispatcher's heavy deps (torch / Demucs / CLAP) initialize in their own
+    Python interpreter.
 
-    Uses the parallel dispatcher (session_factory) so stages run
-    concurrently and stages with ``concurrency>1`` get multiple
-    workers. GPU contention is bounded by the dispatcher's module-level
-    semaphore (``DANCE_GPU_CONCURRENCY``)."""
+    Why subprocess and not a thread: importing torch from a non-main thread
+    inside uvicorn's worker can deadlock on signal-handler init (we hit
+    this live on 2026-05-24 — thread stayed at 0% CPU, zero stage events
+    emitted, indefinitely). Subprocess sidesteps it cleanly.
+
+    Trade-off: per-stage live progress events used to be wired through the
+    in-process event bus into ``registry.update_item``. With a subprocess
+    we only see start/end. That's OK because the UI's real progress
+    signal is per-Track ``state`` on the rail row + ``/pipeline/status``
+    counts — both update via DB queries irrespective of what's pushing
+    them, and React Query polling reflects the change within seconds.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
     registry = get_job_registry()
     registry.set_status(job_id, "running")
 
-    SessionLocal = get_session_factory(settings.db_url)
     try:
-        # Late import — keeps API startup snappy when the dispatcher's heavy
-        # deps (Demucs / CLAP) aren't needed.
-        from dance.pipeline.dispatcher import Dispatcher
-
-        dispatcher = Dispatcher(settings, session_factory=SessionLocal)
-
-        # Live counters per stage. Updated on every event; flushed to the
-        # JobRegistry as a "X/Y done" message.
         stage_index = {name: i for i, name in enumerate(_DISPATCH_STAGES)}
-        live: dict[str, dict[str, int]] = {
-            name: {"done": 0, "fail": 0} for name in _DISPATCH_STAGES
+        # Mark every stage item as "pending" with a hint so the UI shows
+        # something instead of an empty row.
+        for name, idx in stage_index.items():
+            registry.update_item(job_id, idx, "pending", "running…")
+
+        # ``dance`` is the project's CLI entry-point; running it as a
+        # module is the most portable invocation (works regardless of
+        # whether the venv's bin is on PATH).
+        #
+        # ``--skip-ingest``: the scan-the-whole-library ingest pass can
+        # hang on large libraries (see open dispatcher bug). We don't
+        # need it here — tracks added via /pipeline/ingest/track create
+        # their Track row up-front, and a manual ``dance scan`` or
+        # ``dance process`` (without this flag) handles file-drops.
+        cmd = [sys.executable, "-m", "dance.cli", "process", "--skip-ingest"]
+        env = {
+            **os.environ,
+            # The subprocess inherits the parent's DB URL via Settings
+            # unless overridden; pass explicitly for clarity.
+            "DANCE_DATABASE_URL": settings.db_url,
         }
+        cwd = Path(__file__).resolve().parents[3]  # repo root
 
-        def _on_event(event: StageEvent) -> None:
-            idx = stage_index.get(event.stage_name)
-            if idx is None:
-                return
-            counters = live[event.stage_name]
-            if event.kind == "completed":
-                counters["done"] += 1
-            elif event.kind == "failed":
-                counters["fail"] += 1
-            msg = (
-                f"{counters['done']} done"
-                + (f" · {counters['fail']} failed" if counters["fail"] else "")
-            )
-            # Items stay "pending" until we finalize at the end; the message
-            # is what the UI displays per stage.
-            registry.update_item(job_id, idx, "pending", msg)
+        # Stream stdout/stderr to a log file rather than ``capture_output=True``.
+        # The latter uses anonymous pipes which subprocess.run only drains at
+        # exit — chatty dispatchers (Demucs / CLAP) fill the ~64 KB buffer
+        # and write() blocks indefinitely. The on-disk log also gives the
+        # user a thing to ``tail -f`` for live progress.
+        log_dir = Path(settings.data_dir) / "pipeline-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{job_id}.log"
 
-        dispatcher.events.subscribe(_on_event)
-
-        # Ingest first — surface its counts on item 0.
-        ingest_counts = dispatcher.ingest()
-        registry.update_item(
-            job_id,
-            stage_index["ingest"],
-            "ok",
-            (
-                f"new={ingest_counts.get('new', 0)} "
-                f"updated={ingest_counts.get('updated', 0)} "
-                f"unchanged={ingest_counts.get('unchanged', 0)}"
-            ),
-        )
-
-        result = dispatcher.run()
-
-        # Finalize: flip each stage item to ok / fail based on totals.
-        for name, counts in result.items():
-            idx = stage_index.get(name)
-            if idx is None:
-                continue
-            processed = counts.get("processed", 0)
-            errors = counts.get("errors", 0)
-            skipped = counts.get("skipped", 0)
-            status = "fail" if errors and processed == 0 else "ok"
-            registry.update_item(
-                job_id,
-                idx,
-                status,
-                f"processed={processed} errors={errors} skipped={skipped}",
+        with open(log_path, "w") as log_fp:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                env=env,
+                stdout=log_fp,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=60 * 60,  # 1 hour hard cap; real runs are minutes
             )
 
-        registry.set_status(job_id, "done")
+        # Subprocess done. Mark stage items as ok (we can't tell per-stage
+        # without parsing stdout — the rail row's track_state covers it).
+        for name, idx in stage_index.items():
+            registry.update_item(job_id, idx, "ok", "done")
+
+        if proc.returncode == 0:
+            registry.set_status(job_id, "done")
+        else:
+            # Read the tail of the log for the error message.
+            try:
+                tail = log_path.read_text()[-500:].replace("\n", " | ")
+            except OSError:
+                tail = "(log unreadable)"
+            registry.set_status(
+                job_id, "error", error=f"rc={proc.returncode}: {tail}"
+            )
+    except subprocess.TimeoutExpired:
+        registry.set_status(job_id, "error", error="pipeline exceeded 1h timeout")
     except Exception as e:  # noqa: BLE001
         logger.exception("pipeline_run job %s crashed", job_id)
         registry.set_status(job_id, "error", error=str(e)[:300])
