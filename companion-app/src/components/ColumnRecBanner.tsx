@@ -1,7 +1,14 @@
 import { useColumnRecs } from "../hooks/useColumnRecs";
-import { pushTrackToLive } from "../api";
+import { getStems, pushTrackToLive } from "../api";
 import { useMutation } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
+
+// Stable empty-array reference for the pinnedStemRecs[column] selector
+// fallback. `?? []` creates a fresh array each render which breaks
+// useSyncExternalStore's referential-equality check and triggers an
+// infinite loop. One module-level const fixes it without per-column
+// special-casing.
+const EMPTY_PIN_LIST: ColumnRec[] = [];
 import {
   useStartPreview,
   useStopPreview,
@@ -21,20 +28,34 @@ import { store, useAppStore } from "../store";
  */
 export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number }) {
   const q = useColumnRecs(column, { k });
-  // User-pinned tracks (sent from stem cards via the ↗ button). Only
-  // surfaced in the SONG column — pinning IS "queue this as a whole-
-  // song candidate." Dedupe against backend recs so a pinned track
-  // that's also recommended by the backend appears once (pinned wins).
-  const pinned = useAppStore((s) => s.pinnedSongRecs);
-  const recs = column === "mix"
-    ? [
-        ...pinned,
-        ...(q.data?.recs ?? []).filter(
-          (r) => !pinned.some((p) => p.track_id === r.track_id),
+  // User-pinned tracks. Two flavors:
+  //   - pinnedSongRecs: stem cards' ↗ gesture — pinned into the MIX column
+  //     as whole-song candidates.
+  //   - pinnedStemRecs[column]: Mix card's ⤧ gesture (the inverse) — splits
+  //     a whole song into its 4 stems, each pinned into the matching stem
+  //     column. So this banner reads from one or the other based on column.
+  // Dedupe against backend recs so a pinned item appears once (pinned wins).
+  const pinnedSongs = useAppStore((s) => s.pinnedSongRecs);
+  const pinnedStems = useAppStore(
+    (s) => s.pinnedStemRecs[column] ?? EMPTY_PIN_LIST,
+  );
+  const pinned = column === "mix" ? pinnedSongs : pinnedStems;
+  const recs = [
+    ...pinned,
+    ...(q.data?.recs ?? []).filter(
+      (r) =>
+        !pinned.some((p) =>
+          column === "mix"
+            ? p.track_id === r.track_id
+            : p.stem_file_id === r.stem_file_id,
         ),
-      ]
-    : (q.data?.recs ?? []);
-  const pinnedIds = column === "mix" ? new Set(pinned.map((p) => p.track_id)) : new Set();
+    ),
+  ];
+  const pinnedKeys = new Set(
+    pinned.map((p) =>
+      column === "mix" ? `t-${p.track_id}` : `s-${p.stem_file_id}`,
+    ),
+  );
 
   return (
     <div className="flex flex-col gap-1" data-testid={`rec-banner-${column}`}>
@@ -54,7 +75,9 @@ export function ColumnRecBanner({ column, k = 4 }: { column: string; k?: number 
           key={`${rec.track_id}-${rec.stem_file_id ?? "mix"}`}
           rec={rec}
           column={column}
-          isPinned={pinnedIds.has(rec.track_id)}
+          isPinned={pinnedKeys.has(
+            column === "mix" ? `t-${rec.track_id}` : `s-${rec.stem_file_id}`,
+          )}
         />
       ))}
       {!q.isLoading && recs.length === 0 && (
@@ -115,6 +138,34 @@ function RecCard({
     },
   });
 
+  // ⤧ split — inverse of ↗. On a Mix song card, fetches the track's stems
+  // and pushes each into its matching stem column's pinnedStemRecs. Lets
+  // the DJ surface "these four stems for consideration" without committing
+  // the whole song to Mix.
+  const splitToStems = useMutation({
+    mutationFn: async () => {
+      const stems = await getStems(rec.track_id);
+      const byColumn: Record<string, ColumnRec> = {};
+      for (const s of stems) {
+        const col = String(s.kind).toLowerCase();
+        if (!["drums", "bass", "vocals", "other"].includes(col)) continue;
+        byColumn[col] = {
+          track_id: rec.track_id,
+          stem_file_id: s.id,
+          track_title: rec.track_title,
+          track_artist: rec.track_artist,
+          bpm: s.analysis?.bpm ?? rec.bpm,
+          key_camelot: s.analysis?.dominant_pitch_camelot ?? rec.key_camelot,
+          floor_energy: s.analysis?.floor_energy ?? rec.floor_energy,
+          score: 0,
+          score_breakdown: {},
+          reasons: ["split from song"],
+        };
+      }
+      store.splitSongToStems(byColumn);
+    },
+  });
+
   function onPreview() {
     if (isPreviewing) {
       stopPreview.mutate();
@@ -152,9 +203,19 @@ function RecCard({
       {isPinned && (
         <button
           type="button"
-          onClick={() => store.unpinFromSong(rec.track_id)}
-          title="Unpin from Song recs"
-          aria-label="unpin from song recs"
+          onClick={() =>
+            isSongCard
+              ? store.unpinFromSong(rec.track_id)
+              : rec.stem_file_id != null
+                ? store.unpinFromStem(column, rec.stem_file_id)
+                : null
+          }
+          title={
+            isSongCard
+              ? "Unpin from Song recs"
+              : `Unpin ${roleLabel(column).toLowerCase()} stem`
+          }
+          aria-label="unpin"
           className="absolute top-1 right-1 w-4 h-4 rounded-full text-[10px] leading-none inline-flex items-center justify-center text-emerald-200/80 bg-emerald-500/15 border border-emerald-400/40 hover:bg-rose-500/30 hover:text-rose-100 hover:border-rose-400/60 transition-colors"
         >
           ×
@@ -184,11 +245,7 @@ function RecCard({
           the track to the SONG column's rec list — unified action
           model: every card just previews / loads its own column, and
           ↗ is the "consider this for song mode too" gesture. */}
-      <div
-        className={`mt-1 grid gap-1 ${
-          isSongCard ? "grid-cols-[auto_1fr]" : "grid-cols-[auto_1fr_auto]"
-        }`}
-      >
+      <div className="mt-1 grid gap-1 grid-cols-[auto_1fr_auto]">
         <button
           type="button"
           onClick={onPreview}
@@ -236,6 +293,18 @@ function RecCard({
             className="shrink-0 w-7 h-7 text-xs rounded bg-neutral-800/70 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700/60 transition-colors inline-flex items-center justify-center"
           >
             ↗
+          </button>
+        )}
+        {isSongCard && (
+          <button
+            type="button"
+            onClick={() => splitToStems.mutate()}
+            disabled={splitToStems.isPending}
+            title="Split into stem-column pins (inverse of ↗ — cherry-pick which stems to consider)"
+            aria-label="split into stems"
+            className="shrink-0 w-7 h-7 text-xs rounded bg-neutral-800/70 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700/60 transition-colors inline-flex items-center justify-center disabled:opacity-50"
+          >
+            {splitToStems.isPending ? "…" : "⤧"}
           </button>
         )}
       </div>

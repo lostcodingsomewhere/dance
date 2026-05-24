@@ -30,6 +30,14 @@ interface AppState {
    * active Set; pins are ephemeral selections within it.
    */
   pinnedSongRecs: ColumnRec[];
+  /**
+   * Inverse of pinnedSongRecs: per-stem-column queues populated by the
+   * "split song to stems" gesture on a Mix-column rec card. Keyed by
+   * column name (`drums`/`bass`/`vocals`/`other`). Lets the DJ cherry-pick
+   * which stems to consider from a whole-song recommendation without
+   * committing the whole song.
+   */
+  pinnedStemRecs: Record<string, ColumnRec[]>;
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -73,6 +81,7 @@ const initial: AppState = {
   setRailOpen: false,
   previewing: null,
   pinnedSongRecs: [],
+  pinnedStemRecs: { drums: [], bass: [], vocals: [], other: [] },
   ...readPersisted(),
 };
 
@@ -199,6 +208,33 @@ export const store = {
     state = {
       ...state,
       pinnedSongRecs: state.pinnedSongRecs.filter((r) => r.track_id !== trackId),
+    };
+    emit();
+  },
+  /**
+   * Split a whole-song rec into per-stem pins: each of the 4 stems lands
+   * in its matching column's rec banner. Caller passes the column→stem
+   * mapping built from the source track's StemFile rows.
+   */
+  splitSongToStems(byColumn: Record<string, ColumnRec>): void {
+    const next = { ...state.pinnedStemRecs };
+    for (const [col, rec] of Object.entries(byColumn)) {
+      const existing = next[col] ?? [];
+      if (existing.some((r) => r.stem_file_id === rec.stem_file_id)) continue;
+      next[col] = [rec, ...existing];
+    }
+    state = { ...state, pinnedStemRecs: next };
+    emit();
+  },
+  unpinFromStem(column: string, stemFileId: number): void {
+    const existing = state.pinnedStemRecs[column] ?? [];
+    if (!existing.some((r) => r.stem_file_id === stemFileId)) return;
+    state = {
+      ...state,
+      pinnedStemRecs: {
+        ...state.pinnedStemRecs,
+        [column]: existing.filter((r) => r.stem_file_id !== stemFileId),
+      },
     };
     emit();
   },
