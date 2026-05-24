@@ -198,15 +198,11 @@ class Track(Base):
     album = Column(String(512), nullable=True)
     year = Column(Integer, nullable=True)
 
-    state = Column(
-        String(32), default=TrackState.PENDING.value, nullable=False, index=True
-    )
+    state = Column(String(32), default=TrackState.PENDING.value, nullable=False, index=True)
     error_message = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=now_utc, nullable=False)
-    updated_at = Column(
-        DateTime, default=now_utc, onupdate=now_utc, nullable=False
-    )
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
     analyzed_at = Column(DateTime, nullable=True)
 
     # Relationships
@@ -215,18 +211,12 @@ class Track(Base):
         back_populates="track",
         cascade="all, delete-orphan",
     )
-    stem_files = relationship(
-        "StemFile", back_populates="track", cascade="all, delete-orphan"
-    )
-    regions = relationship(
-        "Region", back_populates="track", cascade="all, delete-orphan"
-    )
+    stem_files = relationship("StemFile", back_populates="track", cascade="all, delete-orphan")
+    regions = relationship("Region", back_populates="track", cascade="all, delete-orphan")
     embeddings = relationship(
         "TrackEmbedding", back_populates="track", cascade="all, delete-orphan"
     )
-    tags = relationship(
-        "TrackTag", back_populates="track", cascade="all, delete-orphan"
-    )
+    tags = relationship("TrackTag", back_populates="track", cascade="all, delete-orphan")
     beats = relationship("Beat", cascade="all, delete-orphan")
     phrases = relationship("Phrase", cascade="all, delete-orphan")
 
@@ -252,9 +242,7 @@ class StemFile(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     kind = Column(String(16), nullable=False)
     path = Column(Text, nullable=False)
     model_used = Column(String(64), default="htdemucs_ft")
@@ -267,9 +255,7 @@ class StemFile(Base):
         back_populates="stem_file",
         cascade="all, delete-orphan",
     )
-    regions = relationship(
-        "Region", back_populates="stem_file", cascade="all, delete-orphan"
-    )
+    regions = relationship("Region", back_populates="stem_file", cascade="all, delete-orphan")
     embeddings = relationship(
         "TrackEmbedding", back_populates="stem_file", cascade="all, delete-orphan"
     )
@@ -295,9 +281,7 @@ class AudioAnalysis(Base):
     __tablename__ = "audio_analysis"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     stem_file_id = Column(
         Integer,
         ForeignKey("stem_files.id", ondelete="CASCADE"),
@@ -400,10 +384,7 @@ class TrackTag(Base):
     tag = relationship("Tag")
 
     def __repr__(self) -> str:
-        return (
-            f"<TrackTag(track_id={self.track_id}, tag_id={self.tag_id}, "
-            f"source={self.source!r})>"
-        )
+        return f"<TrackTag(track_id={self.track_id}, tag_id={self.tag_id}, source={self.source!r})>"
 
 
 # ---------------------------------------------------------------------------
@@ -430,9 +411,7 @@ class Region(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     stem_file_id = Column(
         Integer,
         ForeignKey("stem_files.id", ondelete="CASCADE"),
@@ -485,9 +464,7 @@ class TrackEmbedding(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     stem_file_id = Column(
         Integer,
         ForeignKey("stem_files.id", ondelete="CASCADE"),
@@ -519,28 +496,20 @@ class TrackEdge(Base):
 
     __tablename__ = "track_edges"
     __table_args__ = (
-        CheckConstraint(
-            "from_track_id != to_track_id", name="ck_track_edges_no_self_loop"
-        ),
+        CheckConstraint("from_track_id != to_track_id", name="ck_track_edges_no_self_loop"),
         UniqueConstraint(
             "from_track_id",
             "to_track_id",
             "kind",
             name="uq_track_edges_from_to_kind",
         ),
-        Index(
-            "ix_track_edges_from_kind_weight", "from_track_id", "kind", "weight"
-        ),
+        Index("ix_track_edges_from_kind_weight", "from_track_id", "kind", "weight"),
         Index("ix_track_edges_to_kind_weight", "to_track_id", "kind", "weight"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    from_track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
-    to_track_id = Column(
-        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False
-    )
+    from_track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
+    to_track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     kind = Column(String(32), nullable=False)
     weight = Column(Float, nullable=False)
     # JSON blob for debugging/diagnostic context only (e.g., ``{"bpm_delta": 2.5}``).
@@ -573,9 +542,7 @@ class DjSession(Base):
     ended_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=now_utc, nullable=False)
 
-    plays = relationship(
-        "SessionPlay", back_populates="session", cascade="all, delete-orphan"
-    )
+    plays = relationship("SessionPlay", back_populates="session", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<DjSession(id={self.id}, name={self.name!r})>"
@@ -595,9 +562,7 @@ class SessionPlay(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(
-        Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
-    )
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
     played_at = Column(DateTime, nullable=False)
     position_in_set = Column(Integer, nullable=False)
@@ -640,10 +605,7 @@ class Beat(Base):
     downbeat = Column(Boolean, default=False)
 
     def __repr__(self) -> str:
-        return (
-            f"<Beat(track_id={self.track_id}, bar={self.bar_number}, "
-            f"beat={self.beat_number})>"
-        )
+        return f"<Beat(track_id={self.track_id}, bar={self.bar_number}, beat={self.beat_number})>"
 
 
 class Phrase(Base):
@@ -667,8 +629,67 @@ class Phrase(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<Phrase(track_id={self.track_id}, type={self.phrase_type!r}, "
-            f"bars={self.bar_count})>"
+            f"<Phrase(track_id={self.track_id}, type={self.phrase_type!r}, bars={self.bar_count})>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sets — persistent curated track plans (pre-set + live rail backing store)
+# ---------------------------------------------------------------------------
+
+
+class Set(Base):
+    """A named, ordered plan of tracks the DJ curated for a gig or practice.
+
+    Distinct from ``DjSession`` (which records what *actually* played). A Set is
+    the intent; the Session is the history. At most one Set has
+    ``is_active = True`` at a time, enforced by a partial unique index created
+    in ``_create_partial_unique_indexes`` (SQLAlchemy can't model
+    ``UNIQUE ... WHERE`` portably — same pattern as ``audio_analysis``).
+    """
+
+    __tablename__ = "sets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+    tracks = relationship(
+        "SetTrack",
+        back_populates="set",
+        cascade="all, delete-orphan",
+        order_by="SetTrack.position",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Set(id={self.id}, name={self.name!r}, active={self.is_active})>"
+
+
+class SetTrack(Base):
+    """A track entry within a Set, ordered by ``position`` (0-indexed)."""
+
+    __tablename__ = "set_tracks"
+    __table_args__ = (
+        UniqueConstraint("set_id", "position", name="uq_set_tracks_set_position"),
+        Index("ix_set_tracks_set_position", "set_id", "position"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    set_id = Column(Integer, ForeignKey("sets.id", ondelete="CASCADE"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    position = Column(Integer, nullable=False)
+    note = Column(Text, nullable=True)
+    added_at = Column(DateTime, default=now_utc, nullable=False)
+
+    set = relationship("Set", back_populates="tracks")
+    track = relationship("Track")
+
+    def __repr__(self) -> str:
+        return (
+            f"<SetTrack(set_id={self.set_id}, position={self.position}, track_id={self.track_id})>"
         )
 
 
@@ -699,9 +720,7 @@ def get_engine(database_url: str):
         _engine = create_engine(
             database_url,
             echo=False,
-            connect_args={"check_same_thread": False}
-            if "sqlite" in database_url
-            else {},
+            connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
         )
         if "sqlite" in database_url:
             _attach_sqlite_pragmas(_engine)
@@ -738,6 +757,12 @@ def _create_partial_unique_indexes(engine) -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_audio_analysis_stem "
                 "ON audio_analysis(stem_file_id) WHERE stem_file_id IS NOT NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_sets_one_active "
+                "ON sets(is_active) WHERE is_active"
             )
         )
 

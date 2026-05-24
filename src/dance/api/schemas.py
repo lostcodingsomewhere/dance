@@ -248,6 +248,110 @@ class SessionPlayCreateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sets — persistent curated track plans
+# ---------------------------------------------------------------------------
+
+
+class SetTrackOut(_Base):
+    track_id: int
+    position: int
+    note: str | None = None
+    added_at: datetime
+    title: str | None = None
+    artist: str | None = None
+    # Surfaced so the Set Rail can render full cards without a second fetch.
+    bpm: float | None = None
+    key_camelot: str | None = None
+    floor_energy: int | None = None
+
+    @field_serializer("added_at")
+    def _ser_added_at(self, v: datetime) -> str | None:
+        return _as_utc_iso(v)
+
+
+class SetOut(_Base):
+    id: int
+    name: str
+    notes: str | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    tracks: list[SetTrackOut] = Field(default_factory=list)
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime) -> str | None:
+        return _as_utc_iso(v)
+
+    @field_serializer("updated_at")
+    def _ser_updated_at(self, v: datetime) -> str | None:
+        return _as_utc_iso(v)
+
+
+class SetSummaryOut(_Base):
+    """Lightweight set listing — no per-track payload."""
+
+    id: int
+    name: str
+    notes: str | None = None
+    is_active: bool
+    track_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime) -> str | None:
+        return _as_utc_iso(v)
+
+    @field_serializer("updated_at")
+    def _ser_updated_at(self, v: datetime) -> str | None:
+        return _as_utc_iso(v)
+
+
+class SetCreateRequest(BaseModel):
+    name: str
+    notes: str | None = None
+
+
+class SetUpdateRequest(BaseModel):
+    name: str | None = None
+    notes: str | None = None
+
+
+class SetTrackAddRequest(BaseModel):
+    track_id: int
+    position: int | None = None  # None = append to end
+    note: str | None = None
+
+
+class SetTrackUpdateRequest(BaseModel):
+    position: int | None = None
+    note: str | None = None
+
+
+class TailRecOut(_Base):
+    """One arc-fit candidate to append to a Set. Shape mirrors ``ColumnRecOut``
+    minus the per-stem fields so the rail can render with the same card."""
+
+    track_id: int
+    track_title: str | None = None
+    track_artist: str | None = None
+    bpm: float | None = None
+    key_camelot: str | None = None
+    floor_energy: int | None = None
+    score: float
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+
+
+class TailRecsResponse(_Base):
+    """Top-K tail recs for a Set."""
+
+    set_id: int
+    set_track_count: int
+    recs: list[TailRecOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Ableton
 # ---------------------------------------------------------------------------
 

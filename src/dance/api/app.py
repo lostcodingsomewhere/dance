@@ -12,7 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import sessionmaker
 
 from dance.api.jobs import init_persisted_registry
-from dance.api.routers import ableton, files, pipeline, recommend, sessions, tracks, ws
+from dance.api.routers import (
+    ableton,
+    files,
+    pipeline,
+    recommend,
+    sessions,
+    sets,
+    tracks,
+    ws,
+)
 from dance.api.routers.pipeline import start_watch_thread
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
@@ -45,9 +54,7 @@ def create_app(
     # dir so a backend restart can restore what was loaded in Live. Path
     # is plumbed through here so tests using a tmp data_dir don't share
     # the production ``~/.dance/deck_state.json``.
-    bridge = bridge or AbletonBridge(
-        state_file=settings.data_dir / "deck_state.json"
-    )
+    bridge = bridge or AbletonBridge(state_file=settings.data_dir / "deck_state.json")
     session_factory = session_factory or get_session_factory(settings.db_url)
 
     # Swap the global JobRegistry for one that persists to data_dir.
@@ -115,6 +122,7 @@ def create_app(
     app.include_router(tracks.stems_router, prefix=API_PREFIX)
     app.include_router(recommend.router, prefix=API_PREFIX)
     app.include_router(sessions.router, prefix=API_PREFIX)
+    app.include_router(sets.router, prefix=API_PREFIX)
     app.include_router(ableton.router, prefix=API_PREFIX)
     app.include_router(files.router, prefix=API_PREFIX)
     app.include_router(pipeline.router, prefix=API_PREFIX)

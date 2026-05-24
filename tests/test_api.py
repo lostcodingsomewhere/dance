@@ -127,9 +127,7 @@ class FakeAbletonBridge:
                     indices[kind] = i
         return {"scene_index": 0, "track_indices": indices, "warnings": []}
 
-    def preview_audio(
-        self, audio_path: str, *, label: str | None = None
-    ) -> dict[str, Any]:
+    def preview_audio(self, audio_path: str, *, label: str | None = None) -> dict[str, Any]:
         self.preview_calls.append({"audio_path": audio_path, "label": label})
         if self.preview_raises is not None:
             raise self.preview_raises
@@ -244,9 +242,7 @@ def test_list_tracks_empty(client: TestClient) -> None:
     assert r.json() == []
 
 
-def test_list_tracks_with_analysis(
-    client: TestClient, session, make_track
-) -> None:
+def test_list_tracks_with_analysis(client: TestClient, session, make_track) -> None:
     t = make_track(title="Hello", artist="World")
     _add_fullmix_analysis(session, t, bpm=128.0, key="9A", floor_energy=7)
     _add_tag(session, t, "uplifting")
@@ -291,9 +287,7 @@ def test_get_track_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
-def test_get_track_regions_filtered(
-    client: TestClient, session, make_track
-) -> None:
+def test_get_track_regions_filtered(client: TestClient, session, make_track) -> None:
     t1 = make_track(title="t1")
     t2 = make_track(title="t2")
     session.add_all(
@@ -397,9 +391,7 @@ def test_recommend_single_seed(client: TestClient, session, make_track) -> None:
     assert rows[0]["score"] > rows[1]["score"]
 
 
-def test_recommend_excludes_seeds_and_exclude(
-    client: TestClient, session, make_track
-) -> None:
+def test_recommend_excludes_seeds_and_exclude(client: TestClient, session, make_track) -> None:
     seed = make_track(title="seed")
     other = make_track(title="other")
     skip = make_track(title="skip")
@@ -457,9 +449,7 @@ def test_create_and_get_current_session(client: TestClient) -> None:
     assert r.json()["id"] == sid
 
 
-def test_session_plays_auto_position(
-    client: TestClient, session, make_track
-) -> None:
+def test_session_plays_auto_position(client: TestClient, session, make_track) -> None:
     t1 = make_track(title="t1")
     t2 = make_track(title="t2")
     _add_fullmix_analysis(session, t1, floor_energy=4)
@@ -499,16 +489,14 @@ def test_end_session_closes_current(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ableton_endpoints_call_client(
-    client: TestClient, fake_bridge: FakeAbletonBridge
-) -> None:
+def test_ableton_endpoints_call_client(client: TestClient, fake_bridge: FakeAbletonBridge) -> None:
     assert client.post("/api/v1/ableton/play").json() == {"ok": True}
     assert client.post("/api/v1/ableton/stop").json() == {"ok": True}
     assert client.post("/api/v1/ableton/tempo", json={"bpm": 124.0}).json() == {"ok": True}
     assert client.post("/api/v1/ableton/fire", json={"track": 2, "scene": 1}).json() == {"ok": True}
-    assert client.post(
-        "/api/v1/ableton/volume", json={"track": 3, "volume": 0.8}
-    ).json() == {"ok": True}
+    assert client.post("/api/v1/ableton/volume", json={"track": 3, "volume": 0.8}).json() == {
+        "ok": True
+    }
 
     names = [call[0] for call in fake_bridge.client.calls]
     assert names == ["play", "stop", "set_tempo", "fire_clip", "set_track_volume"]
@@ -684,14 +672,24 @@ def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
     session = app.state.session_factory()
     try:
         near = Track(
-            file_hash="1" * 64, file_path="/a", file_name="a.wav",
-            file_size_bytes=1, title="near", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="1" * 64,
+            file_path="/a",
+            file_name="a.wav",
+            file_size_bytes=1,
+            title="near",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         far = Track(
-            file_hash="2" * 64, file_path="/b", file_name="b.wav",
-            file_size_bytes=1, title="far", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="2" * 64,
+            file_path="/b",
+            file_name="b.wav",
+            file_size_bytes=1,
+            title="far",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         session.add_all([near, far])
         session.flush()
@@ -701,16 +699,22 @@ def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
 
         session.add(
             TrackEmbedding(
-                track_id=near.id, stem_file_id=None,
-                model=model, model_version=None, dim=3,
+                track_id=near.id,
+                stem_file_id=None,
+                model=model,
+                model_version=None,
+                dim=3,
                 embedding=encode_embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
             )
         )
         session.add(
             TrackEmbedding(
-                track_id=far.id, stem_file_id=None,
-                model=model, model_version=None, dim=3,
+                track_id=far.id,
+                stem_file_id=None,
+                model=model,
+                model_version=None,
+                dim=3,
                 embedding=encode_embedding(np.array([0.0, 1.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
             )
@@ -748,22 +752,35 @@ def test_recommend_by_text_exclude(client, app, fake_bridge):
     session = app.state.session_factory()
     try:
         a = Track(
-            file_hash="3" * 64, file_path="/x", file_name="x.wav",
-            file_size_bytes=1, title="a", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="3" * 64,
+            file_path="/x",
+            file_name="x.wav",
+            file_size_bytes=1,
+            title="a",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         b = Track(
-            file_hash="4" * 64, file_path="/y", file_name="y.wav",
-            file_size_bytes=1, title="b", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="4" * 64,
+            file_path="/y",
+            file_name="y.wav",
+            file_size_bytes=1,
+            title="b",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         session.add_all([a, b])
         session.flush()
         for tid in (a.id, b.id):
             session.add(
                 TrackEmbedding(
-                    track_id=tid, stem_file_id=None,
-                    model=settings.clap_model, model_version=None, dim=2,
+                    track_id=tid,
+                    stem_file_id=None,
+                    model=settings.clap_model,
+                    model_version=None,
+                    dim=2,
                     embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
                     created_at=now_utc(),
                 )
@@ -826,6 +843,7 @@ def test_reveal_success_invokes_command(client, tmp_path, app, monkeypatch):
             invocations.append(list(cmd))
 
     import dance.api.routers.files as files_mod
+
     monkeypatch.setattr(files_mod.subprocess, "Popen", _FakePopen)
 
     r = client.post("/api/v1/files/reveal", json={"path": str(target)})
@@ -851,16 +869,24 @@ def test_tag_endpoint_zeroshot(client, app, fake_bridge):
     session = app.state.session_factory()
     try:
         t = Track(
-            file_hash="9" * 64, file_path="/z", file_name="z.wav",
-            file_size_bytes=1, title="z", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="9" * 64,
+            file_path="/z",
+            file_name="z.wav",
+            file_size_bytes=1,
+            title="z",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         session.add(t)
         session.flush()
         session.add(
             TrackEmbedding(
-                track_id=t.id, stem_file_id=None,
-                model=settings.clap_model, model_version=None, dim=2,
+                track_id=t.id,
+                stem_file_id=None,
+                model=settings.clap_model,
+                model_version=None,
+                dim=2,
                 embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
             )
@@ -903,9 +929,14 @@ def test_tag_endpoint_deep_disabled_by_default(client, app, make_track):
     session = app.state.session_factory()
     try:
         t = Track(
-            file_hash="8" * 64, file_path="/d", file_name="d.wav",
-            file_size_bytes=1, title="d", state="complete",
-            created_at=now_utc(), updated_at=now_utc(),
+            file_hash="8" * 64,
+            file_path="/d",
+            file_name="d.wav",
+            file_size_bytes=1,
+            title="d",
+            state="complete",
+            created_at=now_utc(),
+            updated_at=now_utc(),
         )
         session.add(t)
         session.commit()
@@ -955,9 +986,7 @@ def _setup_exportable_track(session, make_track, tmp_path):
         )
     )
     for kind in ("drums", "bass", "vocals", "other"):
-        session.add(
-            StemFile(track_id=t.id, kind=kind, path=str(stem_dir / f"{kind}.wav"))
-        )
+        session.add(StemFile(track_id=t.id, kind=kind, path=str(stem_dir / f"{kind}.wav")))
     session.commit()
     return t
 
@@ -1012,29 +1041,21 @@ def test_export_als_400_when_not_complete(client, app, session, make_track, tmp_
     assert "complete" in r.json()["detail"].lower()
 
 
-def test_export_als_403_when_out_path_outside_dir(
-    client, app, session, make_track, tmp_path
-):
+def test_export_als_403_when_out_path_outside_dir(client, app, session, make_track, tmp_path):
     _set_als_output_dir(app, tmp_path)
     t = _setup_exportable_track(session, make_track, tmp_path)
 
     outside = tmp_path / "escape.als"
-    r = client.post(
-        f"/api/v1/tracks/{t.id}/als", json={"out_path": str(outside)}
-    )
+    r = client.post(f"/api/v1/tracks/{t.id}/als", json={"out_path": str(outside)})
     assert r.status_code == 403
 
 
-def test_export_als_accepts_custom_out_path_in_dir(
-    client, app, session, make_track, tmp_path
-):
+def test_export_als_accepts_custom_out_path_in_dir(client, app, session, make_track, tmp_path):
     _set_als_output_dir(app, tmp_path)
     t = _setup_exportable_track(session, make_track, tmp_path)
 
     target = tmp_path / "sets" / "subdir" / "custom.als"
-    r = client.post(
-        f"/api/v1/tracks/{t.id}/als", json={"out_path": str(target)}
-    )
+    r = client.post(f"/api/v1/tracks/{t.id}/als", json={"out_path": str(target)})
     assert r.status_code == 200
     body = r.json()
     from pathlib import Path as _P
@@ -1061,17 +1082,25 @@ def test_pipeline_status_empty(client: TestClient) -> None:
     # Every TrackState value must be present (UI relies on this for a stable grid)
     counts = body["counts"]
     for state in (
-        "pending", "analyzing", "analyzed", "separating", "separated",
-        "analyzing_stems", "stems_analyzed", "detecting_regions",
-        "regions_detected", "embedding", "embedded", "complete", "error",
+        "pending",
+        "analyzing",
+        "analyzed",
+        "separating",
+        "separated",
+        "analyzing_stems",
+        "stems_analyzed",
+        "detecting_regions",
+        "regions_detected",
+        "embedding",
+        "embedded",
+        "complete",
+        "error",
     ):
         assert state in counts
         assert counts[state] == 0
 
 
-def test_pipeline_status_counts_per_state(
-    client: TestClient, session, make_track
-) -> None:
+def test_pipeline_status_counts_per_state(client: TestClient, session, make_track) -> None:
     make_track(state="pending")
     make_track(state="analyzing")
     make_track(state="separated")
@@ -1131,9 +1160,7 @@ def test_pipeline_recent_ordered_by_updated_at_desc(
     assert "id" in row and "updated_at" in row
 
 
-def test_pipeline_recent_respects_limit(
-    client: TestClient, session, make_track
-) -> None:
+def test_pipeline_recent_respects_limit(client: TestClient, session, make_track) -> None:
     for i in range(25):
         make_track(title=f"t{i}", state="analyzed")
     session.commit()
@@ -1143,9 +1170,7 @@ def test_pipeline_recent_respects_limit(
     assert len(r.json()) == 5
 
 
-def test_pipeline_recent_surfaces_error_message(
-    client: TestClient, session, make_track
-) -> None:
+def test_pipeline_recent_surfaces_error_message(client: TestClient, session, make_track) -> None:
     t = make_track(title="broken", state="error")
     t.error_message = "separate: System error."
     session.commit()
@@ -1155,9 +1180,7 @@ def test_pipeline_recent_surfaces_error_message(
     assert body[0]["error_message"] == "separate: System error."
 
 
-def test_pipeline_recent_filters_by_state(
-    client: TestClient, session, make_track
-) -> None:
+def test_pipeline_recent_filters_by_state(client: TestClient, session, make_track) -> None:
     """?state=separated returns only tracks in that state."""
     make_track(title="a", state="separated")
     make_track(title="b", state="separated")
@@ -1171,9 +1194,7 @@ def test_pipeline_recent_filters_by_state(
     assert all(row["state"] == "separated" for row in body)
 
 
-def test_pipeline_status_weighted_progress(
-    client: TestClient, session, make_track
-) -> None:
+def test_pipeline_status_weighted_progress(client: TestClient, session, make_track) -> None:
     """4 tracks: 1 complete (6/6), 1 separated (2/6), 2 pending (0/6).
     Total stages: 8, max possible: 24, => 33.3%."""
     make_track(state="complete")
@@ -1301,6 +1322,7 @@ def test_ingest_commit_creates_job_and_returns_pending_items(
     monkeypatch.setattr(csv_importer, "download_track", _fake_download)
     # Re-import so the router's reference uses the patched function
     from dance.api.routers import pipeline as pipeline_router
+
     monkeypatch.setattr(pipeline_router, "download_track", _fake_download)
 
     r = client.post(
@@ -1356,9 +1378,7 @@ def test_get_job_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
-def test_ingest_commit_per_row_selection(
-    client: TestClient, app, tmp_path, monkeypatch
-) -> None:
+def test_ingest_commit_per_row_selection(client: TestClient, app, tmp_path, monkeypatch) -> None:
     """Per-row toggle: caller passes selected_keys, only those download."""
     import time
     from dance.api.routers import pipeline as pipeline_router
@@ -1471,9 +1491,7 @@ def test_job_registry_caps_history(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_process_creates_job_with_stage_items(
-    client: TestClient, monkeypatch
-) -> None:
+def test_pipeline_process_creates_job_with_stage_items(client: TestClient, monkeypatch) -> None:
     """The endpoint pre-populates 6 stage items so the UI has a layout from t=0."""
     import time
     from dance.api.routers import pipeline as pipeline_router
@@ -1498,6 +1516,7 @@ def test_pipeline_process_creates_job_with_stage_items(
             }
 
     import dance.pipeline.dispatcher as dispatcher_mod
+
     monkeypatch.setattr(dispatcher_mod, "Dispatcher", _FakeDispatcher)
 
     r = client.post("/api/v1/pipeline/process")
@@ -1546,9 +1565,7 @@ def test_pipeline_process_returns_409_when_already_running(
 # ---------------------------------------------------------------------------
 
 
-def test_delete_track_cascades(
-    client: TestClient, session, make_track
-) -> None:
+def test_delete_track_cascades(client: TestClient, session, make_track) -> None:
     """Delete a track and verify it's gone along with its stems / regions / tags."""
     t = make_track(title="goner", state="complete")
     _add_fullmix_analysis(session, t, bpm=120.0)
@@ -1557,11 +1574,7 @@ def test_delete_track_cascades(
     sf = StemFile(track_id=t.id, kind="drums", path="/tmp/x.wav")
     session.add(sf)
     session.commit()
-    session.add(
-        AudioAnalysis(
-            track_id=t.id, stem_file_id=sf.id, bpm=120.0, analyzed_at=now_utc()
-        )
-    )
+    session.add(AudioAnalysis(track_id=t.id, stem_file_id=sf.id, bpm=120.0, analyzed_at=now_utc()))
     session.add(
         Region(
             track_id=t.id,
@@ -1585,18 +1598,9 @@ def test_delete_track_cascades(
     # Everything related is gone
     assert session.get(Track, track_id) is None
     assert session.get(StemFile, sf_id) is None
-    assert (
-        session.query(Region).filter(Region.track_id == track_id).count() == 0
-    )
-    assert (
-        session.query(AudioAnalysis)
-        .filter(AudioAnalysis.track_id == track_id)
-        .count()
-        == 0
-    )
-    assert (
-        session.query(TrackTag).filter(TrackTag.track_id == track_id).count() == 0
-    )
+    assert session.query(Region).filter(Region.track_id == track_id).count() == 0
+    assert session.query(AudioAnalysis).filter(AudioAnalysis.track_id == track_id).count() == 0
+    assert session.query(TrackTag).filter(TrackTag.track_id == track_id).count() == 0
 
 
 def test_delete_track_404(client: TestClient) -> None:
@@ -1629,12 +1633,7 @@ def test_delete_track_with_session_play_does_not_fk_violate(
     assert r.status_code == 204
     session.expire_all()
     # SessionPlay row gone, session still there
-    assert (
-        session.query(SessionPlay)
-        .filter(SessionPlay.track_id == track_id)
-        .count()
-        == 0
-    )
+    assert session.query(SessionPlay).filter(SessionPlay.track_id == track_id).count() == 0
     assert session.get(DjSession, sess_id) is not None
 
 
@@ -1796,11 +1795,19 @@ def test_recommend_by_column_uses_combo_embedding(
     seed = make_track(title="seed")
     combo_stem_ids = [
         _seed_stem(
-            session, seed, kind="drums", bpm=128.0, key="8A",
+            session,
+            seed,
+            kind="drums",
+            bpm=128.0,
+            key="8A",
             embedding=[1.0, 0.0, 0.0],
         ),
         _seed_stem(
-            session, seed, kind="bass", bpm=128.0, key="8A",
+            session,
+            seed,
+            kind="bass",
+            bpm=128.0,
+            key="8A",
             embedding=[1.0, 0.0, 0.0],
         ),
     ]
@@ -1808,11 +1815,19 @@ def test_recommend_by_column_uses_combo_embedding(
     aligned_track = make_track(title="aligned")
     orth_track = make_track(title="orthogonal")
     _seed_stem(
-        session, aligned_track, kind="vocals", bpm=128.0, key="2A",
+        session,
+        aligned_track,
+        kind="vocals",
+        bpm=128.0,
+        key="2A",
         embedding=[1.0, 0.0, 0.0],
     )
     _seed_stem(
-        session, orth_track, kind="vocals", bpm=128.0, key="2A",
+        session,
+        orth_track,
+        kind="vocals",
+        bpm=128.0,
+        key="2A",
         embedding=[0.0, 1.0, 0.0],
     )
     session.commit()
@@ -1865,9 +1880,7 @@ def test_recommend_by_column_mix_returns_full_tracks(
     assert "full-mix" in titles
 
 
-def test_recommend_by_column_rejects_invalid_column(
-    client: TestClient, app, fake_bridge
-):
+def test_recommend_by_column_rejects_invalid_column(client: TestClient, app, fake_bridge):
     r = client.post(
         "/api/v1/recommend/by-column",
         json={"column": "guitar", "combo_stem_ids": [], "master_bpm": 128, "k": 3},
@@ -1876,9 +1889,7 @@ def test_recommend_by_column_rejects_invalid_column(
     assert "unknown column" in r.json()["detail"]
 
 
-def test_recommend_by_column_exclude_tracks(
-    client: TestClient, session, fake_bridge, make_track
-):
+def test_recommend_by_column_exclude_tracks(client: TestClient, session, fake_bridge, make_track):
     """Tracks listed in exclude_track_ids never appear in the result."""
     t_keep = make_track(title="keeper")
     t_skip = make_track(title="excluded")
@@ -1959,9 +1970,7 @@ def test_preview_mix_uses_full_track_file_path(
     assert fake_bridge.preview_calls[-1]["audio_path"] == str(fpath)
 
 
-def test_preview_unknown_column_rejected(
-    client: TestClient, session, fake_bridge, make_track
-):
+def test_preview_unknown_column_rejected(client: TestClient, session, fake_bridge, make_track):
     track = make_track(title="X")
     session.commit()
     r = client.post(
@@ -1972,9 +1981,7 @@ def test_preview_unknown_column_rejected(
     assert "unknown column" in r.json()["detail"]
 
 
-def test_preview_missing_audio_returns_404(
-    client: TestClient, session, fake_bridge, make_track
-):
+def test_preview_missing_audio_returns_404(client: TestClient, session, fake_bridge, make_track):
     """A track with no matching StemFile for the requested column → 404."""
     track = make_track(title="Headless")  # no stems for any column
     session.commit()
@@ -1985,9 +1992,7 @@ def test_preview_missing_audio_returns_404(
     assert r.status_code == 404
 
 
-def test_preview_stop_clears_bridge(
-    client: TestClient, fake_bridge
-):
+def test_preview_stop_clears_bridge(client: TestClient, fake_bridge):
     r = client.post("/api/v1/ableton/preview/stop")
     assert r.status_code == 200
     assert r.json()["ok"] is True
@@ -2009,11 +2014,7 @@ def test_load_track_full_song_default_loads_all_stems(
     for kind in ("drums", "bass", "vocals", "other"):
         p = tmp_path / f"{kind}.wav"
         p.write_bytes(b"")
-        session.add(
-            StemFile(
-                track_id=track.id, kind=kind, path=str(p), created_at=now_utc()
-            )
-        )
+        session.add(StemFile(track_id=track.id, kind=kind, path=str(p), created_at=now_utc()))
     session.commit()
 
     r = client.post(
@@ -2041,11 +2042,7 @@ def test_load_track_kinds_filter_passed_through_to_bridge(
     for kind in ("drums", "bass", "vocals", "other"):
         p = tmp_path / f"{kind}.wav"
         p.write_bytes(b"")
-        session.add(
-            StemFile(
-                track_id=track.id, kind=kind, path=str(p), created_at=now_utc()
-            )
-        )
+        session.add(StemFile(track_id=track.id, kind=kind, path=str(p), created_at=now_utc()))
     session.commit()
 
     r = client.post(
@@ -2059,9 +2056,7 @@ def test_load_track_kinds_filter_passed_through_to_bridge(
     assert last["kinds"] == ["drums"]
 
 
-def test_deck_map_returns_cells_not_scenes(
-    client: TestClient, fake_bridge
-):
+def test_deck_map_returns_cells_not_scenes(client: TestClient, fake_bridge):
     """GET /ableton/decks responds with a ``cells`` list (cell-level shape),
     not a legacy ``scenes`` list."""
     fake_bridge.deck_state_return = {
@@ -2085,9 +2080,7 @@ def test_deck_map_returns_cells_not_scenes(
 # ---------------------------------------------------------------------------
 
 
-def test_track_waveform_endpoint_returns_peaks(
-    client: TestClient, session, make_track, tmp_path
-):
+def test_track_waveform_endpoint_returns_peaks(client: TestClient, session, make_track, tmp_path):
     """GET /tracks/{id}/waveform decodes the track audio and returns a
     normalized envelope of length num_peaks."""
     from tests.audio_fixtures import TrackSpec, write_track
@@ -2110,9 +2103,7 @@ def test_track_waveform_endpoint_returns_peaks(
     assert max(body["peaks"]) > 0.0
 
 
-def test_stem_waveform_endpoint_returns_peaks(
-    client: TestClient, session, make_track, tmp_path
-):
+def test_stem_waveform_endpoint_returns_peaks(client: TestClient, session, make_track, tmp_path):
     """GET /stems/{id}/waveform decodes a stem and returns its envelope."""
     from tests.audio_fixtures import TrackSpec, write_track
 
@@ -2139,9 +2130,7 @@ def test_stem_waveform_endpoint_returns_peaks(
     assert body["duration_seconds"] > 0
 
 
-def test_waveform_missing_audio_404(
-    client: TestClient, session, make_track, tmp_path
-):
+def test_waveform_missing_audio_404(client: TestClient, session, make_track, tmp_path):
     """A DB row pointing at a path that doesn't exist on disk → 404."""
     bogus = tmp_path / "does-not-exist.wav"
     track = make_track(title="Ghost", file_path=str(bogus))
@@ -2162,9 +2151,7 @@ def test_waveform_missing_audio_404(
     assert r.status_code == 404
 
 
-def test_waveform_caches_sidecar_json(
-    client: TestClient, session, make_track, tmp_path
-):
+def test_waveform_caches_sidecar_json(client: TestClient, session, make_track, tmp_path):
     """After the first call, a ``.waveform.json`` lands next to the audio
     file and the second call returns the same peaks (cache hit)."""
     from tests.audio_fixtures import TrackSpec, write_track
@@ -2186,3 +2173,359 @@ def test_waveform_caches_sidecar_json(
     r2 = client.get(f"/api/v1/tracks/{track.id}/waveform")
     assert r2.status_code == 200
     assert r2.json()["peaks"] == peaks1
+
+
+# ---------------------------------------------------------------------------
+# /sets
+# ---------------------------------------------------------------------------
+
+
+def test_sets_create_list_get(client: TestClient) -> None:
+    assert client.get("/api/v1/sets").json() == []
+
+    r = client.post("/api/v1/sets", json={"name": "Warehouse Sat", "notes": "n"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Warehouse Sat"
+    assert body["is_active"] is False
+    assert body["tracks"] == []
+    sid = body["id"]
+
+    rows = client.get("/api/v1/sets").json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == sid
+    assert rows[0]["track_count"] == 0
+    assert rows[0]["is_active"] is False
+
+    one = client.get(f"/api/v1/sets/{sid}").json()
+    assert one["id"] == sid
+
+
+def test_sets_update_and_delete(client: TestClient) -> None:
+    sid = client.post("/api/v1/sets", json={"name": "A"}).json()["id"]
+
+    r = client.patch(f"/api/v1/sets/{sid}", json={"name": "B", "notes": "z"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "B"
+    assert r.json()["notes"] == "z"
+
+    r = client.delete(f"/api/v1/sets/{sid}")
+    assert r.status_code == 204
+    assert client.get(f"/api/v1/sets/{sid}").status_code == 404
+
+
+def test_sets_activate_one_at_a_time(client: TestClient) -> None:
+    a = client.post("/api/v1/sets", json={"name": "A"}).json()["id"]
+    b = client.post("/api/v1/sets", json={"name": "B"}).json()["id"]
+
+    assert client.get("/api/v1/sets/active").status_code == 404
+
+    client.post(f"/api/v1/sets/{a}/activate")
+    active = client.get("/api/v1/sets/active").json()
+    assert active["id"] == a
+    assert active["is_active"] is True
+
+    client.post(f"/api/v1/sets/{b}/activate")
+    active = client.get("/api/v1/sets/active").json()
+    assert active["id"] == b
+
+    rows = {r["id"]: r["is_active"] for r in client.get("/api/v1/sets").json()}
+    assert rows == {a: False, b: True}
+
+
+def test_set_tracks_append_and_position_contract(client: TestClient, session, make_track) -> None:
+    t1 = make_track(title="t1")
+    t2 = make_track(title="t2")
+    t3 = make_track(title="t3")
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t1.id})
+    assert r.status_code == 200
+    assert [x["position"] for x in r.json()["tracks"]] == [0]
+    assert r.json()["tracks"][0]["title"] == "t1"
+
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t2.id})
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t3.id})
+    positions = [(x["position"], x["track_id"]) for x in r.json()["tracks"]]
+    assert positions == [(0, t1.id), (1, t2.id), (2, t3.id)]
+
+
+def test_set_tracks_insert_at_position(client: TestClient, session, make_track) -> None:
+    t1 = make_track(title="t1")
+    t2 = make_track(title="t2")
+    t3 = make_track(title="t3")
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t1.id})
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t3.id})
+
+    # Insert t2 between t1 and t3 (position=1).
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t2.id, "position": 1})
+    assert r.status_code == 200
+    assert [(x["position"], x["track_id"]) for x in r.json()["tracks"]] == [
+        (0, t1.id),
+        (1, t2.id),
+        (2, t3.id),
+    ]
+
+
+def test_set_tracks_reorder_via_patch(client: TestClient, session, make_track) -> None:
+    t1 = make_track(title="t1")
+    t2 = make_track(title="t2")
+    t3 = make_track(title="t3")
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    for t in (t1, t2, t3):
+        client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+
+    # Move t3 (position 2) to the front (position 0).
+    r = client.patch(f"/api/v1/sets/{sid}/tracks/{t3.id}", json={"position": 0})
+    assert [(x["position"], x["track_id"]) for x in r.json()["tracks"]] == [
+        (0, t3.id),
+        (1, t1.id),
+        (2, t2.id),
+    ]
+
+    # Move t3 back to the end (position 2).
+    r = client.patch(f"/api/v1/sets/{sid}/tracks/{t3.id}", json={"position": 2})
+    assert [(x["position"], x["track_id"]) for x in r.json()["tracks"]] == [
+        (0, t1.id),
+        (1, t2.id),
+        (2, t3.id),
+    ]
+
+
+def test_set_tracks_remove_compacts_positions(client: TestClient, session, make_track) -> None:
+    t1 = make_track(title="t1")
+    t2 = make_track(title="t2")
+    t3 = make_track(title="t3")
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    for t in (t1, t2, t3):
+        client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+
+    r = client.delete(f"/api/v1/sets/{sid}/tracks/{t2.id}")
+    assert r.status_code == 200
+    assert [(x["position"], x["track_id"]) for x in r.json()["tracks"]] == [
+        (0, t1.id),
+        (1, t3.id),
+    ]
+
+
+def test_set_tracks_note_round_trip(client: TestClient, session, make_track) -> None:
+    t = make_track(title="t")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(
+        f"/api/v1/sets/{sid}/tracks",
+        json={"track_id": t.id, "note": "cue at bar 33"},
+    )
+
+    r = client.patch(f"/api/v1/sets/{sid}/tracks/{t.id}", json={"note": "now cue at 65"})
+    assert r.json()["tracks"][0]["note"] == "now cue at 65"
+
+
+def test_set_tracks_404s(client: TestClient, session, make_track) -> None:
+    t = make_track(title="t")
+    session.commit()
+
+    assert client.post("/api/v1/sets/9999/tracks", json={"track_id": t.id}).status_code == 404
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    assert client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": 9999}).status_code == 404
+
+    assert (
+        client.patch(f"/api/v1/sets/{sid}/tracks/{t.id}", json={"position": 0}).status_code == 404
+    )
+
+    # Insert position out of range.
+    bad = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id, "position": 99})
+    assert bad.status_code == 400
+
+
+def test_set_delete_cascades_to_set_tracks(client: TestClient, session, make_track) -> None:
+    from dance.core.database import SetTrack
+
+    t1 = make_track(title="t1")
+    t2 = make_track(title="t2")
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    for t in (t1, t2):
+        client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+
+    assert session.query(SetTrack).filter(SetTrack.set_id == sid).count() == 2
+    client.delete(f"/api/v1/sets/{sid}")
+    session.expire_all()
+    assert session.query(SetTrack).filter(SetTrack.set_id == sid).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# /sets/{id}/tail-recs — endpoint integration
+# ---------------------------------------------------------------------------
+
+
+def _add_fullmix(session, track, *, bpm=124.0, key="8A", energy=6):
+    a = AudioAnalysis(
+        track_id=track.id,
+        stem_file_id=None,
+        bpm=bpm,
+        key_camelot=key,
+        floor_energy=energy,
+        analyzed_at=now_utc(),
+    )
+    session.add(a)
+    session.flush()
+    return a
+
+
+def test_tail_recs_endpoint_round_trip(client: TestClient, session, make_track):
+    a = make_track(title="a", artist="DJ A")
+    b = make_track(title="b", artist="DJ B")
+    candidate = make_track(title="cand", artist="DJ C")
+    _add_fullmix(session, a)
+    _add_fullmix(session, b)
+    _add_fullmix(session, candidate)
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": a.id})
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": b.id})
+
+    r = client.get(f"/api/v1/sets/{sid}/tail-recs")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["set_id"] == sid
+    assert body["set_track_count"] == 2
+    assert len(body["recs"]) == 1
+    rec = body["recs"][0]
+    assert rec["track_id"] == candidate.id
+    assert rec["track_title"] == "cand"
+    assert rec["track_artist"] == "DJ C"
+    assert rec["bpm"] == pytest.approx(124.0)
+    assert rec["key_camelot"] == "8A"
+    assert "score_breakdown" in rec
+
+
+def test_tail_recs_endpoint_404_for_missing_set(client: TestClient) -> None:
+    assert client.get("/api/v1/sets/9999/tail-recs").status_code == 404
+
+
+def test_tail_recs_endpoint_k_param(client: TestClient, session, make_track):
+    set_t = make_track(title="set")
+    _add_fullmix(session, set_t)
+    for i in range(5):
+        c = make_track(title=f"c{i}")
+        _add_fullmix(session, c)
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": set_t.id})
+
+    r = client.get(f"/api/v1/sets/{sid}/tail-recs", params={"k": 3})
+    assert len(r.json()["recs"]) == 3
+
+
+def test_tail_recs_endpoint_excludes_session_plays(client: TestClient, session, make_track):
+    """With ``exclude_session_plays=true``, tracks played in the current open
+    DjSession do not appear in tail-recs."""
+    set_t = make_track(title="set")
+    cand_played = make_track(title="cand-played")
+    cand_fresh = make_track(title="cand-fresh")
+    _add_fullmix(session, set_t)
+    _add_fullmix(session, cand_played)
+    _add_fullmix(session, cand_fresh)
+    session.commit()
+
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": set_t.id})
+
+    session_id = client.post("/api/v1/sessions", json={}).json()["id"]
+    client.post(
+        f"/api/v1/sessions/{session_id}/plays",
+        json={"track_id": cand_played.id},
+    )
+
+    r = client.get(
+        f"/api/v1/sets/{sid}/tail-recs",
+        params={"exclude_session_plays": "true"},
+    )
+    track_ids = [rec["track_id"] for rec in r.json()["recs"]]
+    assert cand_played.id not in track_ids
+    assert cand_fresh.id in track_ids
+
+
+# ---------------------------------------------------------------------------
+# /tracks/search — Cmd-K fuzzy name/artist
+# ---------------------------------------------------------------------------
+
+
+def test_search_tracks_fuzzy_title(client: TestClient, session, make_track) -> None:
+    make_track(title="Four Tet — Two Thousand And Seventeen")
+    make_track(title="Bicep — Glue")
+    make_track(title="Caribou — Sun")
+    session.commit()
+
+    r = client.get("/api/v1/tracks/search", params={"q": "four"})
+    assert r.status_code == 200
+    hits = r.json()
+    assert len(hits) == 1
+    assert "Four Tet" in hits[0]["title"]
+
+
+def test_search_tracks_fuzzy_artist(client: TestClient, session, make_track) -> None:
+    make_track(title="Track A", artist="Four Tet")
+    make_track(title="Track B", artist="Bicep")
+    make_track(title="Track C", artist="Caribou")
+    session.commit()
+
+    r = client.get("/api/v1/tracks/search", params={"q": "tet"})
+    hits = r.json()
+    assert len(hits) == 1
+    assert hits[0]["artist"] == "Four Tet"
+
+
+def test_search_tracks_case_insensitive(client: TestClient, session, make_track) -> None:
+    make_track(title="Hyperbole")
+    session.commit()
+    r1 = client.get("/api/v1/tracks/search", params={"q": "HYPER"})
+    r2 = client.get("/api/v1/tracks/search", params={"q": "hyper"})
+    assert len(r1.json()) == 1 and len(r2.json()) == 1
+
+
+def test_search_tracks_prefix_ranks_first(client: TestClient, session, make_track) -> None:
+    """A title starting with the query outranks one merely containing it."""
+    make_track(title="Track with bass in it")
+    make_track(title="Bass anthem")
+    session.commit()
+
+    r = client.get("/api/v1/tracks/search", params={"q": "bass"})
+    hits = r.json()
+    assert len(hits) == 2
+    assert hits[0]["title"] == "Bass anthem"
+
+
+def test_search_tracks_empty_q_returns_recent(client: TestClient, session, make_track) -> None:
+    """Empty query is the browse-mode default — show recent."""
+    for i in range(3):
+        make_track(title=f"t{i}")
+    session.commit()
+    r = client.get("/api/v1/tracks/search")
+    assert len(r.json()) == 3
+
+
+def test_search_tracks_respects_bpm_filter(client: TestClient, session, make_track) -> None:
+    fast = make_track(title="Match fast")
+    slow = make_track(title="Match slow")
+    _add_fullmix(session, fast, bpm=140)
+    _add_fullmix(session, slow, bpm=100)
+    session.commit()
+
+    r = client.get("/api/v1/tracks/search", params={"q": "match", "bpm_min": 130})
+    titles = [h["title"] for h in r.json()]
+    assert titles == ["Match fast"]

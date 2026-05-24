@@ -47,6 +47,58 @@ _MIN_NUM_PEAKS = 50
 _MAX_NUM_PEAKS = 1000
 
 
+@router.get("/search", response_model=list[TrackOut])
+def search_tracks(
+    q: str = Query("", description="Fuzzy match against title + artist"),
+    limit: int = Query(8, ge=1, le=50),
+    bpm_min: float | None = Query(None),
+    bpm_max: float | None = Query(None),
+    key: str | None = Query(None),
+    energy: int | None = Query(None),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Fuzzy name/artist search — Cmd-K's "find this specific track" half.
+
+    Case-insensitive ``LIKE`` over ``tracks.title`` and ``tracks.artist``. At
+    our scale a sub-second sequential scan is fine; if we cross 50k tracks
+    we'll add a trigram index. Optional BPM/key/energy chips narrow further.
+    Empty ``q`` returns the most-recently-updated tracks (browse mode).
+    """
+    needs_analysis = any(v is not None for v in (bpm_min, bpm_max, key, energy))
+    query = session.query(Track)
+    term = q.strip()
+    if term:
+        pattern = f"%{term}%"
+        query = query.filter((Track.title.ilike(pattern)) | (Track.artist.ilike(pattern)))
+    if needs_analysis:
+        query = query.join(
+            AudioAnalysis,
+            (AudioAnalysis.track_id == Track.id) & (AudioAnalysis.stem_file_id.is_(None)),
+        )
+        if bpm_min is not None:
+            query = query.filter(AudioAnalysis.bpm >= bpm_min)
+        if bpm_max is not None:
+            query = query.filter(AudioAnalysis.bpm <= bpm_max)
+        if key is not None:
+            query = query.filter(AudioAnalysis.key_camelot == key)
+        if energy is not None:
+            query = query.filter(AudioAnalysis.floor_energy == energy)
+    if term:
+        # Rank exact-prefix matches above containment matches via a simple
+        # CASE — DBs without trigram support still get sensible ordering.
+        # (Lowercase both sides; SQLite's LOWER is portable.)
+        from sqlalchemy import case, func
+
+        prefix = term.lower() + "%"
+        title_score = case((func.lower(Track.title).like(prefix), 0), else_=1)
+        artist_score = case((func.lower(Track.artist).like(prefix), 0), else_=1)
+        query = query.order_by(title_score, artist_score, Track.title)
+    else:
+        query = query.order_by(Track.updated_at.desc())
+    tracks = query.limit(limit).all()
+    return [track_to_out(session, t) for t in tracks]
+
+
 @router.get("", response_model=list[TrackOut])
 def list_tracks(
     session: Session = Depends(get_session),

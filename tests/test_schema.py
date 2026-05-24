@@ -24,6 +24,8 @@ from dance.core.database import (
     Region,
     RegionSource,
     RegionType,
+    Set,
+    SetTrack,
     StemFile,
     Tag,
     TagKind,
@@ -56,6 +58,8 @@ EXPECTED_TABLES = {
     "session_plays",
     "beats",
     "phrases",
+    "sets",
+    "set_tracks",
 }
 
 
@@ -78,6 +82,10 @@ def test_init_db_creates_all_tables(tmp_path):
     idx_names = {idx["name"] for idx in insp.get_indexes("audio_analysis")}
     assert "uq_audio_analysis_track_fullmix" in idx_names
     assert "uq_audio_analysis_stem" in idx_names
+
+    # Partial unique index enforcing exactly-one active set.
+    sets_idx = {idx["name"] for idx in insp.get_indexes("sets")}
+    assert "uq_sets_one_active" in sets_idx
 
     db._reset_engine_for_tests()
 
@@ -118,11 +126,7 @@ def test_insert_track_fullmix_then_stem_then_stem_analysis(session, make_track):
     session.add(stem_analysis)
     session.commit()
 
-    rows = (
-        session.query(AudioAnalysis)
-        .filter(AudioAnalysis.track_id == track.id)
-        .all()
-    )
+    rows = session.query(AudioAnalysis).filter(AudioAnalysis.track_id == track.id).all()
     assert len(rows) == 2
 
 
@@ -454,7 +458,56 @@ def test_track_tag_multi_source_allowed(session, make_track):
     )
     session.commit()
 
-    assert (
-        session.query(TrackTag).filter_by(track_id=track.id, tag_id=tag.id).count()
-        == 2
-    )
+    assert session.query(TrackTag).filter_by(track_id=track.id, tag_id=tag.id).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Sets — exactly one active row at a time, enforced by partial unique index
+# ---------------------------------------------------------------------------
+
+
+def test_sets_partial_unique_index_blocks_two_active(tmp_path):
+    """Two ``is_active = True`` rows must violate ``uq_sets_one_active``."""
+    url = f"sqlite:///{tmp_path / 'sets.db'}"
+    db._reset_engine_for_tests()
+    init_db(url)
+    SessionLocal = db.get_session_factory(url)
+    s = SessionLocal()
+    try:
+        s.add(Set(name="A", is_active=True))
+        s.commit()
+        s.add(Set(name="B", is_active=True))
+        with pytest.raises(IntegrityError):
+            s.commit()
+    finally:
+        s.close()
+        db._reset_engine_for_tests()
+
+
+def test_set_tracks_unique_position_per_set(session, make_track):
+    """``(set_id, position)`` is unique — two rows at position 0 must fail."""
+    t1 = make_track()
+    t2 = make_track()
+    s = Set(name="S")
+    session.add(s)
+    session.flush()
+    session.add(SetTrack(set_id=s.id, track_id=t1.id, position=0))
+    session.flush()
+    session.add(SetTrack(set_id=s.id, track_id=t2.id, position=0))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_set_cascade_deletes_set_tracks(session, make_track):
+    """Deleting a Set cascades to its SetTracks (FK ondelete=CASCADE)."""
+    t = make_track()
+    s = Set(name="S")
+    session.add(s)
+    session.flush()
+    session.add(SetTrack(set_id=s.id, track_id=t.id, position=0))
+    session.commit()
+    sid = s.id
+
+    session.delete(s)
+    session.commit()
+    assert session.query(SetTrack).filter(SetTrack.set_id == sid).count() == 0
