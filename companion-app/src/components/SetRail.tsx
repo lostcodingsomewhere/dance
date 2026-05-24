@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { useAbletonState } from "../hooks/useAbletonState";
+import { useCurrentSession } from "../hooks/useSession";
 import { pushTrackToLive } from "../api";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -62,7 +63,8 @@ export function SetRail() {
   }, [open]);
 
   // Auto-collapse 3 s after a clip fires (in Booth only). The rail is a
-  // resource the DJ pulls on between mixes, not during one.
+  // resource the DJ pulls on between mixes, not during one. Off-plan
+  // behavior (below) can override this by reopening immediately.
   const playingClips = useAbletonState().playing_clips ?? {};
   const playingFingerprint = useMemo(
     () =>
@@ -80,6 +82,38 @@ export function SetRail() {
     const t = setTimeout(() => store.closeSetRail(), AUTO_COLLAPSE_MS);
     return () => clearTimeout(t);
   }, [playingFingerprint, open, view]);
+
+  // Plan-aware rail behavior. When a new play is auto-logged in the
+  // session, compare it to the next-planned set track:
+  //   - off-plan (DJ deviated) → openSetRail() immediately, so the plan
+  //     reasserts as a reorientation cue
+  //   - on-plan → if rail was open, schedule a soft collapse; the rail
+  //     "breathes out" once you're back on track
+  const session = useCurrentSession();
+  const plays = session.data?.plays ?? [];
+  const prevPlayCount = useRef(plays.length);
+  useEffect(() => {
+    if (view !== "booth" || !set) return;
+    if (plays.length <= prevPlayCount.current) {
+      prevPlayCount.current = plays.length;
+      return;
+    }
+    prevPlayCount.current = plays.length;
+
+    const lastPlay = plays[plays.length - 1];
+    const setIds = new Set(set.tracks.map((t) => t.track_id));
+    const priorInSet = plays
+      .slice(0, -1)
+      .filter((p) => setIds.has(p.track_id)).length;
+    const expectedNextId = set.tracks[priorInSet]?.track_id ?? null;
+    const onPlan = expectedNextId === lastPlay.track_id;
+    if (!onPlan) {
+      store.openSetRail();
+    } else if (open) {
+      const t = setTimeout(() => store.closeSetRail(), AUTO_COLLAPSE_MS);
+      return () => clearTimeout(t);
+    }
+  }, [plays.length, set, view, open]);
 
   // The Set editor view renders the rail content full-pane; in that view we
   // don't render the drawer/tab — SetEditor handles its own layout.
@@ -194,9 +228,14 @@ function EmptyState() {
 }
 
 function Body({ set }: { set: DanceSet }) {
+  // Pull the current session here so the rail can mark which set track was
+  // most recently played (helps reorient when the rail pops open off-plan).
+  const session = useCurrentSession();
+  const lastPlayId =
+    session.data?.plays?.[session.data.plays.length - 1]?.track_id ?? null;
   return (
     <div className="flex flex-col gap-2">
-      <TrackList set={set} />
+      <TrackList set={set} lastPlayId={lastPlayId} />
       <div className="border-t border-neutral-900 my-1" />
       <TailRecs set={set} />
       <AddFromCmdK />
@@ -204,7 +243,13 @@ function Body({ set }: { set: DanceSet }) {
   );
 }
 
-function TrackList({ set }: { set: DanceSet }) {
+function TrackList({
+  set,
+  lastPlayId,
+}: {
+  set: DanceSet;
+  lastPlayId: number | null;
+}) {
   if (set.tracks.length === 0) {
     return (
       <div className="text-[11px] text-neutral-500 px-1 py-2 italic">
@@ -221,6 +266,7 @@ function TrackList({ set }: { set: DanceSet }) {
           track={t}
           index={i}
           isLast={i === set.tracks.length - 1}
+          isCurrentPlay={t.track_id === lastPlayId}
         />
       ))}
     </ol>
@@ -232,11 +278,13 @@ function SetTrackRow({
   track,
   index,
   isLast,
+  isCurrentPlay = false,
 }: {
   setId: number;
   track: SetTrack;
   index: number;
   isLast: boolean;
+  isCurrentPlay?: boolean;
 }) {
   const move = useMoveTrackInSet();
   const remove = useRemoveTrackFromSet();
@@ -273,7 +321,21 @@ function SetTrackRow({
   }
 
   return (
-    <li className="group relative rounded-md border border-neutral-800 bg-neutral-900/60 hover:bg-neutral-900 transition-colors">
+    <li
+      className={`group relative rounded-md border transition-colors ${
+        isCurrentPlay
+          ? "border-emerald-500/60 bg-emerald-500/10 hover:bg-emerald-500/15"
+          : "border-neutral-800 bg-neutral-900/60 hover:bg-neutral-900"
+      }`}
+    >
+      {isCurrentPlay && (
+        <span
+          className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1 text-emerald-400 text-[10px] animate-pulse"
+          aria-label="now playing"
+        >
+          ●
+        </span>
+      )}
       <button
         type="button"
         onClick={onTap}

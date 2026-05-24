@@ -49,9 +49,9 @@ describe("App smoke", () => {
 
   it("renders the top bar without crashing", async () => {
     renderApp();
-    expect(screen.getByText(/Dance/i)).toBeInTheDocument();
+    // Three view tabs after the Set-Rail consolidation (Crate retired,
+    // brand chip dropped).
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
-    // Three view tabs after the Set-Rail consolidation (Crate retired).
     expect(screen.getByRole("tab", { name: "Booth" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Set" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Pipeline" })).toBeInTheDocument();

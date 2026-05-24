@@ -8,6 +8,7 @@ import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
 import { BpmSlider } from "./BpmSlider";
 import { EnergySparkline } from "./EnergySparkline";
+import { SessionChip } from "./SessionChip";
 import { VuMeter } from "./VuMeter";
 
 const VIEWS: { id: ViewName; label: string; hint: string }[] = [
@@ -75,13 +76,6 @@ export function MasterStrip() {
 
   return (
     <header className="h-16 shrink-0 flex items-center gap-3 px-4 border-b border-neutral-800 bg-neutral-950">
-      <div className="flex items-center gap-2 pr-2 border-r border-neutral-800 h-10">
-        <div className="w-6 h-6 rounded bg-amber-400" aria-hidden />
-        <div className="text-neutral-200 font-semibold tracking-wide uppercase text-[11px]">
-          Dance
-        </div>
-      </div>
-
       {/* Master BPM block — click the number for a slider with genre anchors,
           ×2/÷2 for quick jumps. */}
       <div className="relative flex items-baseline gap-1.5 px-2">
@@ -186,11 +180,15 @@ export function MasterStrip() {
       </button>
 
 
+      <div className="ml-auto">
+        <SessionChip />
+      </div>
+
       {/* Command bar trigger */}
       <button
         type="button"
         onClick={() => store.openCommandBar()}
-        className="ml-auto h-10 px-3 rounded-md bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-sm text-neutral-400 flex items-center gap-2"
+        className="h-10 px-3 rounded-md bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-sm text-neutral-400 flex items-center gap-2"
         title="Vibe search (⌘K)"
       >
         <span aria-hidden>✦</span>

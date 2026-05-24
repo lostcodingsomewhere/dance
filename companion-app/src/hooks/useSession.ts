@@ -11,7 +11,11 @@ export function useCurrentSession() {
   return useQuery({
     queryKey: ["session", "current"],
     queryFn: api.currentSession,
-    staleTime: 5_000,
+    staleTime: 3_000,
+    // Light polling so the SetRail's off-plan detection still fires when
+    // useAutoLog isn't the play source (e.g. plays POSTed from another tab
+    // or before Ableton is reconnected).
+    refetchInterval: 5_000,
   });
 }
 

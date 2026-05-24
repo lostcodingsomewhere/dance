@@ -2,7 +2,6 @@ import { BoothColumnHeaders } from "../components/BoothColumnHeaders";
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
 import { ComboStrip } from "../components/ComboStrip";
 import { CueStrip } from "../components/CueStrip";
-import { PlayedStrip } from "../components/PlayedStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { useAutoLog } from "../hooks/useAutoLog";
 import { useAutoSession } from "../hooks/useAutoSession";
@@ -12,9 +11,9 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
 /**
  * The Booth — the only screen you should look at during a set.
  *
- * Live-remixing layout (no song-mode artifacts):
+ * Live-remixing layout:
  *
- *   ┌─ MasterStrip (BPM · KEY · energy arc · OSC heartbeat · view tabs) ┐
+ *   ┌─ MasterStrip (BPM · KEY · energy arc · session chip · ⌘K · tabs) ─┐
  *   ├─────────────────────────────────────────────────────────────────┤
  *   │ BoothColumnHeaders (5 colored chips: DRUMS · BASS · VOCALS ·    │
  *   │   MELODY · SONG with per-column Solo "S" buttons)                │
@@ -28,9 +27,12 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
  *   │ CueStrip (prelisten — same waveform features, headphones out)    │
  *   │                                                                  │
  *   │ Per-column rec banners (5 across)                                │
- *   ├─────────────────────────────────────────────────────────────────┤
- *   │ PlayedStrip (set name · plays · history scroll · end set)        │
  *   └─────────────────────────────────────────────────────────────────┘
+ *
+ * Session play count + end-session lives in the MasterStrip's SessionChip
+ * (right side). The Set Rail (⌘\) covers planning + tail-recs. No footer
+ * — the SceneGrid is the only thing that should be earning the
+ * bottom-of-screen real estate.
  *
  * ColumnHeaders → ComboStrip → SceneGrid → recs all share the same
  * ``[2.5rem leading + 5 stem cols] gap-1`` grid template, so the 5
@@ -61,7 +63,6 @@ export function Booth() {
           ))}
         </div>
       </main>
-      <PlayedStrip />
     </div>
   );
 }
