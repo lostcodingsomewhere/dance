@@ -35,6 +35,7 @@ import {
 import { store, useAppStore } from "../store";
 import type { ColumnRec, DanceSet, SetTrack, TailRec } from "../types";
 import { KeyBadge } from "./KeyBadge";
+import { SetMenu } from "./SetMenu";
 
 const RAIL_WIDTH = 320;
 const AUTO_COLLAPSE_MS = 3_000;
@@ -135,13 +136,15 @@ function Drawer({
 function Header({ set }: { set: DanceSet | null }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 border-b border-neutral-800 shrink-0">
-      <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+      <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
         Set
       </span>
-      <span className="flex-1 text-sm font-medium text-neutral-100 truncate">
-        {set ? set.name : "—"}
-      </span>
-      <span className="text-[10px] text-neutral-500 tabular-nums">
+      {set ? (
+        <SetMenu set={set} variant="compact" />
+      ) : (
+        <span className="flex-1 text-sm text-neutral-500 truncate">—</span>
+      )}
+      <span className="text-[10px] text-neutral-500 tabular-nums shrink-0">
         {set ? `${set.tracks.length}` : "0"}
       </span>
       <button

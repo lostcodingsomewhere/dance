@@ -18,17 +18,15 @@ import {
   useActivateSet,
   useAddTrackToSet,
   useCreateSet,
-  useDeleteSet,
   useMoveTrackInSet,
   useRemoveTrackFromSet,
-  useSets,
   useTailRecs,
-  useUpdateSet,
 } from "../hooks/useSets";
 import { store } from "../store";
 import type { DanceSet, SetTrack, Track } from "../types";
 import { EnergyBar } from "../components/EnergyBar";
 import { KeyBadge } from "../components/KeyBadge";
+import { SetMenu } from "../components/SetMenu";
 
 export function SetEditor() {
   const active = useActiveSet();
@@ -92,117 +90,23 @@ function CenteredMsg({ children }: { children: React.ReactNode }) {
 }
 
 function Header({ set }: { set: DanceSet }) {
-  const update = useUpdateSet();
-  const del = useDeleteSet();
-  const create = useCreateSet();
-  const activate = useActivateSet();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(set.name);
-
-  function save() {
-    setEditing(false);
-    if (draft.trim() && draft !== set.name) {
-      update.mutate({ id: set.id, patch: { name: draft.trim() } });
-    } else {
-      setDraft(set.name);
-    }
-  }
-
-  function onDelete() {
-    if (
-      window.confirm(`Delete set "${set.name}"? Track plans cannot be recovered.`)
-    ) {
-      del.mutate(set.id);
-    }
-  }
-
-  function newSet() {
-    const name = window.prompt("Name for the new set:")?.trim();
-    if (!name) return;
-    create.mutate(
-      { name },
-      { onSuccess: (created) => activate.mutate(created.id) },
-    );
-  }
-
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-neutral-800">
       <button
         type="button"
         onClick={() => store.setView("booth")}
-        className="text-xs text-neutral-500 hover:text-neutral-100"
+        className="text-xs text-neutral-500 hover:text-neutral-100 shrink-0"
       >
         ← Booth
       </button>
-      <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+      <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
         Set
       </span>
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") save();
-            if (e.key === "Escape") {
-              setDraft(set.name);
-              setEditing(false);
-            }
-          }}
-          className="text-lg font-medium text-neutral-100 bg-neutral-900 border border-neutral-700 rounded px-2 py-0.5 outline-none"
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="text-lg font-medium text-neutral-100 hover:text-violet-300"
-          title="Rename"
-        >
-          {set.name}
-        </button>
-      )}
-      <span className="text-xs text-neutral-500 tabular-nums">
+      <SetMenu set={set} variant="full" />
+      <span className="text-xs text-neutral-500 tabular-nums shrink-0">
         {set.tracks.length} tracks
       </span>
-      <SetSwitcher current={set} />
-      <span className="flex-1" />
-      <button
-        type="button"
-        onClick={newSet}
-        className="text-xs text-neutral-400 hover:text-neutral-100 px-2 py-1 rounded hover:bg-neutral-800"
-      >
-        + new
-      </button>
-      <button
-        type="button"
-        onClick={onDelete}
-        disabled={del.isPending}
-        className="text-xs text-rose-300 hover:text-rose-100 px-2 py-1 rounded hover:bg-rose-500/20 disabled:opacity-40"
-      >
-        🗑 delete
-      </button>
     </div>
-  );
-}
-
-function SetSwitcher({ current }: { current: DanceSet }) {
-  const sets = useSets();
-  const activate = useActivateSet();
-  if (!sets.data || sets.data.length < 2) return null;
-  return (
-    <select
-      value={current.id}
-      onChange={(e) => activate.mutate(Number(e.target.value))}
-      className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-700"
-      title="Switch active set"
-    >
-      {sets.data.map((s) => (
-        <option key={s.id} value={s.id}>
-          {s.name} · {s.track_count}
-        </option>
-      ))}
-    </select>
   );
 }
 
