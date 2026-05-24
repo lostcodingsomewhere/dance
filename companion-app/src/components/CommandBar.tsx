@@ -9,6 +9,7 @@ import {
 import { useActiveSet, useAddTrackToSet } from "../hooks/useSets";
 import { store, useAppStore } from "../store";
 import type { Recommendation, Track } from "../types";
+import { BpmRangePicker } from "./BpmRangePicker";
 import { EnergyBar } from "./EnergyBar";
 import { KeyBadge } from "./KeyBadge";
 
@@ -235,17 +236,13 @@ function FilterChips({
   const anyActive = bpmMin != null || bpmMax != null || keyFilter != null;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-neutral-900 text-[11px]">
-      <NumChip
-        label="BPM ≥"
-        value={bpmMin}
-        onChange={onBpmMin}
-        placeholder="—"
-      />
-      <NumChip
-        label="≤"
-        value={bpmMax}
-        onChange={onBpmMax}
-        placeholder="—"
+      <BpmRangePicker
+        min={bpmMin}
+        max={bpmMax}
+        onChange={({ min, max }) => {
+          onBpmMin(min);
+          onBpmMax(max);
+        }}
       />
       <KeyChip value={keyFilter} onChange={onKey} />
       {anyActive && (
@@ -256,41 +253,13 @@ function FilterChips({
             onBpmMax(null);
             onKey(null);
           }}
-          className="ml-1 text-neutral-500 hover:text-neutral-200"
-          title="Clear filters"
+          className="ml-auto text-neutral-500 hover:text-neutral-200"
+          title="Clear all filters"
         >
-          × clear
+          × clear all
         </button>
       )}
     </div>
-  );
-}
-
-function NumChip({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: number | null;
-  onChange: (v: number | null) => void;
-  placeholder: string;
-}) {
-  return (
-    <label className="inline-flex items-center gap-1 text-neutral-500">
-      <span>{label}</span>
-      <input
-        type="number"
-        value={value ?? ""}
-        placeholder={placeholder}
-        onChange={(e) => {
-          const v = e.target.value.trim();
-          onChange(v === "" ? null : Number(v));
-        }}
-        className="w-12 bg-neutral-900 border border-neutral-800 rounded px-1.5 py-0.5 text-neutral-100 outline-none focus:border-neutral-700"
-      />
-    </label>
   );
 }
 

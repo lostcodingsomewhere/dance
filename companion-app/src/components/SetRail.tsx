@@ -342,11 +342,25 @@ function SetTrackRow({
           ●
         </span>
       )}
+      {/* Stem-filter chip is the leftmost element of the row — first
+          thing the eye lands on so the planning intent reads at a glance.
+          Lives outside the main click target so taps don't soft-pin. */}
+      <div
+        className="absolute left-1 top-1/2 -translate-y-1/2 z-10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <StemKindsChip
+          setId={setId}
+          trackId={track.track_id}
+          stemKinds={track.stem_kinds}
+          variant="compact"
+        />
+      </div>
       <button
         type="button"
         onClick={onTap}
         title="Tap: pin to Mix recs · Shift-tap: load into Live"
-        className="w-full text-left px-2 py-1.5"
+        className="w-full text-left pl-12 pr-2 py-1.5"
       >
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0 w-5 text-right">
@@ -379,19 +393,6 @@ function SetTrackRow({
           )}
         </div>
       </button>
-      {/* Stem-filter chip sits in the bottom-right corner of the row,
-          outside the main click target so it doesn't trigger soft-pin. */}
-      <div
-        className="absolute right-1 bottom-1"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <StemKindsChip
-          setId={setId}
-          trackId={track.track_id}
-          stemKinds={track.stem_kinds}
-          variant="compact"
-        />
-      </div>
       {/* Hover actions — up / down / remove. Positioned absolute so the
           row's clickable area stays uninterrupted. */}
       <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-0.5">

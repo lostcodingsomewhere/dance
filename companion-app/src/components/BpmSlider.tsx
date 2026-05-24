@@ -1,30 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-
-/**
- * Genre BPM anchors. Bands are approximate but match the conventions DJs
- * use to navigate a set ("we're in tech house territory", "drop into D&B").
- * Edit freely — these are display-only hints, not enforced ranges.
- *
- * ``tint`` is the resting bg class for the band strip; ``activeTint`` is
- * what shows when the slider thumb sits inside the band. ``label`` is the
- * pretty name that surfaces above the strip when the band is active.
- */
-const GENRE_BANDS: {
-  from: number;
-  to: number;
-  label: string;
-  tint: string;
-  activeTint: string;
-}[] = [
-  { from: 60,  to: 95,  label: "Chill / Downtempo",    tint: "bg-sky-900/40",    activeTint: "bg-sky-500/60" },
-  { from: 95,  to: 110, label: "Hip-Hop",              tint: "bg-purple-900/40", activeTint: "bg-purple-500/60" },
-  { from: 110, to: 128, label: "House",                tint: "bg-violet-900/40", activeTint: "bg-violet-500/60" },
-  { from: 128, to: 135, label: "Techno / Tech House",  tint: "bg-rose-900/40",   activeTint: "bg-rose-500/60" },
-  { from: 135, to: 145, label: "Trance",               tint: "bg-cyan-900/40",   activeTint: "bg-cyan-500/60" },
-  { from: 145, to: 180, label: "D&B / Hardstyle",      tint: "bg-amber-900/40",  activeTint: "bg-amber-500/60" },
-];
-
-const TICKS = [60, 80, 100, 120, 140, 160, 180];
+import { BPM_TICKS as TICKS, GENRE_BANDS, roundTenth } from "../lib/bpm";
 
 interface BpmSliderProps {
   value: number;
@@ -203,6 +178,3 @@ export function BpmSlider({
   );
 }
 
-function roundTenth(x: number): number {
-  return Math.round(x * 10) / 10;
-}
