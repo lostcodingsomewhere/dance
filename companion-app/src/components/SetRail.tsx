@@ -416,7 +416,7 @@ function SetTrackRow({
       <button
         type="button"
         onClick={onTap}
-        title="Tap: pin to Mix recs · Shift-tap: load into Live"
+        title="Tap: pin to Mix recs · Shift-tap (or hover → Live): load into Live"
         className="w-full text-left pl-12 pr-2 py-1.5"
       >
         <div className="flex items-center gap-1.5">
@@ -458,9 +458,29 @@ function SetTrackRow({
           )}
         </div>
       </button>
-      {/* Hover actions — up / down / remove. Positioned absolute so the
-          row's clickable area stays uninterrupted. */}
+      {/* Hover actions — load-into-Live / up / down / remove.
+          Positioned absolute so the row's clickable area stays uninterrupted.
+          "→ Live" makes the shift-tap gesture first-class — without it the
+          load-into-Live action is only discoverable by reading the tooltip,
+          which is the wrong default for the most common post-ingest action. */}
       <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-0.5">
+        <button
+          type="button"
+          disabled={isProcessing(track) || forceLoad.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            forceLoad.mutate();
+          }}
+          title={
+            isProcessing(track)
+              ? "Pipeline still running — load enabled when complete"
+              : "Load stems into Live now"
+          }
+          aria-label="load into Live"
+          className="px-1.5 h-5 inline-flex items-center justify-center rounded text-[10px] font-medium text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          → Live
+        </button>
         <button
           type="button"
           disabled={index === 0 || move.isPending}

@@ -204,13 +204,18 @@ def load_track(
     bridge: AbletonBridge = Depends(get_bridge),
     session: Session = Depends(get_session),
 ) -> LoadTrackResult:
-    """Push a track + its stems into Live as empty audio tracks.
+    """Push a track + its stems into Live's clip grid over OSC.
 
-    AbletonOSC doesn't support loading audio files into clip slots
-    programmatically (Live's Python API lacks the hook). This endpoint
-    therefore does the best it can over OSC — appends one named, colored
-    audio track for the full mix plus one per stem kind — and returns the
-    indices so the React UI can tell the user where to drag the files.
+    Stock AbletonOSC has no ``load_sample`` for audio clip slots, but
+    we ship a patched fork that adds ``/live/clip_slot/create_audio_clip``
+    (see ``docs/abletonosc_setup.md``). ``bridge.push_track_to_live``
+    uses it to drop each stem's WAV directly into the matching deck
+    column on a free scene — no Finder drag required.
+
+    Returns the scene + deck-column indices so the React UI can light
+    up the cells that were just populated. ``warnings`` carries any
+    per-stem misses (missing file, Live unreachable, etc.) without
+    failing the whole call.
     """
     track = session.query(Track).filter(Track.id == body.track_id).one_or_none()
     if track is None:

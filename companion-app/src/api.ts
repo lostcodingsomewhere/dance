@@ -568,10 +568,11 @@ export function abletonResyncDecks(): Promise<ResyncDecksResult> {
   return request<ResyncDecksResult>("/ableton/decks/resync", { method: "POST" });
 }
 
-// "Push to Live" — creates audio tracks in Live for a (track, stems) bundle.
-// AbletonOSC can't load samples programmatically, so this only prepares the
-// empty tracks; the React caller typically also reveals the stems folder in
-// Finder so the user can drag the files onto the prepared slots.
+// "Push to Live" — drops a (track, stems) bundle into Live's clip grid
+// over OSC, using the patched-AbletonOSC ``create_audio_clip`` we ship in
+// our fork. No Finder drag needed; stems land directly in the right deck
+// columns on a free scene. ``stems_loaded`` reports how many of the 4
+// stems made it (less than 4 = check ``warnings``).
 export interface LoadTrackResult {
   ok: boolean;
   scene_index: number;

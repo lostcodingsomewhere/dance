@@ -1597,6 +1597,129 @@ def test_pipeline_process_loops_until_state_signature_stable(
     )
 
 
+def test_pipeline_process_runs_build_graph_for_newly_complete_tracks(
+    client: TestClient, monkeypatch
+) -> None:
+    """When the dispatcher loop finishes and the diff of
+    ``_complete_track_ids`` shows new IDs, the worker must invoke
+    ``dance build-graph --track-id N ...`` exactly once afterward.
+    Without this, freshly-ingested Spotify tracks land at state=complete
+    with no rec edges → tail-recs + ⌘K vibe-search return nothing.
+    """
+    import time
+    import dance.api.routers.pipeline as pipeline_mod
+
+    captured_cmds: list[list[str]] = []
+    # Loop terminates when the same signature is seen twice in a row, so
+    # ["sig-1","stable","stable"] = 3 dispatcher passes (1 advances, 1
+    # advances to stable, 1 confirms-and-breaks).
+    sig_seq = iter(["sig-1", "stable", "stable", "stable"])
+    # Before the loop: tracks {1,2} already complete. After: {1,2,3,4}
+    # newly hit complete. Worker should build-graph with -t 3 -t 4.
+    complete_seq = iter([{1, 2}, {1, 2, 3, 4}])
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, *args, **kwargs):
+        captured_cmds.append(list(cmd))
+        return _FakeProc()
+
+    import subprocess as _sub
+
+    monkeypatch.setattr(_sub, "run", _fake_run)
+    monkeypatch.setattr(
+        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq)
+    )
+
+    r = client.post("/api/v1/pipeline/process")
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    for _ in range(60):
+        time.sleep(0.05)
+        body = client.get(f"/api/v1/pipeline/jobs/{job_id}").json()
+        if body["status"] == "done":
+            break
+    assert body["status"] == "done"
+
+    # 3 dispatcher passes (sig trace above), then 1 build-graph for the
+    # tracks that newly hit complete this run.
+    dispatcher_calls = [c for c in captured_cmds if "process" in c]
+    graph_calls = [c for c in captured_cmds if "build-graph" in c]
+    assert len(dispatcher_calls) == 3, (
+        f"expected 3 dispatcher passes per the sig_seq trace; "
+        f"got {len(dispatcher_calls)}: {captured_cmds}"
+    )
+    assert len(graph_calls) == 1, (
+        f"expected exactly 1 build-graph call after the loop, "
+        f"got {len(graph_calls)}: {captured_cmds}"
+    )
+    # Sanity: the IDs passed are the *diff* (3, 4), not the full {1,2,3,4}.
+    graph_cmd = graph_calls[0]
+    assert "--track-id" in graph_cmd
+    track_id_args = [
+        graph_cmd[i + 1]
+        for i, arg in enumerate(graph_cmd)
+        if arg == "--track-id"
+    ]
+    assert sorted(track_id_args) == ["3", "4"], (
+        f"build-graph should target only newly-complete IDs (3, 4); "
+        f"got --track-id args: {track_id_args}"
+    )
+
+
+def test_pipeline_process_skips_build_graph_when_no_new_completes(
+    client: TestClient, monkeypatch
+) -> None:
+    """If nothing newly hit complete during the run (e.g. all tracks were
+    already complete), the dispatcher must NOT call build-graph — that
+    would be a wasted full-library rebuild."""
+    import time
+    import dance.api.routers.pipeline as pipeline_mod
+
+    captured_cmds: list[list[str]] = []
+    sig_seq = iter(["sig-1", "sig-1"])
+    complete_seq = iter([{1, 2, 3}, {1, 2, 3}])
+
+    class _FakeProc:
+        returncode = 0
+
+    def _fake_run(cmd, *args, **kwargs):
+        captured_cmds.append(list(cmd))
+        return _FakeProc()
+
+    import subprocess as _sub
+
+    monkeypatch.setattr(_sub, "run", _fake_run)
+    monkeypatch.setattr(
+        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq)
+    )
+
+    r = client.post("/api/v1/pipeline/process")
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    for _ in range(60):
+        time.sleep(0.05)
+        body = client.get(f"/api/v1/pipeline/jobs/{job_id}").json()
+        if body["status"] == "done":
+            break
+    assert body["status"] == "done"
+
+    graph_calls = [c for c in captured_cmds if "build-graph" in c]
+    assert graph_calls == [], (
+        f"build-graph should be skipped when no new completes; "
+        f"got: {captured_cmds}"
+    )
+
+
 def test_pipeline_process_returns_409_when_already_running(
     client: TestClient,
 ) -> None:

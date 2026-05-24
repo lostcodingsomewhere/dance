@@ -681,6 +681,20 @@ def _track_state_signature(db_url: str) -> tuple:
     return tuple(sorted((str(state), int(count)) for state, count in rows))
 
 
+def _complete_track_ids(db_url: str) -> set[int]:
+    """IDs of tracks currently at ``state=complete``. Used to compute
+    which tracks newly finished during a /pipeline/process run so we
+    can rebuild rec-graph edges for just those (incremental build-graph)."""
+    SessionLocal = get_session_factory(db_url)  # noqa: N806
+    with SessionLocal() as s:
+        return {
+            tid
+            for (tid,) in s.query(Track.id)
+            .filter(Track.state == TrackState.COMPLETE.value)
+            .all()
+        }
+
+
 def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
     """Background worker: spawn ``dance process`` as a SUBPROCESS so the
     dispatcher's heavy deps (torch / Demucs / CLAP) initialize in their own
@@ -742,6 +756,11 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{job_id}.log"
 
+        # Snapshot which tracks were already complete *before* this run, so
+        # we can compute the freshly-complete diff after the loop and only
+        # rebuild rec-graph edges for those (incremental build-graph).
+        completed_before = _complete_track_ids(settings.db_url)
+
         # Loop the dispatcher until tracks stop advancing. One CLI invocation
         # runs each stage exactly once in parallel — but a track newly moved
         # from ``pending → analyzed`` by the analyze pool won't get picked up
@@ -772,6 +791,40 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
                 # Nothing advanced — we're done (or genuinely stuck).
                 break
             last_signature = sig
+
+        # If anything newly hit complete this run, rebuild the rec graph for
+        # just those tracks. Without this, tail-recs + ⌘K vibe-search return
+        # nothing for a freshly-ingested Spotify track — the embedding exists
+        # but no track_edges row connects it to the rest of the library.
+        # Failure here is logged but does NOT fail the job: pipeline succeeded,
+        # edges can always be rebuilt later via ``dance build-graph``.
+        if last_rc == 0:
+            completed_after = _complete_track_ids(settings.db_url)
+            newly_complete = sorted(completed_after - completed_before)
+            if newly_complete:
+                graph_cmd = [
+                    sys.executable, "-m", "dance.cli", "build-graph",
+                ]
+                for tid in newly_complete:
+                    graph_cmd.extend(["--track-id", str(tid)])
+                with open(log_path, "a") as log_fp:
+                    log_fp.write(
+                        f"\n=== build-graph for "
+                        f"{len(newly_complete)} newly-complete track(s) ===\n"
+                    )
+                    log_fp.flush()
+                    graph_proc = subprocess.run(
+                        graph_cmd, cwd=str(cwd), env=env,
+                        stdout=log_fp, stderr=subprocess.STDOUT,
+                        text=True, timeout=10 * 60,  # graph build is fast
+                    )
+                if graph_proc.returncode != 0:
+                    logger.warning(
+                        "build-graph subprocess failed (rc=%d) for tracks %s — "
+                        "pipeline still considered successful; rebuild later "
+                        "via `dance build-graph`",
+                        graph_proc.returncode, newly_complete,
+                    )
 
         # Subprocess done. Mark stage items as ok (we can't tell per-stage
         # without parsing stdout — the rail row's track_state covers it).
