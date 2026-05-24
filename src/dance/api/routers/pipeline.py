@@ -347,7 +347,7 @@ def _run_csv_job(
     job_id: str,
     csv_rows: list[CsvRow],
     library: Path,
-    chrome_profile: str = "Profile 2",
+    cookies_file: Path | None = None,
 ) -> None:
     """Background worker: download each CSV row in a small thread pool."""
     registry = get_job_registry()
@@ -356,7 +356,7 @@ def _run_csv_job(
         library.mkdir(parents=True, exist_ok=True)
         with ThreadPoolExecutor(max_workers=_INGEST_WORKERS) as ex:
             futures = {
-                ex.submit(download_track, row, library, chrome_profile): i
+                ex.submit(download_track, row, library, cookies_file): i
                 for i, row in enumerate(csv_rows)
             }
             for fut in futures:
@@ -424,7 +424,7 @@ def ingest_commit(
 
     thread = threading.Thread(
         target=_run_csv_job,
-        args=(job.id, rows, settings.library_dir),
+        args=(job.id, rows, settings.library_dir, settings.youtube_cookies_file),
         daemon=True,
         name=f"csv-ingest-{job.id}",
     )
@@ -537,7 +537,14 @@ def ingest_track(
 
     thread = threading.Thread(
         target=_run_spotify_ingest_job,
-        args=(job.id, int(track.id), csv_row, settings.library_dir, settings.db_url),
+        args=(
+            job.id,
+            int(track.id),
+            csv_row,
+            settings.library_dir,
+            settings.db_url,
+            settings.youtube_cookies_file,
+        ),
         daemon=True,
         name=f"spotify-ingest-{job.id}",
     )
@@ -557,6 +564,7 @@ def _run_spotify_ingest_job(
     csv_row: CsvRow,
     library: Path,
     db_url: str,
+    cookies_file: Path | None = None,
 ) -> None:
     """Background worker: download one Spotify track and update its Track
     row's file_hash + file_size_bytes when the audio lands."""
@@ -564,7 +572,7 @@ def _run_spotify_ingest_job(
     registry.set_status(job_id, "running")
     try:
         library.mkdir(parents=True, exist_ok=True)
-        status, msg = download_track(csv_row, library)
+        status, msg = download_track(csv_row, library, cookies_file=cookies_file)
         registry.update_item(job_id, 0, status, msg)
         if status in ("ok", "skip"):
             _finalize_track_after_download(track_id, library, csv_row, db_url)

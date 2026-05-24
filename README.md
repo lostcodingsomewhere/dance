@@ -44,19 +44,41 @@ Spotify playlist
 
 Each stage is an independent `Stage` object registered with the dispatcher. Stages are state-driven — a stage runs on tracks whose `state` matches its `input_state`. No central orchestrator, no hardcoded order.
 
-## Install
+## Quick start (any Mac)
 
-Backend:
 ```bash
-pip install -e ".[dev]"
+./bin/setup.sh
 ```
 
-Companion app:
+That does everything: Python venv, dev deps, Alembic migrations, companion-app npm install, scaffolds `~/.dance/.env` from [`.env.example`](.env.example), and tells you which Homebrew packages still need installing (`yt-dlp`, `ffmpeg`).
+
+After it finishes:
+
 ```bash
-cd companion-app && npm install
+# Terminal 1 — backend
+source .venv/bin/activate
+uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
+
+# Terminal 2 — companion app
+cd companion-app && npm run dev   # http://localhost:5173
 ```
 
-## Quick start — pipeline
+The MasterStrip has a small dot top-right that turns **red** if a required host tool is missing, **amber** if only optional stuff is (Spotify creds, YouTube cookies), **green** when everything's ready. Click it for a checklist with one-line install hints.
+
+### What goes in `~/.dance/.env`
+
+Edit your per-user file (the setup script copies a template into place). The minimum for "Add from Spotify" in Cmd-K to work:
+
+```bash
+DANCE_SPOTIFY_CLIENT_ID=...        # https://developer.spotify.com/dashboard
+DANCE_SPOTIFY_CLIENT_SECRET=...
+```
+
+For reliable YouTube downloads, export cookies via the **Get cookies.txt LOCALLY** Chrome extension and save to `~/.dance/cookies.txt`. The setup script tells you when this is missing.
+
+### Pipeline runbook
+
+Once setup is done and host tools are installed:
 
 ```bash
 dance config --spotify-playlist "https://open.spotify.com/playlist/<id>"
@@ -64,19 +86,9 @@ dance run --once          # sync + process
 dance build-graph         # build recommendation edges
 ```
 
-## Quick start — companion app
+Or use the in-UI **Add from Spotify** flow in Cmd-K for ad-hoc tracks while building a set.
 
-Two processes:
-
-```bash
-# Terminal 1: backend
-uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
-
-# Terminal 2: React UI
-cd companion-app && npm run dev   # http://localhost:5173
-```
-
-Open `http://localhost:5173` on an iPad (landscape) or a desktop browser. Ableton state is pushed over the WebSocket — install AbletonOSC first (see [docs/abletonosc_setup.md](docs/abletonosc_setup.md) — includes a one-line patch needed to enable auto-loading stems into Live's session view).
+Ableton state is pushed over the WebSocket — install AbletonOSC first (see [docs/abletonosc_setup.md](docs/abletonosc_setup.md)).
 
 ## DJ flow
 

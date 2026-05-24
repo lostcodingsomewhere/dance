@@ -7,6 +7,7 @@ import { useDeckMap, useResyncDecks } from "../hooks/useDeckMap";
 import { store, useAppStore } from "../store";
 import type { ViewName } from "../types";
 import { BpmSlider } from "./BpmSlider";
+import { DepsChip } from "./DepsChip";
 import { EnergySparkline } from "./EnergySparkline";
 import { SessionChip } from "./SessionChip";
 import { VuMeter } from "./VuMeter";
@@ -180,7 +181,8 @@ export function MasterStrip() {
       </button>
 
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        <DepsChip />
         <SessionChip />
       </div>
 

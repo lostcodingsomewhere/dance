@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     spotify_client_id: Optional[str] = Field(default=None)
     spotify_client_secret: Optional[str] = Field(default=None)
 
+    # YouTube cookies for yt-dlp ingest. Default: ~/.dance/cookies.txt if
+    # present, otherwise None (yt-dlp will run unauthenticated and likely
+    # hit bot detection). Export via the "Get cookies.txt LOCALLY" Chrome
+    # extension — portable across machines, unlike Chrome-profile auth.
+    youtube_cookies_file: Optional[Path] = Field(
+        default_factory=lambda: (
+            (Path.home() / ".dance" / "cookies.txt")
+            if (Path.home() / ".dance" / "cookies.txt").exists()
+            else None
+        )
+    )
+
     # Directory paths
     library_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "library")
     stems_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "stems")

@@ -135,7 +135,89 @@ def create_app(
     def health() -> dict:
         return {"ok": True}
 
+    from fastapi import Depends as _Depends
+
+    from dance.api.deps import get_settings as _dep_get_settings
+
+    @app.get(f"{API_PREFIX}/health/deps", tags=["meta"])
+    def health_deps(s: Settings = _Depends(_dep_get_settings)) -> dict:
+        """Report the status of every host-level + per-user dep the
+        ingest path needs. Surfaced as a chip in MasterStrip so the
+        user sees a problem before they try to ingest."""
+        return _deps_status(s)
+
     return app
+
+
+def _deps_status(s) -> dict:  # noqa: ANN001
+    """Inspect host tools + per-user creds. Returns a flat report the FE
+    can render as a checklist. Each ``status`` is "ok" / "missing" /
+    "optional"."""
+    import shutil
+    from pathlib import Path
+
+    yt_dlp_path = shutil.which("yt-dlp")
+    ffmpeg_path = shutil.which("ffmpeg")
+    cookies = (
+        s.youtube_cookies_file
+        if s.youtube_cookies_file
+        and Path(s.youtube_cookies_file).exists()
+        else None
+    )
+    spotify_ok = bool(s.spotify_client_id and s.spotify_client_secret)
+
+    checks = [
+        {
+            "key": "yt_dlp",
+            "label": "yt-dlp",
+            "status": "ok" if yt_dlp_path else "missing",
+            "detail": yt_dlp_path
+            or "Required for Spotify/YouTube ingest. brew install yt-dlp",
+            "required": True,
+        },
+        {
+            "key": "ffmpeg",
+            "label": "ffmpeg",
+            "status": "ok" if ffmpeg_path else "missing",
+            "detail": ffmpeg_path
+            or "Required by yt-dlp for audio extraction. brew install ffmpeg",
+            "required": True,
+        },
+        {
+            "key": "cookies",
+            "label": "YouTube cookies",
+            "status": "ok" if cookies else "optional",
+            "detail": str(cookies)
+            if cookies
+            else (
+                "Export to ~/.dance/cookies.txt via the 'Get cookies.txt "
+                "LOCALLY' Chrome extension — without it, YouTube will throttle "
+                "or block downloads."
+            ),
+            "required": False,
+        },
+        {
+            "key": "spotify_creds",
+            "label": "Spotify search",
+            "status": "ok" if spotify_ok else "optional",
+            "detail": (
+                "Configured"
+                if spotify_ok
+                else (
+                    "Add DANCE_SPOTIFY_CLIENT_ID + SECRET to ~/.dance/.env "
+                    "to enable Cmd-K 'Add from Spotify'."
+                )
+            ),
+            "required": False,
+        },
+    ]
+    required_ok = all(c["status"] == "ok" for c in checks if c["required"])
+    optional_ok = all(c["status"] == "ok" for c in checks if not c["required"])
+    return {
+        "ok": required_ok,
+        "all_green": required_ok and optional_ok,
+        "checks": checks,
+    }
 
 
 __all__ = ["API_PREFIX", "create_app"]

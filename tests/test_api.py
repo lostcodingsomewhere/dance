@@ -2843,3 +2843,40 @@ def test_set_track_out_surfaces_track_state(
     sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
     r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
     assert r.json()["tracks"][0]["track_state"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/health/deps
+# ---------------------------------------------------------------------------
+
+
+def test_health_deps_reports_all_four_checks(client: TestClient) -> None:
+    """The deps endpoint always returns checks for yt-dlp, ffmpeg, cookies,
+    and Spotify credentials so the FE chip can render every row."""
+    r = client.get("/api/v1/health/deps")
+    assert r.status_code == 200
+    body = r.json()
+    keys = {c["key"] for c in body["checks"]}
+    assert keys == {"yt_dlp", "ffmpeg", "cookies", "spotify_creds"}
+    assert isinstance(body["ok"], bool)
+    assert isinstance(body["all_green"], bool)
+
+
+def test_health_deps_missing_yt_dlp_makes_ok_false(
+    client: TestClient, monkeypatch
+) -> None:
+    """When yt-dlp isn't on PATH the report flips ``ok`` false so the FE
+    can surface a red chip."""
+    import shutil as _shutil
+
+    real_which = _shutil.which
+    monkeypatch.setattr(
+        _shutil,
+        "which",
+        lambda name: None if name == "yt-dlp" else real_which(name),
+    )
+    r = client.get("/api/v1/health/deps")
+    body = r.json()
+    assert body["ok"] is False
+    yt = next(c for c in body["checks"] if c["key"] == "yt_dlp")
+    assert yt["status"] == "missing"

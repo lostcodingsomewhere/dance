@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,8 +108,8 @@ def expected_target(library: Path, row: CsvRow) -> Path:
 def download_track(
     row: CsvRow,
     library: Path,
-    chrome_profile: str = "Profile 2",
-    ffmpeg_location: str = "/Users/arya/.spotdl/ffmpeg",
+    cookies_file: Path | None = None,
+    ffmpeg_location: str | None = None,
     duration_tolerance_s: int = 30,
     timeout_s: int = 180,
 ) -> tuple[str, str]:
@@ -121,20 +122,43 @@ def download_track(
 
     Idempotent: if ``expected_target(...)`` already exists with size >100 KB,
     returns ``("skip", "already downloaded")``.
+
+    Auth: pass ``cookies_file`` (typically ``~/.dance/cookies.txt`` exported
+    via the "Get cookies.txt LOCALLY" Chrome extension) to bypass YouTube's
+    bot-detection. Defaults to looking for the file at the standard path
+    and to ``None`` (no cookies) if it's missing — yt-dlp will still try
+    the request but is much more likely to hit a 403 or sign-in prompt.
+
+    ``ffmpeg_location`` defaults to whatever ``ffmpeg`` is on PATH. Override
+    only when you have a known-good static build you want to pin to.
     """
+    # Default lookup for cookies.txt — caller can override or pass None.
+    if cookies_file is None:
+        default_cookies = Path.home() / ".dance" / "cookies.txt"
+        if default_cookies.exists():
+            cookies_file = default_cookies
+    if ffmpeg_location is None:
+        ffmpeg_location = "ffmpeg"
+
     target = expected_target(library, row)
     if target.exists() and target.stat().st_size > 100 * 1024:
         return ("skip", "already downloaded")
+
+    # Fail fast with a helpful message when yt-dlp isn't installed.
+    if shutil.which("yt-dlp") is None:
+        return (
+            "fail",
+            "yt-dlp not found on PATH — install with `brew install yt-dlp` "
+            "(macOS) or `pipx install yt-dlp`",
+        )
 
     output_template = str(library / f"{target.stem}.%(ext)s")
     query = f"ytsearch1:{row.artist} {row.title}"
 
     cmd = [
         "yt-dlp",
-        "--cookies-from-browser", f"chrome:{chrome_profile}",
         "--js-runtimes", "node",
-        "--ffmpeg-location",
-        ffmpeg_location if Path(ffmpeg_location).exists() else "ffmpeg",
+        "--ffmpeg-location", ffmpeg_location,
         "--default-search", "ytsearch",
         "--extract-audio",
         "--audio-format", "mp3",
@@ -145,6 +169,10 @@ def download_track(
         "--no-warnings",
         "--output", output_template,
     ]
+    if cookies_file is not None:
+        # --cookies path is portable across machines (unlike
+        # --cookies-from-browser, which assumes a specific Chrome profile).
+        cmd[1:1] = ["--cookies", str(cookies_file)]
     if row.duration_s:
         cmd += [
             "--match-filter",
