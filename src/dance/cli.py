@@ -160,8 +160,9 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
         "Skip the library-scan ingest pass and process only tracks already "
         "in the DB. The API's /pipeline/process worker uses this when "
         "advancing optimistically-ingested Spotify tracks — those rows "
-        "are pre-created, so a re-scan is redundant and can hang on large "
-        "libraries (see docs/troubleshooting.md)."
+        "are pre-created, so a re-scan is just confirming what we already "
+        "know. Use this when you've added tracks via the API and want a "
+        "fast process-pending pass."
     ),
 )
 @click.option("--track-id", "-t", type=int)

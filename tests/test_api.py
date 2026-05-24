@@ -1541,6 +1541,62 @@ def test_pipeline_process_creates_job_with_stage_items(client: TestClient, monke
     assert body["counts"]["ok"] == 6
 
 
+def test_pipeline_process_loops_until_state_signature_stable(
+    client: TestClient, monkeypatch
+) -> None:
+    """The API worker loops the CLI subprocess until the track-state
+    distribution stops changing. We verify that behavior by having a
+    stub ``_track_state_signature`` return a NEW value on the first 3
+    calls (forcing the worker to keep going) and the same value
+    afterward (signaling stable). The worker should invoke
+    ``subprocess.run`` exactly 4 times: 3 productive passes + the
+    one whose result-signature matches the prior (no-op pass that
+    confirms stability)."""
+    import time
+    import dance.api.routers.pipeline as pipeline_mod
+
+    sub_calls = {"n": 0}
+    sig_seq = iter(["sig-1", "sig-2", "sig-3", "stable", "stable", "stable"])
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(*args, **kwargs):
+        sub_calls["n"] += 1
+        return _FakeProc()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    import subprocess as _sub
+
+    monkeypatch.setattr(_sub, "run", _fake_run)
+    monkeypatch.setattr(
+        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
+    )
+
+    r = client.post("/api/v1/pipeline/process")
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    for _ in range(60):
+        time.sleep(0.05)
+        body = client.get(f"/api/v1/pipeline/jobs/{job_id}").json()
+        if body["status"] == "done":
+            break
+    assert body["status"] == "done"
+    # Loop trace:
+    #   call 1 → "sig-1" (was None)        → advance, continue
+    #   call 2 → "sig-2" (was "sig-1")     → advance, continue
+    #   call 3 → "sig-3" (was "sig-2")     → advance, continue
+    #   call 4 → "stable" (was "sig-3")    → advance, continue
+    #   call 5 → "stable" (was "stable")   → no change, break
+    # = 5 subprocess invocations. Cap (_MAX_PIPELINE_PASSES) is 6.
+    assert sub_calls["n"] == 5, (
+        f"Expected the loop to terminate as soon as the signature stabilizes; "
+        f"saw {sub_calls['n']} subprocess calls."
+    )
+
+
 def test_pipeline_process_returns_409_when_already_running(
     client: TestClient,
 ) -> None:
