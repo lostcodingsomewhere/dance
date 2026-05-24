@@ -59,7 +59,7 @@ export function Booth() {
               5 rec banners line up under the 5 stem columns. */}
           <div aria-hidden="true" />
           {STEM_COLUMNS.map((c) => (
-            <ColumnRecBanner key={c} column={c} k={3} />
+            <ColumnRecBanner key={c} column={c} k={5} />
           ))}
         </div>
       </main>
