@@ -127,7 +127,7 @@ Append to the top. Use this template:
 **Next time:**
 1. Wire up the Scarlett 4i4 physically when it arrives (outs 1/2 master, 3/4 cue) and confirm preview audio leaves on 3/4 only.
 2. Try a 30-min real set — see what breaks and what needs rethinking.
-3. Set/crate refactor — pre-curated track pool that constrains rec scoring during a set. Proposal pending.
+3. Set/crate refactor — ✅ shipped 2026-05-23 as the Set Rail consolidation. Sets are DB-persisted and named, the Crate view is retired (Pipeline is the inventory surface, Cmd-K is the search), and the active set drives tail-rec scoring against its trailing arc. See [`docs/proposals/set-rail-and-search-consolidation.md`](docs/proposals/set-rail-and-search-consolidation.md).
 
 ### 2026-05-18 — Scarlett 2i2 → 4i4 swap (cue routing unlocked)
 

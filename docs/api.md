@@ -27,6 +27,7 @@ Response/request shapes live in `src/dance/api/schemas.py`.
 | Method | Path                                  | Body / Query                                                                 | Response                          | 4xx |
 |--------|---------------------------------------|------------------------------------------------------------------------------|-----------------------------------|-----|
 | GET    | `/api/v1/tracks`                      | `limit, offset, bpm_min, bpm_max, key, energy, state`                        | `list[TrackOut]`                  |     |
+| GET    | `/api/v1/tracks/search`               | `q, limit, bpm_min, bpm_max, key, energy`                                    | `list[TrackOut]`                  |     |
 | GET    | `/api/v1/tracks/{id}`                 | -                                                                            | `TrackOut`                        | 404 |
 | GET    | `/api/v1/tracks/{id}/regions`         | `region_type, stem_file_id`                                                  | `list[RegionOut]`                 | 404 |
 | GET    | `/api/v1/tracks/{id}/stems`           | -                                                                            | `list[StemFileOut]`               | 404 |
@@ -43,6 +44,7 @@ Notes:
 - `tag` returns 502 if the tagger raises (model load failure, audio missing, etc.).
 - `als` returns 403 when `out_path` resolves outside `settings.als_output_dir` (`tracks.py:175`), 400 for missing analysis / no stems / not COMPLETE.
 - `waveform` endpoints decimate the audio (librosa) into `num_peaks` amplitude windows normalized to `[0, 1]`. Result is cached as a `{path}.waveform.json` sidecar so subsequent calls are ~instant. 422 for out-of-range `num_peaks`; 404 if the audio file is missing on disk; 503 on decode failure.
+- `GET /tracks/search` is the Cmd-K fuzzy half — case-insensitive `LIKE` on `title` + `artist`, with prefix matches ranked above contains-matches. Optional `bpm_min/bpm_max/key/energy` chip filters. Empty `q` returns the most-recently-updated tracks (browse mode). At our scale (<10k tracks) a sequential scan stays sub-100 ms; cross 50k tracks and we'll add a trigram index.
 
 ---
 
@@ -86,6 +88,31 @@ Notes:
 | POST   | `/api/v1/sessions/{id}/end`           | -                             | `SessionOut`   | 404 |
 
 `/sessions/current` returns the most recent session with `ended_at IS NULL`. `position_in_set` is auto-incremented on `POST /plays` (`sessions.py:98`). `energy_at_play` is snapshotted from the track's current full-mix analysis.
+
+---
+
+## Sets — `src/dance/api/routers/sets.py`
+
+Persistent named track plans (the **Set Rail** backing store). Distinct from `DjSession`: a Set is the *intent* (planned), a Session is the *history* (what actually played). At most one Set is `is_active = true` at a time (enforced by a partial unique index in `_create_partial_unique_indexes`).
+
+| Method | Path                                              | Body / Query                              | Response                | 4xx |
+|--------|---------------------------------------------------|-------------------------------------------|-------------------------|-----|
+| GET    | `/api/v1/sets`                                    | -                                         | `list[SetSummaryOut]`   |     |
+| GET    | `/api/v1/sets/active`                             | -                                         | `SetOut`                | 404 |
+| POST   | `/api/v1/sets`                                    | `SetCreateRequest`                        | `SetOut`                |     |
+| GET    | `/api/v1/sets/{id}`                               | -                                         | `SetOut`                | 404 |
+| PATCH  | `/api/v1/sets/{id}`                               | `SetUpdateRequest`                        | `SetOut`                | 404 |
+| DELETE | `/api/v1/sets/{id}`                               | -                                         | 204                     | 404 |
+| POST   | `/api/v1/sets/{id}/activate`                      | -                                         | `SetOut`                | 404 |
+| POST   | `/api/v1/sets/{id}/tracks`                        | `SetTrackAddRequest`                      | `SetOut`                | 400, 404 |
+| PATCH  | `/api/v1/sets/{id}/tracks/{track_id}`             | `SetTrackUpdateRequest`                   | `SetOut`                | 400, 404 |
+| DELETE | `/api/v1/sets/{id}/tracks/{track_id}`             | -                                         | `SetOut`                | 404 |
+| GET    | `/api/v1/sets/{id}/tail-recs`                     | `k, window, exclude_session_plays`        | `TailRecsResponse`      | 404 |
+
+- `activate` is atomic: deactivates other sets in the same transaction, then sets the target — the partial unique index never sees two active rows.
+- `POST /sets/{id}/tracks` appends to the end when `position` is null; otherwise inserts at that position and shifts the rest. Reorder via `PATCH .../tracks/{track_id}` with a `position` uses a sentinel-renumber to avoid violating `(set_id, position)` uniqueness mid-flush.
+- `DELETE .../tracks/{track_id}` compacts positions above the gap to stay contiguous `0..N-1`.
+- `tail-recs` ranks every other track by arc-fit against the trailing `window` tracks (default 5): weighted-average embedding, Camelot key compat, BPM band median, energy slope projection. Weights live in [`src/dance/recommender/tail.py`](../src/dance/recommender/tail.py) (`_W_EMBED/_W_KEY/_W_BPM/_W_ENERGY`). `exclude_session_plays=true` also drops tracks played in the currently-open `DjSession` so the rail doesn't re-suggest what's already on tonight.
 
 ---
 

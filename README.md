@@ -7,7 +7,7 @@ Spotify playlist → analyzed tracks with **stems, cues, loops, tags, and graph 
 The repo has three pieces:
 1. **Python pipeline** (`src/dance/`) — the brain. Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST over the SQLite DB, plus a WebSocket for live Ableton state and an OSC passthrough that auto-loads stem clips into Live's session view (Live 12.0.5+).
-3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Three views: **Booth** (live performance: set rail + now-playing card with structure timeline + recs with one-tap "Load → scene N"), **Crate** (vibe search, filters, pre-set Stack), **Pipeline** (ingest + processing status).
+3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Three views: **Booth** (live performance — SceneGrid mirror, per-column rec banners, slide-out Set Rail with tail-recs), **Set** (full-pane editor for the active set + library browse), **Pipeline** (ingest + processing status + library inventory). One hybrid **⌘K** palette covers fuzzy artist/title search and CLAP vibe search in one surface.
 
 ## Documentation
 
@@ -78,16 +78,23 @@ cd companion-app && npm run dev   # http://localhost:5173
 
 Open `http://localhost:5173` on an iPad (landscape) or a desktop browser. Ableton state is pushed over the WebSocket — install AbletonOSC first (see [docs/abletonosc_setup.md](docs/abletonosc_setup.md) — includes a one-line patch needed to enable auto-loading stems into Live's session view).
 
-## DJ flow (in the Booth)
+## DJ flow
 
-1. **Open the companion** at `http://localhost:5173` in landscape. Booth view loads.
-2. **First track**: vibe-search with ⌘K ("punchy techy with vocals") or browse the Crate. Click **Load → scene 1**. The backend auto-creates 5 reusable Deck tracks in Live (Mix / Drums / Bass / Vocals / Other) once per session, then uses `ClipSlot.create_audio_clip` to drop each stem into scene 1's clip slots. Live's status bar reads "Loaded {title} → scene 1".
-3. **Fire scene 1** on the APC40 — all 4 stems play in sync. Use the 4 stem faders to mute/blend live.
-4. **Companion auto-detects** the playing clip → flips NowCard badge from `○ HISTORY` to `● LIVE`, logs the play, and re-seeds Up Next with recs compatible with what's playing (`+0k 0b` chips = perfect key + BPM match).
-5. **Stage the next song**: pick a rec, click **Load → scene 2**. Same 5 columns, new scene. Repeat.
-6. **Mix**: when the current song's structure timeline shows "next: BUILDUP in 12 bars", hit scene-launch 2 on the APC. Live crossfades via your fader settings; companion auto-logs the new play.
+### Before the set — plan in the Set view
 
-The **SetRail** (left of the Booth) shows your **Scene Map** (which scenes have what loaded, with a ▶ on the currently-playing scene) above the **Played** history with energy arc. **MasterStrip** (top) always shows live BPM, transport, deck count, and a global ⌘K vibe-search.
+1. **Open the companion** at `http://localhost:5173`. First-time users with a legacy localStorage Stack get a one-shot prompt to import it as a named Set.
+2. **Open the Set Rail** (⌘\\ or the violet edge pill on the right). If no active set, create one. Sets are persistent and named — "Warehouse Sat", "Wedding 90min" — and you can switch between them from the Set editor view.
+3. **Fill the set via ⌘K**. The palette is hybrid: typing surfaces fuzzy artist/title matches in the **Tracks** section first, CLAP vibe matches in the **Vibe** section below (8+ char queries). BPM/key/energy chips narrow further. Each row has `+ Set` (add to the active set) and `Load` (push straight to Live).
+4. **Reorder, annotate** in the **Set** view (top nav). Per-track notes ("cue at bar 33"), arrow nudge for position, two-pane library + tail-recs on the right.
+
+### During the set — the Booth
+
+1. **SceneGrid** mirrors the APC40 — tap cells to fire, tap row labels to anchor, eyes here during a mix.
+2. **Per-column rec banners** below the grid show 3–5 candidates per stem column, live-rescored against the active combo. Tap **+** to soft-pin a stem candidate as a whole-song Mix-column rec.
+3. **Set Rail** (⌘\\) slides in to surface your planned set + tail-recs scored against the trailing arc (embedding window + key walk + BPM band + energy slope). It auto-collapses 3 s after a clip fires so the grid stays sovereign. Tap a rail track → soft-pin to Mix recs; shift-tap → force-load into Live.
+4. **Auto-logging** — when a clip fires that was loaded via the companion, the play is recorded to the current `DjSession`. End the set from the PlayedStrip footer.
+
+The **MasterStrip** (top) shows live BPM, transport, energy arc, AbletonOSC heartbeat, ⌘K, and the three view tabs.
 
 ## Commands
 

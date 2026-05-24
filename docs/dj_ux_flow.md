@@ -100,8 +100,8 @@ Some things must be visible in one glance, no tab-switching:
 
 Things that can be separated by a tab/keystroke:
 
-- Pre-set Crate work (library browse, stage tracks).
-- Pipeline / Ops / Settings (administrative).
+- Pre-set planning — the **Set** view (full-pane editor) and the **Set Rail** drawer (⌘\\ in Booth) cover this; library browse is folded into the Cmd-K palette.
+- Pipeline / Ops / Settings (administrative). Pipeline doubles as the library inventory surface.
 - Session history beyond the current set.
 
 ## Attention pattern
@@ -111,7 +111,7 @@ Things that can be separated by a tab/keystroke:
 | NOW (combo grooving) | Ears + APC40 hands | Glance at grid for playing cells | — |
 | SHOPPING (deciding swap) | Focused column's rec banner + the column in grid | Current combo summary | Set arc / energy sparkline |
 | SWAP MOMENT (firing the cell) | Grid (tap target) or APC40 | Beat indicator | — |
-| LULL (combo locked in) | Set arc / SetRail / "what's working" | Library browse for next-but-one | — |
+| LULL (combo locked in) | Set arc / SetRail (⌘\\) with tail-recs | Library browse via ⌘K for next-but-one | — |
 
 A well-tuned single-surface UI should support this pattern without forcing the user to remember where to look.
 

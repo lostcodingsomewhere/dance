@@ -9,7 +9,7 @@ Instructions for Claude Code working on this repo. Keep brief — the docs alrea
 Three pieces:
 1. **Python pipeline** (`src/dance/`) — Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST + WebSocket for live Ableton state + OSC passthrough.
-3. **React companion app** (`companion-app/`) — Vite + TS + Tailwind. Three views: **Booth** (live performance: SceneGrid mirror + MasterVisualizer stacked-stem waveforms + ComboStrip + per-column rec banners + CueStrip + PlayedStrip), **Crate** (pre-set library curation), **Pipeline** (ingest/processing status). All recs scoped per-column and re-scored against the active stem combo. See [`docs/dj_ux_flow.md`](docs/dj_ux_flow.md) for the full surfaces map.
+3. **React companion app** (`companion-app/`) — Vite + TS + Tailwind. Three views: **Booth** (live performance: SceneGrid mirror + MasterVisualizer stacked-stem waveforms + ComboStrip + per-column rec banners + CueStrip + PlayedStrip + slide-out SetRail with tail-recs), **Set** (full-pane editor for the active set + library browse), **Pipeline** (ingest/processing status; also library inventory via the Done-column filter). Sets persist in the DB (`sets`/`set_tracks`, one `is_active` at a time). Hybrid **⌘K** palette combines fuzzy artist/title search with CLAP vibe results. All recs scoped per-column and re-scored against the active stem combo. See [`docs/dj_ux_flow.md`](docs/dj_ux_flow.md) for the full surfaces map; [`docs/proposals/set-rail-and-search-consolidation.md`](docs/proposals/set-rail-and-search-consolidation.md) for the Set Rail design.
 
 Full architecture: [`docs/architecture.md`](docs/architecture.md). Repo layout: [`docs/dev.md`](docs/dev.md).
 
@@ -57,6 +57,8 @@ These come from the user's persistent memory — they apply project-wide.
 | "let's DJ" / "load this playlist" | `dance config --spotify-playlist <url>` → `dance run --once` → `dance build-graph` → `dance export-als --all`. See [`LEARNING.md`](LEARNING.md) for the full runbook. |
 | "the als is broken" / "Live won't open the set" | See [`docs/troubleshooting.md`](docs/troubleshooting.md) "Live rejects the .als entirely". Don't refactor `writer.py` from scratch — it's template-based on purpose. |
 | "let's tag tracks" | `dance tag` (CLAP zero-shot, fast) or `dance tag --deep` (Qwen2-Audio, 10–30 s/track). See [`docs/tagging.md`](docs/tagging.md). |
+| "let's plan a set" / "make a set" | Open the companion app → ⌘\\ to open the Set Rail → "create empty set" → fill via ⌘K. Sets persist; rail surfaces tail-recs scored against the trailing arc. See [`docs/proposals/set-rail-and-search-consolidation.md`](docs/proposals/set-rail-and-search-consolidation.md). |
+| "tail recs seem off" / "tune the rec scoring" | Weights live in [`src/dance/recommender/tail.py`](src/dance/recommender/tail.py) as `_W_EMBED/_W_KEY/_W_BPM/_W_ENERGY`. Run a real-set check before changing — see [`docs/proposals/set-rail-verification.md`](docs/proposals/set-rail-verification.md). |
 | "the model isn't downloading" / "MPS crashed" | See [`docs/troubleshooting.md`](docs/troubleshooting.md). MPS fallback is automatic. |
 | "show me what's running" | Backend: `curl http://127.0.0.1:8000/health`. UI: open `http://localhost:5173`. OSC: AbletonOSC status panel in Live. |
 

@@ -185,15 +185,21 @@ track_edges         -- pairwise recommendation graph
   kinds: harmonic_compat, tempo_compat, embedding_neighbor,
          tag_overlap, manually_paired, playlist_neighbor
 
-sessions            -- DJ set, started_at -> ended_at
+sessions            -- DJ set, started_at -> ended_at (what actually played)
   |- session_plays  -- ordered by position_in_set
+
+sets                -- curated track plan (what's *planned*), at most one is_active
+  |- set_tracks     -- ordered by position (0-indexed, unique per set_id)
 ```
 
 Key invariants:
 
-- `audio_analysis` uses partial unique indexes (`database.py:721`) — one full-mix row per track, one row per stem.
-- `track_edges` has no self-loops (CHECK constraint, `database.py:522`).
-- Cascade deletes everywhere: drop a `Track` and stems/analysis/regions/embeddings/tags/edges all go with it.
+- `audio_analysis` uses partial unique indexes (`database.py:_create_partial_unique_indexes`) — one full-mix row per track, one row per stem.
+- `sets` has a partial unique index on `is_active WHERE is_active` — only one active set at a time, enforced at the DB layer (same raw-DDL pattern as `audio_analysis`).
+- `set_tracks` has a `UNIQUE(set_id, position)` — reorder uses sentinel-renumber to avoid mid-flush collisions (`api/routers/sets.py:_renumber_for_move`).
+- `track_edges` has no self-loops (CHECK constraint).
+- Cascade deletes everywhere: drop a `Track` and stems/analysis/regions/embeddings/tags/edges all go with it. Drop a `Set` and its `set_tracks` go.
+- `Set` and `DjSession` are decoupled — a set is reused across sessions; a session may or may not follow a set. Tail-recs can optionally exclude tracks already played in the current open session (`exclude_session_plays=true`).
 
 For SQL DDL, read `src/dance/core/database.py` — copying it here would just bit-rot.
 
