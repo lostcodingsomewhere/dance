@@ -1,14 +1,16 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ingestSpotifyTrack,
   pushTrackToLive,
   recommendByText,
   revealPath,
   searchTracks,
+  spotifySearch,
 } from "../api";
 import { useActiveSet, useAddTrackToSet } from "../hooks/useSets";
 import { store, useAppStore } from "../store";
-import type { Recommendation, Track } from "../types";
+import type { Recommendation, SpotifyTrackHit, Track } from "../types";
 import { BpmRangePicker } from "./BpmRangePicker";
 import { EnergyBar } from "./EnergyBar";
 import { KeyBadge } from "./KeyBadge";
@@ -81,6 +83,18 @@ export function CommandBar() {
     queryFn: () => recommendByText(debouncedQ.trim(), 12),
     enabled: open && vibeEligible,
     staleTime: 10_000,
+  });
+
+  // Spotify catalog search — surfaces the "not in your library yet?" path.
+  // Same eligibility threshold as vibe so we don't spam Spotify on
+  // single-character queries.
+  const spotifyEligible = debouncedQ.trim().length >= 3;
+  const spotify = useQuery({
+    queryKey: ["spotify", "search", debouncedQ.trim().toLowerCase()],
+    queryFn: () => spotifySearch(debouncedQ.trim(), 5),
+    enabled: open && spotifyEligible,
+    staleTime: 30_000,
+    retry: false, // 503 means "no creds" — don't pound the endpoint
   });
 
   // Global hotkey listener — Cmd/Ctrl+K toggles.
@@ -200,6 +214,22 @@ export function CommandBar() {
                 ))}
               </Section>
             </>
+          )}
+
+          {spotifyEligible && (
+            <Section
+              title="Add from Spotify"
+              count={spotify.data?.hits.length ?? 0}
+              loading={spotify.isLoading}
+            >
+              {spotify.data?.hits.map((hit) => (
+                <SpotifyHitRow
+                  key={`spot-${hit.spotify_id}`}
+                  hit={hit}
+                  activeSetId={activeSet?.id ?? null}
+                />
+              ))}
+            </Section>
           )}
 
           {empty && (
@@ -497,6 +527,102 @@ function RowShell({
         className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-purple-700 hover:bg-purple-600 disabled:bg-neutral-800 disabled:text-neutral-500 text-white"
       >
         {loading ? "…" : done ?? "Load"}
+      </button>
+    </div>
+  );
+}
+
+function SpotifyHitRow({
+  hit,
+  activeSetId,
+}: {
+  hit: SpotifyTrackHit;
+  activeSetId: number | null;
+}) {
+  const qc = useQueryClient();
+  const addToSet = useAddTrackToSet();
+  const [state, setState] = useState<"idle" | "pending" | "done" | "error">(
+    "idle",
+  );
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  async function ingest() {
+    setState("pending");
+    setErrMsg(null);
+    try {
+      const result = await ingestSpotifyTrack(hit);
+      if (activeSetId) {
+        await addToSet.mutateAsync({
+          setId: activeSetId,
+          trackId: result.track_id,
+        });
+      }
+      // Invalidate everything that might surface the new track — active
+      // set re-renders with a ⌛ chip, pipeline status counts shift.
+      qc.invalidateQueries({ queryKey: ["sets"] });
+      qc.invalidateQueries({ queryKey: ["pipeline"] });
+      setState("done");
+    } catch (e) {
+      setState("error");
+      setErrMsg((e as Error).message.slice(0, 80));
+    }
+  }
+
+  const durMin =
+    hit.duration_ms != null
+      ? `${Math.floor(hit.duration_ms / 60000)}:${String(
+          Math.floor((hit.duration_ms % 60000) / 1000),
+        ).padStart(2, "0")}`
+      : null;
+
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60">
+      {hit.image_url ? (
+        <img
+          src={hit.image_url}
+          alt=""
+          className="w-9 h-9 rounded shrink-0 object-cover"
+        />
+      ) : (
+        <div className="w-9 h-9 rounded shrink-0 bg-neutral-800 flex items-center justify-center text-[10px] text-neutral-600">
+          ♪
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-neutral-100 truncate flex items-center gap-1.5">
+          {hit.title}
+          {hit.explicit && (
+            <span className="text-[8px] px-1 py-0.5 rounded bg-neutral-800 text-neutral-500">
+              E
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-neutral-500 truncate">
+          {hit.artist}
+          {hit.album && <span className="ml-1.5">· {hit.album}</span>}
+          {durMin && <span className="ml-1.5 font-mono">{durMin}</span>}
+        </div>
+      </div>
+      {state === "error" && errMsg && (
+        <span className="text-[10px] text-rose-300 truncate max-w-[10rem]" title={errMsg}>
+          {errMsg}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={ingest}
+        disabled={state === "pending" || state === "done"}
+        title={
+          activeSetId
+            ? "Download + analyze + add to active set"
+            : "Download + analyze (no active set to add to)"
+        }
+        className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-emerald-700/80 hover:bg-emerald-600 text-white disabled:bg-neutral-800 disabled:text-neutral-500"
+      >
+        {state === "pending" && "⌛ adding…"}
+        {state === "done" && "✓ added"}
+        {state === "error" && "↻ retry"}
+        {state === "idle" && (activeSetId ? "+ Set" : "+ Library")}
       </button>
     </div>
   );

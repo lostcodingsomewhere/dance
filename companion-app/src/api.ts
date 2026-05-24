@@ -7,6 +7,7 @@ import type {
   DeckMap,
   DjSession,
   IngestPreviewResponse,
+  IngestTrackResult,
   Job,
   PipelineRecentTrack,
   PipelineStatus,
@@ -16,6 +17,8 @@ import type {
   RecommendRequest,
   Region,
   SetSummary,
+  SpotifySearchResponse,
+  SpotifyTrackHit,
   StemFile,
   TailRecsResponse,
   Track,
@@ -296,6 +299,31 @@ export function getTailRecs(
   if (opts.k != null) params.k = opts.k;
   if (opts.excludeSessionPlays) params.exclude_session_plays = "true";
   return request<TailRecsResponse>(`/sets/${setId}/tail-recs${qs(params)}`);
+}
+
+// Spotify search + optimistic ingest --------------------------------------
+
+export function spotifySearch(
+  q: string,
+  limit = 8,
+): Promise<SpotifySearchResponse> {
+  return request<SpotifySearchResponse>(
+    `/spotify/search${qs({ q, limit })}`,
+  );
+}
+
+export function ingestSpotifyTrack(
+  hit: SpotifyTrackHit,
+): Promise<IngestTrackResult> {
+  return request<IngestTrackResult>("/pipeline/ingest/track", {
+    method: "POST",
+    body: JSON.stringify({
+      spotify_id: hit.spotify_id,
+      title: hit.title,
+      artist: hit.artist,
+      duration_ms: hit.duration_ms,
+    }),
+  });
 }
 
 // Pipeline ops --------------------------------------------------------------

@@ -19,6 +19,7 @@ from dance.api.routers import (
     recommend,
     sessions,
     sets,
+    spotify,
     tracks,
     ws,
 )
@@ -123,6 +124,7 @@ def create_app(
     app.include_router(recommend.router, prefix=API_PREFIX)
     app.include_router(sessions.router, prefix=API_PREFIX)
     app.include_router(sets.router, prefix=API_PREFIX)
+    app.include_router(spotify.router, prefix=API_PREFIX)
     app.include_router(ableton.router, prefix=API_PREFIX)
     app.include_router(files.router, prefix=API_PREFIX)
     app.include_router(pipeline.router, prefix=API_PREFIX)

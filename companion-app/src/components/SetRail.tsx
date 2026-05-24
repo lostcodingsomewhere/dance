@@ -42,6 +42,63 @@ import { StemKindsChip } from "./StemKindsChip";
 const RAIL_WIDTH = 320;
 const AUTO_COLLAPSE_MS = 3_000;
 
+// TrackState values that mean "not playable yet." Everything else (including
+// COMPLETE) is treated as ready.
+const PROCESSING_STATES = new Set([
+  "pending",
+  "analyzing",
+  "analyzed",
+  "separating",
+  "separated",
+  "analyzing_stems",
+  "stems_analyzed",
+  "detecting_regions",
+  "regions_detected",
+  "embedding",
+  "embedded",
+]);
+
+function isProcessing(t: SetTrack): boolean {
+  return t.track_state != null && PROCESSING_STATES.has(t.track_state);
+}
+
+function StateChip({
+  state,
+  error,
+}: {
+  state: string | null;
+  error: string | null;
+}) {
+  if (state == null || state === "complete") return null;
+  if (state === "error") {
+    return (
+      <span
+        className="text-[9px] px-1 py-0.5 rounded bg-rose-500/20 text-rose-200 border border-rose-500/40"
+        title={error ?? "Failed"}
+      >
+        ⚠ failed
+      </span>
+    );
+  }
+  // Use a short label per stage; default to ⌛ for anything else.
+  const label =
+    state === "pending"
+      ? "downloading"
+      : state === "separating"
+        ? "separating stems"
+        : state === "embedding"
+          ? "embedding"
+          : state.replace(/_/g, " ");
+  return (
+    <span
+      className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-200 border border-amber-500/30 animate-pulse"
+      title={`Pipeline: ${state}`}
+    >
+      ⌛ {label}
+    </span>
+  );
+}
+
 export function SetRail() {
   const open = useAppStore((s) => s.setRailOpen);
   const view = useAppStore((s) => s.currentView);
@@ -366,7 +423,11 @@ function SetTrackRow({
           <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0 w-5 text-right">
             {index + 1}
           </span>
-          <span className="flex-1 text-xs text-neutral-100 truncate font-medium">
+          <span
+            className={`flex-1 text-xs truncate font-medium ${
+              isProcessing(track) ? "text-neutral-500" : "text-neutral-100"
+            }`}
+          >
             {track.title ?? `Track #${track.track_id}`}
           </span>
           {track.note && (
@@ -378,6 +439,10 @@ function SetTrackRow({
               📝
             </span>
           )}
+          <StateChip
+            state={track.track_state}
+            error={track.track_error}
+          />
         </div>
         <div className="flex items-center gap-1.5 pl-6">
           <span className="text-[10px] text-neutral-500 truncate flex-1">

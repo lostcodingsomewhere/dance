@@ -200,6 +200,36 @@ export interface SetTrack {
   bpm: number | null;
   key_camelot: string | null;
   floor_energy: number | null;
+  /** Underlying Track's pipeline state — drives the rail's ⌛/⚠ chip
+   *  for freshly-ingested tracks that haven't finished processing yet. */
+  track_state: string | null;
+  track_error: string | null;
+}
+
+// Spotify search — mirrors /api/v1/spotify/search response.
+
+export interface SpotifyTrackHit {
+  spotify_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration_ms: number | null;
+  preview_url: string | null;
+  image_url: string | null;
+  explicit: boolean;
+  popularity: number | null;
+}
+
+export interface SpotifySearchResponse {
+  query: string;
+  hits: SpotifyTrackHit[];
+}
+
+export interface IngestTrackResult {
+  track_id: number;
+  state: string;
+  job_id: string | null;
+  already_existed: boolean;
 }
 
 export interface DanceSet {

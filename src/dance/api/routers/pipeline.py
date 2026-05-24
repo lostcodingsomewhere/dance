@@ -39,6 +39,8 @@ from dance.api.schemas import (
     IngestPreviewRequest,
     IngestPreviewResponse,
     IngestPreviewRow,
+    IngestTrackRequest,
+    IngestTrackResult,
     JobOut,
     PipelineRecentTrackOut,
     PipelineStatusOut,
@@ -429,6 +431,190 @@ def ingest_commit(
     thread.start()
 
     return JobOut(**job.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Single-track optimistic ingest (Cmd-K "ADD FROM SPOTIFY" path)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/ingest/track", response_model=IngestTrackResult)
+def ingest_track(
+    body: IngestTrackRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> IngestTrackResult:
+    """Optimistic single-track ingest. Creates the ``Track`` row immediately
+    with ``state=pending`` so the FE can add it to the active Set right
+    away, then spawns a background download via ``download_track``. After
+    the file lands we update ``file_hash``/``file_path``; the dispatcher's
+    existing pipeline picks up the row from there.
+
+    Idempotent on ``spotify_id`` — calling twice returns the existing Track.
+    """
+    spotify_id = body.spotify_id.strip()
+    if not spotify_id:
+        raise HTTPException(status_code=400, detail="spotify_id is required")
+
+    existing = (
+        session.query(Track).filter(Track.spotify_id == spotify_id).first()
+    )
+    if existing is not None:
+        return IngestTrackResult(
+            track_id=int(existing.id),
+            state=str(existing.state),
+            job_id=None,
+            already_existed=True,
+        )
+
+    # Fill metadata server-side if the caller didn't ship it.
+    title = body.title
+    artist = body.artist
+    duration_ms = body.duration_ms
+    if not title or not artist:
+        from dance.spotify.search import (
+            SpotifyAuthError,
+            SpotifySearchError,
+            get_default_client,
+        )
+
+        client = get_default_client(settings)
+        if not client.configured:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Spotify not configured; pass title+artist or set "
+                    "DANCE_SPOTIFY_CLIENT_ID/SECRET in ~/.dance/.env"
+                ),
+            )
+        try:
+            hit = client.get_track(spotify_id)
+        except SpotifyAuthError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Spotify auth: {exc}"
+            ) from exc
+        except SpotifySearchError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Spotify error: {exc}"
+            ) from exc
+        title = title or hit.title
+        artist = artist or hit.artist
+        duration_ms = duration_ms or hit.duration_ms
+
+    # Pre-compute the path the downloader will write to so the FE / dispatcher
+    # can find the file once it lands. ``download_track`` uses the same
+    # sanitize helper so the paths match.
+    csv_row = CsvRow(
+        artist=artist or "Unknown",
+        title=title or "(untitled)",
+        album="",
+        duration_s=int(duration_ms / 1000) if duration_ms else 0,
+    )
+    expected_path = expected_target(settings.library_dir, csv_row)
+
+    # Placeholder file_hash so the row passes the unique constraint;
+    # the download worker replaces it with the real SHA256 once the file
+    # exists on disk. ``pending:<spotify_id>`` is unique per spotify_id.
+    placeholder_hash = f"pending:{spotify_id}"[:64]
+
+    track = Track(
+        file_hash=placeholder_hash,
+        spotify_id=spotify_id,
+        file_path=str(expected_path),
+        file_name=expected_path.name,
+        file_size_bytes=0,
+        title=title,
+        artist=artist,
+        duration_seconds=(duration_ms / 1000.0) if duration_ms else None,
+        state=TrackState.PENDING.value,
+    )
+    session.add(track)
+    session.commit()
+    session.refresh(track)
+
+    registry = get_job_registry()
+    job = registry.create("spotify_ingest", [f"{artist} - {title}"])
+
+    thread = threading.Thread(
+        target=_run_spotify_ingest_job,
+        args=(job.id, int(track.id), csv_row, settings.library_dir, settings.db_url),
+        daemon=True,
+        name=f"spotify-ingest-{job.id}",
+    )
+    thread.start()
+
+    return IngestTrackResult(
+        track_id=int(track.id),
+        state=str(track.state),
+        job_id=job.id,
+        already_existed=False,
+    )
+
+
+def _run_spotify_ingest_job(
+    job_id: str,
+    track_id: int,
+    csv_row: CsvRow,
+    library: Path,
+    db_url: str,
+) -> None:
+    """Background worker: download one Spotify track and update its Track
+    row's file_hash + file_size_bytes when the audio lands."""
+    registry = get_job_registry()
+    registry.set_status(job_id, "running")
+    try:
+        library.mkdir(parents=True, exist_ok=True)
+        status, msg = download_track(csv_row, library)
+        registry.update_item(job_id, 0, status, msg)
+        if status in ("ok", "skip"):
+            _finalize_track_after_download(track_id, library, csv_row, db_url)
+        elif status == "fail":
+            _mark_track_error(track_id, db_url, msg)
+        registry.set_status(job_id, "done")
+    except Exception as e:  # noqa: BLE001
+        registry.set_status(job_id, "error", error=str(e)[:300])
+        _mark_track_error(track_id, db_url, str(e)[:200])
+
+
+def _finalize_track_after_download(
+    track_id: int, library: Path, csv_row: CsvRow, db_url: str
+) -> None:
+    """Replace the placeholder file_hash with the real SHA256 + populate
+    file_size_bytes. State stays ``pending`` so the dispatcher picks it up."""
+    import hashlib
+
+    target = expected_target(library, csv_row)
+    if not target.exists():
+        return
+    h = hashlib.sha256()
+    with open(target, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    file_hash = h.hexdigest()
+
+    SessionLocal = get_session_factory(db_url)  # noqa: N806
+    with SessionLocal() as s:
+        track = s.get(Track, track_id)
+        if track is None:
+            return
+        track.file_hash = file_hash
+        track.file_path = str(target)
+        track.file_name = target.name
+        track.file_size_bytes = target.stat().st_size
+        s.commit()
+
+
+def _mark_track_error(track_id: int, db_url: str, message: str) -> None:
+    """Flip a track to ERROR with a message. Used when the download leg
+    of the ingest fails so the UI's ⌛/⚠ chip can reflect it."""
+    SessionLocal = get_session_factory(db_url)  # noqa: N806
+    with SessionLocal() as s:
+        track = s.get(Track, track_id)
+        if track is None:
+            return
+        track.state = TrackState.ERROR.value
+        track.error_message = message
+        s.commit()
 
 
 @router.get("/jobs", response_model=list[JobOut])

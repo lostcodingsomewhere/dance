@@ -28,6 +28,12 @@ class Settings(BaseSettings):
 
     # Spotify ingest
     spotify_playlist_url: Optional[str] = Field(default=None)
+    # Spotify Web API credentials for the search endpoint (Client Credentials
+    # flow — no user OAuth). Register an app at developer.spotify.com →
+    # paste Client ID + Secret into ~/.dance/.env. Separate from spotDL's
+    # bundled credentials (which are for downloads only).
+    spotify_client_id: Optional[str] = Field(default=None)
+    spotify_client_secret: Optional[str] = Field(default=None)
 
     # Directory paths
     library_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "library")

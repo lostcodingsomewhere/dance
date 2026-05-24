@@ -266,6 +266,10 @@ class SetTrackOut(_Base):
     bpm: float | None = None
     key_camelot: str | None = None
     floor_energy: int | None = None
+    # Pipeline state of the underlying Track. Lets the rail show a ⌛
+    # chip while a freshly-ingested track is still downloading / processing.
+    track_state: str | None = None
+    track_error: str | None = None
 
     @field_serializer("added_at")
     def _ser_added_at(self, v: datetime) -> str | None:
@@ -604,6 +608,29 @@ class IngestCommitRequest(BaseModel):
     csv_text: str
     include_duplicates: bool = False
     selected_keys: list[str] | None = None
+
+
+class IngestTrackRequest(BaseModel):
+    """Body for ``POST /api/v1/pipeline/ingest/track`` — single-track
+    optimistic ingest. The Spotify ID is required; ``title``/``artist``
+    are looked up server-side if not provided (saves a roundtrip when the
+    FE already has the metadata from a prior search hit)."""
+
+    spotify_id: str
+    title: str | None = None
+    artist: str | None = None
+    duration_ms: int | None = None
+
+
+class IngestTrackResult(BaseModel):
+    """Response — returns the Track row's id immediately so the FE can
+    optimistically add to the active Set. ``state`` reflects the row's
+    current pipeline state (typically ``pending`` until download lands)."""
+
+    track_id: int
+    state: str
+    job_id: str | None = None
+    already_existed: bool = False
 
 
 class JobItemOut(BaseModel):

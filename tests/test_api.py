@@ -2653,3 +2653,193 @@ def test_set_track_stem_kinds_patch_null_clears(
         json={"stem_kinds": None},
     )
     assert r.json()["tracks"][0]["stem_kinds"] is None
+
+
+# ---------------------------------------------------------------------------
+# /spotify/search + /pipeline/ingest/track
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_spotify_client(monkeypatch, hits=None, track=None):
+    """Swap the module-level Spotify client for a stub so tests never hit
+    the real API. Patches both the source module *and* every router that
+    imported ``get_default_client`` by reference (FastAPI routers grab it
+    at import time)."""
+    from dance.spotify import search as spotify_search
+    from dance.api.routers import spotify as spotify_router
+
+    class _FakeClient:
+        configured = True
+
+        def __init__(self, _hits, _track):
+            self._hits = _hits or []
+            self._track = _track
+
+        def search_tracks(self, q, limit=8):  # noqa: ARG002
+            return list(self._hits)
+
+        def get_track(self, spotify_id):  # noqa: ARG002
+            if self._track is None:
+                raise spotify_search.SpotifySearchError("no track configured")
+            return self._track
+
+    fake = _FakeClient(hits, track)
+    factory = lambda _settings: fake  # noqa: E731
+    monkeypatch.setattr(spotify_search, "get_default_client", factory)
+    monkeypatch.setattr(spotify_router, "get_default_client", factory)
+    return fake
+
+
+def _make_hit(
+    spotify_id="abc123",
+    title="Two Thousand And Seventeen",
+    artist="Four Tet",
+    duration_ms=282_000,
+):
+    from dance.spotify.search import SpotifyTrackHit
+
+    return SpotifyTrackHit(
+        spotify_id=spotify_id,
+        title=title,
+        artist=artist,
+        album="New Energy",
+        duration_ms=duration_ms,
+        preview_url=None,
+        image_url=None,
+        explicit=False,
+        popularity=70,
+    )
+
+
+def test_spotify_search_returns_hits(client: TestClient, monkeypatch) -> None:
+    _install_fake_spotify_client(monkeypatch, hits=[_make_hit()])
+    r = client.get("/api/v1/spotify/search", params={"q": "four tet"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["query"] == "four tet"
+    assert len(body["hits"]) == 1
+    assert body["hits"][0]["title"] == "Two Thousand And Seventeen"
+    assert body["hits"][0]["artist"] == "Four Tet"
+
+
+def test_spotify_search_503_when_not_configured(
+    client: TestClient, monkeypatch
+) -> None:
+    """No credentials → endpoint returns 503 with a friendly hint."""
+    from dance.spotify import search as spotify_search
+    from dance.api.routers import spotify as spotify_router
+
+    class _UnconfClient:
+        configured = False
+
+    factory = lambda _settings: _UnconfClient()  # noqa: E731
+    monkeypatch.setattr(spotify_search, "get_default_client", factory)
+    monkeypatch.setattr(spotify_router, "get_default_client", factory)
+    r = client.get("/api/v1/spotify/search", params={"q": "anything"})
+    assert r.status_code == 503
+    assert "DANCE_SPOTIFY_CLIENT_ID" in r.json()["detail"]
+
+
+def test_ingest_track_creates_pending_row(
+    client: TestClient, session, monkeypatch
+) -> None:
+    """Optimistic ingest creates a Track row immediately with state=pending
+    and returns its id so the FE can add to the active set right away."""
+    _install_fake_spotify_client(
+        monkeypatch,
+        track=_make_hit(spotify_id="newtrack001"),
+    )
+    # Mock the download worker so we don't actually shell out to yt-dlp.
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(
+        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
+    )
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/track",
+        json={"spotify_id": "newtrack001"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["track_id"] > 0
+    assert body["state"] == "pending"
+    assert body["already_existed"] is False
+
+    # Verify the Track row landed with the expected metadata.
+    session.expire_all()
+    track = session.get(Track, body["track_id"])
+    assert track is not None
+    assert track.spotify_id == "newtrack001"
+    assert track.title == "Two Thousand And Seventeen"
+    assert track.artist == "Four Tet"
+    assert track.state == "pending"
+
+
+def test_ingest_track_idempotent_on_spotify_id(
+    client: TestClient, session, monkeypatch
+) -> None:
+    """Calling twice for the same spotify_id returns the existing track."""
+    _install_fake_spotify_client(
+        monkeypatch, track=_make_hit(spotify_id="dup001")
+    )
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(
+        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
+    )
+
+    first = client.post(
+        "/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}
+    ).json()
+    second = client.post(
+        "/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}
+    ).json()
+    assert first["track_id"] == second["track_id"]
+    assert first["already_existed"] is False
+    assert second["already_existed"] is True
+
+
+def test_ingest_track_accepts_caller_supplied_metadata(
+    client: TestClient, monkeypatch
+) -> None:
+    """If FE ships title+artist (from a prior search hit), no Spotify
+    lookup is needed — useful so the endpoint works in tests / dev w/o
+    creds, and avoids one HTTP roundtrip in production."""
+    from dance.spotify import search as spotify_search
+
+    class _UnconfClient:
+        configured = False
+
+    monkeypatch.setattr(
+        spotify_search, "get_default_client", lambda _settings: _UnconfClient()
+    )
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(
+        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
+    )
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/track",
+        json={
+            "spotify_id": "by-meta-001",
+            "title": "Cosmic Shore",
+            "artist": "Bonobo",
+            "duration_ms": 240_000,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["state"] == "pending"
+
+
+def test_set_track_out_surfaces_track_state(
+    client: TestClient, session, make_track
+) -> None:
+    """Tracks freshly ingested via Spotify carry track_state=pending; the
+    rail needs that to render its ⌛ chip."""
+    t = make_track(title="pending-thing", state="pending")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    r = client.post(f"/api/v1/sets/{sid}/tracks", json={"track_id": t.id})
+    assert r.json()["tracks"][0]["track_state"] == "pending"
