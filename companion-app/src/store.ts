@@ -12,9 +12,10 @@ interface AppState {
   currentView: ViewName;
   /** Keyed by scene_index. One deck per scene. */
   loadedDecks: Record<number, LoadedDeck>;
-  /** Ordered set of track ids the user is staging for a future set. */
-  stack: number[];
   commandBarOpen: boolean;
+  /** Whether the Set Rail drawer is open in Booth. Auto-collapses 3s after
+   *  a clip fire so the SceneGrid stays sovereign during a mix. */
+  setRailOpen: boolean;
   /**
    * Currently auditioning candidate in the Cue track (headphones-only via
    * Scarlett outs 3/4). Cleared on stopPreview or when the user commits a
@@ -23,10 +24,10 @@ interface AppState {
    */
   previewing: { trackId: number; column: string } | null;
   /**
-   * Tracks the user "shot" from a stem column into the SONG column's rec
-   * list — they want to load this as a whole-song candidate but haven't
-   * committed yet. Rendered above the backend's song recs in the SONG
-   * column. Persisted so a reload preserves the queue.
+   * Soft queue of tracks the user wants surfaced as whole-song candidates
+   * in the Mix-column rec banner. Sourced from rail taps and the legacy
+   * pinToSong gesture. Runtime-only — the persisted equivalent is the
+   * active Set; pins are ephemeral selections within it.
    */
   pinnedSongRecs: ColumnRec[];
 }
@@ -39,10 +40,11 @@ function readPersisted(): Partial<AppState> {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<AppState>;
+    // Only loadedDecks persists — legacy ``stack`` and ``pinnedSongRecs``
+    // keys may still live in storage from older versions; the migration
+    // prompt reads ``stack`` directly to import it as a Set.
     return {
       loadedDecks: parsed.loadedDecks ?? {},
-      stack: parsed.stack ?? [],
-      pinnedSongRecs: parsed.pinnedSongRecs ?? [],
     };
   } catch {
     return {};
@@ -56,8 +58,6 @@ function persist(s: AppState): void {
       STORAGE_KEY,
       JSON.stringify({
         loadedDecks: s.loadedDecks,
-        stack: s.stack,
-        pinnedSongRecs: s.pinnedSongRecs,
       }),
     );
   } catch {
@@ -69,8 +69,8 @@ const initial: AppState = {
   currentSessionId: null,
   currentView: "booth",
   loadedDecks: {},
-  stack: [],
   commandBarOpen: false,
+  setRailOpen: false,
   previewing: null,
   pinnedSongRecs: [],
   ...readPersisted(),
@@ -150,28 +150,6 @@ export const store = {
     state = { ...state, loadedDecks: {} };
     emit();
   },
-  addToStack(id: number): void {
-    if (state.stack.includes(id)) return;
-    state = { ...state, stack: [...state.stack, id] };
-    emit();
-  },
-  removeFromStack(id: number): void {
-    state = { ...state, stack: state.stack.filter((x) => x !== id) };
-    emit();
-  },
-  moveInStack(from: number, to: number): void {
-    if (from === to || from < 0 || to < 0) return;
-    const arr = state.stack.slice();
-    if (from >= arr.length || to >= arr.length) return;
-    const [item] = arr.splice(from, 1);
-    arr.splice(to, 0, item);
-    state = { ...state, stack: arr };
-    emit();
-  },
-  clearStack(): void {
-    state = { ...state, stack: [] };
-    emit();
-  },
   openCommandBar(): void {
     if (state.commandBarOpen) return;
     state = { ...state, commandBarOpen: true };
@@ -180,6 +158,20 @@ export const store = {
   closeCommandBar(): void {
     if (!state.commandBarOpen) return;
     state = { ...state, commandBarOpen: false };
+    emit();
+  },
+  openSetRail(): void {
+    if (state.setRailOpen) return;
+    state = { ...state, setRailOpen: true };
+    emit();
+  },
+  closeSetRail(): void {
+    if (!state.setRailOpen) return;
+    state = { ...state, setRailOpen: false };
+    emit();
+  },
+  toggleSetRail(): void {
+    state = { ...state, setRailOpen: !state.setRailOpen };
     emit();
   },
   setPreviewing(p: { trackId: number; column: string } | null): void {

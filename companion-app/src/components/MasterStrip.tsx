@@ -11,9 +11,9 @@ import { EnergySparkline } from "./EnergySparkline";
 import { VuMeter } from "./VuMeter";
 
 const VIEWS: { id: ViewName; label: string; hint: string }[] = [
-  { id: "booth", label: "Booth", hint: "Live performance — now / next / set" },
-  { id: "crate", label: "Crate", hint: "Pre-set planning, library, vibe search" },
-  { id: "pipeline", label: "Pipeline", hint: "Ingest & processing status" },
+  { id: "booth", label: "Booth", hint: "Live performance — SceneGrid + recs" },
+  { id: "set", label: "Set", hint: "Edit the active set (rail expanded)" },
+  { id: "pipeline", label: "Pipeline", hint: "Ingest & processing status (library inventory)" },
 ];
 
 /**

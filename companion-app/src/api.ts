@@ -3,6 +3,7 @@ import type {
   AddPlayBody,
   ColumnRecsRequest,
   ColumnRecsResponse,
+  DanceSet,
   DeckMap,
   DjSession,
   IngestPreviewResponse,
@@ -14,7 +15,9 @@ import type {
   Recommendation,
   RecommendRequest,
   Region,
+  SetSummary,
   StemFile,
+  TailRecsResponse,
   Track,
   TrackFilters,
   Waveform,
@@ -76,6 +79,21 @@ export function getTracks(filters: TrackFilters = {}): Promise<Track[]> {
 
 export function getTrack(id: number): Promise<Track> {
   return request<Track>(`/tracks/${id}`);
+}
+
+export interface SearchTracksFilters {
+  q?: string;
+  limit?: number;
+  bpm_min?: number;
+  bpm_max?: number;
+  key?: string;
+  energy?: number;
+}
+
+export function searchTracks(filters: SearchTracksFilters = {}): Promise<Track[]> {
+  return request<Track[]>(
+    `/tracks/search${qs(filters as Record<string, unknown>)}`,
+  );
 }
 
 export function getRegions(trackId: number): Promise<Region[]> {
@@ -164,6 +182,106 @@ export function addPlay(
 
 export function endSession(sessionId: number): Promise<DjSession> {
   return request<DjSession>(`/sessions/${sessionId}/end`, { method: "POST" });
+}
+
+// Sets ----------------------------------------------------------------------
+
+export function listSets(): Promise<SetSummary[]> {
+  return request<SetSummary[]>("/sets");
+}
+
+export async function getActiveSet(): Promise<DanceSet | null> {
+  try {
+    return await request<DanceSet>("/sets/active");
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export function getSet(id: number): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${id}`);
+}
+
+export function createSet(name: string, notes?: string): Promise<DanceSet> {
+  return request<DanceSet>("/sets", {
+    method: "POST",
+    body: JSON.stringify({ name, notes: notes ?? null }),
+  });
+}
+
+export function updateSet(
+  id: number,
+  patch: { name?: string; notes?: string | null },
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteSet(id: number): Promise<void> {
+  return request<void>(`/sets/${id}`, { method: "DELETE" });
+}
+
+export function activateSet(id: number): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${id}/activate`, { method: "POST" });
+}
+
+export function addTrackToSet(
+  setId: number,
+  trackId: number,
+  opts: { position?: number; note?: string } = {},
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${setId}/tracks`, {
+    method: "POST",
+    body: JSON.stringify({
+      track_id: trackId,
+      position: opts.position ?? null,
+      note: opts.note ?? null,
+    }),
+  });
+}
+
+export function moveTrackInSet(
+  setId: number,
+  trackId: number,
+  position: number,
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ position }),
+  });
+}
+
+export function updateSetTrackNote(
+  setId: number,
+  trackId: number,
+  note: string,
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function removeTrackFromSet(
+  setId: number,
+  trackId: number,
+): Promise<DanceSet> {
+  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
+    method: "DELETE",
+  });
+}
+
+export function getTailRecs(
+  setId: number,
+  opts: { k?: number; excludeSessionPlays?: boolean } = {},
+): Promise<TailRecsResponse> {
+  const params: Record<string, unknown> = {};
+  if (opts.k != null) params.k = opts.k;
+  if (opts.excludeSessionPlays) params.exclude_session_plays = "true";
+  return request<TailRecsResponse>(`/sets/${setId}/tail-recs${qs(params)}`);
 }
 
 // Pipeline ops --------------------------------------------------------------

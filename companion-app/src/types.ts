@@ -182,7 +182,60 @@ export interface TrackFilters {
   state?: string;
 }
 
-export type ViewName = "booth" | "crate" | "pipeline";
+export type ViewName = "booth" | "set" | "pipeline";
+
+// Sets — persistent curated track plans. Mirrors src/dance/api/schemas.py
+// (SetOut / SetTrackOut / SetSummaryOut / TailRecOut / TailRecsResponse).
+
+export interface SetTrack {
+  track_id: number;
+  position: number;
+  note: string | null;
+  added_at: string; // ISO datetime
+  title: string | null;
+  artist: string | null;
+  bpm: number | null;
+  key_camelot: string | null;
+  floor_energy: number | null;
+}
+
+export interface DanceSet {
+  id: number;
+  name: string;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  tracks: SetTrack[];
+}
+
+export interface SetSummary {
+  id: number;
+  name: string;
+  notes: string | null;
+  is_active: boolean;
+  track_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TailRec {
+  track_id: number;
+  track_title: string | null;
+  track_artist: string | null;
+  bpm: number | null;
+  key_camelot: string | null;
+  floor_energy: number | null;
+  score: number;
+  score_breakdown: Record<string, number>;
+  reasons: string[];
+}
+
+export interface TailRecsResponse {
+  set_id: number;
+  set_track_count: number;
+  recs: TailRec[];
+}
 
 /**
  * A track loaded into Live via "Load to Live". Records which Ableton scene the

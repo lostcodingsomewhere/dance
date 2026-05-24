@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import * as api from "../api";
 import {
@@ -161,6 +162,17 @@ function TerminalColumn({
   tracks: PipelineRecentTrack[];
   onTrackClick?: (track: PipelineRecentTrack) => void;
 }) {
+  const [filter, setFilter] = useState("");
+  const isDoneColumn = label.toLowerCase().includes("done");
+  const filtered = filter.trim()
+    ? tracks.filter((t) => {
+        const q = filter.toLowerCase();
+        return (
+          (t.title ?? "").toLowerCase().includes(q) ||
+          (t.artist ?? "").toLowerCase().includes(q)
+        );
+      })
+    : tracks;
   return (
     <div className={`flex flex-col w-64 shrink-0 rounded-lg ${color} p-2`}>
       <div className="flex items-baseline justify-between mb-2 px-1">
@@ -168,16 +180,28 @@ function TerminalColumn({
           {label}
         </h3>
         <div className="text-xs tabular-nums text-neutral-400">
-          {tracks.length} {tracks.length === PER_COLUMN ? "+ shown" : ""}
+          {filtered.length}
+          {tracks.length === PER_COLUMN && !filter ? " + shown" : ""}
         </div>
       </div>
-      {tracks.length === 0 ? (
+      {/* Library-browse filter — only on the Done column since that's
+          effectively the inventory of fully-processed tracks. Cmd-K is the
+          main search; this is the quiet, in-place browse alternative. */}
+      {isDoneColumn && (
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter title or artist…"
+          className="mb-2 px-2 py-1 rounded bg-neutral-900/60 border border-neutral-800 text-xs text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-neutral-700"
+        />
+      )}
+      {filtered.length === 0 ? (
         <div className="text-xs text-neutral-500 italic px-1 py-2">
-          (empty)
+          {filter ? "no matches" : "(empty)"}
         </div>
       ) : (
         <ul className="space-y-1 flex-1 overflow-y-auto">
-          {tracks.map((t) => (
+          {filtered.map((t) => (
             <TrackCardLite
               key={`t-${t.id}`}
               track={t}

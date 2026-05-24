@@ -51,25 +51,30 @@ describe("App smoke", () => {
     renderApp();
     expect(screen.getByText(/Dance/i)).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
-    // Three view tabs after the live-remixing redesign.
+    // Three view tabs after the Set-Rail consolidation (Crate retired).
     expect(screen.getByRole("tab", { name: "Booth" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Crate" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Set" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Pipeline" })).toBeInTheDocument();
   });
 
-  it("surfaces an API error visibly in the Crate view", async () => {
+  it("set editor renders the empty-state when no active set exists", async () => {
     mockFetch((url) => {
-      if (url.includes("/tracks")) {
-        return new Response("boom", { status: 500 });
+      if (url.includes("/sets/active")) {
+        return jsonResponse({ detail: "no active set" }, 404);
       }
-      return jsonResponse({});
+      if (url.includes("/sessions/current")) {
+        return jsonResponse({ detail: "no active session" }, 404);
+      }
+      return jsonResponse([]);
     });
     renderApp();
     await act(async () => {
-      screen.getByRole("tab", { name: "Crate" }).click();
+      screen.getByRole("tab", { name: "Set" }).click();
     });
     await waitFor(() => {
-      expect(screen.getByText(/Failed to load tracks/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/No active set yet/i),
+      ).toBeInTheDocument();
     });
   });
 });
