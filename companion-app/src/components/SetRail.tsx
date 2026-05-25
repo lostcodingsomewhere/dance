@@ -58,7 +58,9 @@ const PROCESSING_STATES = new Set([
   "embedded",
 ]);
 
-function isProcessing(t: SetTrack): boolean {
+// Exported so SetEditor's row can reuse the same definition — keeps the
+// "should the → Live button be disabled?" gate in lockstep across surfaces.
+export function isProcessing(t: SetTrack): boolean {
   return t.track_state != null && PROCESSING_STATES.has(t.track_state);
 }
 

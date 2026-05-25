@@ -11,8 +11,8 @@
  */
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { searchTracks, updateSetTrackNote } from "../api";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { pushTrackToLive, searchTracks, updateSetTrackNote } from "../api";
 import {
   useActiveSet,
   useActivateSet,
@@ -28,6 +28,7 @@ import { EnergyBar } from "../components/EnergyBar";
 import { KeyBadge } from "../components/KeyBadge";
 import { SetMenu } from "../components/SetMenu";
 import { StemKindsChip } from "../components/StemKindsChip";
+import { isProcessing } from "../components/SetRail";
 
 export function SetEditor() {
   const active = useActiveSet();
@@ -153,6 +154,16 @@ function EditableTrackRow({
 }) {
   const move = useMoveTrackInSet();
   const remove = useRemoveTrackFromSet();
+  // Load-into-Live respects the per-slot stem_kinds filter so the editor's
+  // load action matches the rail's. Disabled while the track is still
+  // running through the pipeline (no stems on disk yet to push over OSC).
+  const forceLoad = useMutation({
+    mutationFn: () =>
+      pushTrackToLive(track.track_id, {
+        includeStems: true,
+        kinds: track.stem_kinds ?? undefined,
+      }),
+  });
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState(track.note ?? "");
 
@@ -181,6 +192,20 @@ function EditableTrackRow({
           stemKinds={track.stem_kinds}
           variant="full"
         />
+        <button
+          type="button"
+          disabled={isProcessing(track) || forceLoad.isPending}
+          onClick={() => forceLoad.mutate()}
+          className="px-2 h-6 text-xs font-medium rounded text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/20 inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed"
+          title={
+            isProcessing(track)
+              ? "Pipeline still running — load enabled when complete"
+              : "Load stems into Live now"
+          }
+          aria-label="load into Live"
+        >
+          → Live
+        </button>
         <button
           type="button"
           disabled={index === 0 || move.isPending}
