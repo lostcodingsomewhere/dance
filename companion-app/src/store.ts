@@ -29,7 +29,12 @@ interface AppState {
    * track to a real deck row. Local state only — backend tracks the actual
    * Cue clip via the bridge.
    */
-  previewing: { trackId: number; column: string } | null;
+  previewing: {
+    trackId: number;
+    column: string;
+    cueTrackIdx?: number | null;
+    slot?: number | null;
+  } | null;
   /**
    * Soft queue of tracks the user wants surfaced as whole-song candidates
    * in the Mix-column rec banner. Sourced from rail taps and the legacy
@@ -252,7 +257,16 @@ export const store = {
     state = { ...state, stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER };
     emit();
   },
-  setPreviewing(p: { trackId: number; column: string } | null): void {
+  setPreviewing(
+    p:
+      | {
+          trackId: number;
+          column: string;
+          cueTrackIdx?: number | null;
+          slot?: number | null;
+        }
+      | null,
+  ): void {
     state = { ...state, previewing: p };
     emit();
   },

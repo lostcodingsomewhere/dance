@@ -16,6 +16,16 @@ export function useStartPreview() {
     onMutate: (vars) => {
       store.setPreviewing({ trackId: vars.trackId, column: vars.column });
     },
+    onSuccess: (result, vars) => {
+      // Backfill cue track/slot so CueStrip's waveform can seek into the
+      // running preview clip via /ableton/transport/seek.
+      store.setPreviewing({
+        trackId: vars.trackId,
+        column: vars.column,
+        cueTrackIdx: result.cue_track_idx ?? null,
+        slot: result.slot ?? null,
+      });
+    },
     onError: () => {
       // If the request fails, drop the optimistic preview state so the
       // button doesn't get stuck.
@@ -34,6 +44,11 @@ export function useStopPreview() {
 }
 
 /** Read the currently-previewing candidate (null when nothing is auditioning). */
-export function usePreviewState(): { trackId: number; column: string } | null {
+export function usePreviewState(): {
+  trackId: number;
+  column: string;
+  cueTrackIdx?: number | null;
+  slot?: number | null;
+} | null {
   return useAppStore((s) => s.previewing);
 }

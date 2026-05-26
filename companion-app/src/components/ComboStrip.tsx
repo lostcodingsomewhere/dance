@@ -5,6 +5,7 @@ import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { formatDuration, formatRemaining } from "../lib/format";
+import { ratioToBeats, snapRatioToSection } from "../lib/seek";
 import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
 import { useAppStore } from "../store";
 import type { DeckCell } from "../types";
@@ -181,14 +182,8 @@ function ComboCard({
   // ratio=0 (clip start) when the click is before any section.
   function handleSeek(ratio: number) {
     if (!duration || !clipBpm || clipBpm <= 0) return;
-    const sectionStarts = (regions.data ?? [])
-      .filter((r) => r.region_type === "section")
-      .map((r) => r.position_ms / 1000 / duration)
-      .filter((s) => s <= ratio + 0.001) // small epsilon for click on icon
-      .sort((a, b) => b - a);
-    const snapped = sectionStarts.length > 0 ? sectionStarts[0] : 0;
-    const beats = snapped * duration * (clipBpm / 60);
-    onSeek(beats);
+    const snapped = snapRatioToSection(ratio, regions.data, duration);
+    onSeek(ratioToBeats(snapped, duration, clipBpm));
   }
 
   if (!cell) {

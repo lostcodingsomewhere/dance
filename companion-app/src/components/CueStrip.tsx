@@ -5,7 +5,9 @@ import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
 import { useRegions } from "../hooks/useRegions";
 import { useTrackWaveform } from "../hooks/useWaveform";
+import { useSeekClip } from "../hooks/useTransport";
 import { formatDuration, formatRemaining } from "../lib/format";
+import { ratioToBeats, snapRatioToSection } from "../lib/seek";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
 import { RoleIcon } from "./RoleIcon";
@@ -36,6 +38,7 @@ export function CueStrip() {
   // master.
   const regions = useRegions(previewing?.trackId ?? null);
   const ableton = useAbletonState();
+  const seek = useSeekClip();
   const qc = useQueryClient();
 
   const commit = useMutation({
@@ -148,6 +151,25 @@ export function CueStrip() {
           playheadColor="rgb(34, 211, 238)"
           regions={regions.data ?? undefined}
           durationSeconds={waveform.data?.duration_seconds}
+          onSeek={
+            previewing.cueTrackIdx != null &&
+            previewing.slot != null &&
+            duration &&
+            tempo
+              ? (ratio) => {
+                  const snapped = snapRatioToSection(
+                    ratio,
+                    regions.data,
+                    duration,
+                  );
+                  seek.mutate({
+                    track: previewing.cueTrackIdx!,
+                    slot: previewing.slot!,
+                    positionBeats: ratioToBeats(snapped, duration, tempo),
+                  });
+                }
+              : undefined
+          }
         />
       </div>
       <div className="shrink-0 flex items-center gap-1.5">

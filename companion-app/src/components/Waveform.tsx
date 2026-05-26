@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type React from "react";
 import type { Region } from "../types";
+import { snapRatioToSection } from "../lib/seek";
 
 export interface WaveformProps {
   peaks: number[]; // normalized 0-1 amplitudes
@@ -123,12 +125,30 @@ export function Waveform({
           })
       : [];
 
+  const [hoverRatio, setHoverRatio] = useState<number | null>(null);
+
+  function ratioFromEvent(e: React.MouseEvent<SVGSVGElement>): number {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  }
+
   function handleClick(e: React.MouseEvent<SVGSVGElement>) {
     if (!onSeek) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek(ratio);
+    onSeek(ratioFromEvent(e));
   }
+
+  function handleMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!onSeek) return;
+    setHoverRatio(ratioFromEvent(e));
+  }
+
+  // Ghost playhead = where the click *would* land if the user clicked now.
+  // Snaps to nearest section within the same tolerance the seek helper
+  // uses, so DJs see "I'm about to land on the Drop" before committing.
+  const ghostRatio =
+    hoverRatio != null
+      ? snapRatioToSection(hoverRatio, regions, durationSeconds ?? 0)
+      : null;
 
   if (!hasPeaks) {
     return (
@@ -179,6 +199,8 @@ export function Waveform({
         cursor: onSeek ? "pointer" : undefined,
       }}
       onClick={onSeek ? handleClick : undefined}
+      onMouseMove={onSeek ? handleMove : undefined}
+      onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
     >
       {/* Section bands — rendered first so peaks draw on top. Each band is
           a faint colored rect spanning the section's time-range. */}
@@ -244,6 +266,18 @@ export function Waveform({
           />
         );
       })}
+      {ghostRatio != null && (
+        <line
+          data-testid="waveform-ghost-playhead"
+          x1={ghostRatio * 100}
+          x2={ghostRatio * 100}
+          y1={0}
+          y2={H}
+          stroke="rgba(255,255,255,0.55)"
+          strokeWidth="0.3"
+          strokeDasharray="1 1"
+        />
+      )}
       {showPlayhead && (
         <line
           data-testid="waveform-playhead"
@@ -284,6 +318,10 @@ export function Waveform({
                 }
               : undefined
           }
+          onMouseMove={
+            onSeek ? () => setHoverRatio(b.x / 100) : undefined
+          }
+          onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
           style={{
             position: "absolute",
             left: `${b.x}%`,
