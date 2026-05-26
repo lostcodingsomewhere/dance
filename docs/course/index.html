@@ -537,20 +537,21 @@ OUTRO      ─── 8–32 bars, sparse again
           <li><strong>Vocals</strong> — lead voice, harmonies, any sung content</li>
           <li><strong>Other</strong> — synths, guitar, keys, pads — everything else</li>
         </ul>
-        <p>These 4 stems, plus the original full mix (called <strong>Mix</strong>), give you 5 columns per track. In Ableton, each column is one audio track. Each row is one source song. You fire cells independently — any stem from any source, at any time, in sync.</p>
+        <p>These 4 stems, plus the original full mix (called <strong>Mix</strong>), give you 5 columns per <em>deck</em>. And the rig runs <strong>two decks side-by-side</strong> — Deck A and Deck B — just like a traditional CDJ setup. So you get 10 audio tracks in Live total: 4 stems × 2 decks + 2 mix references. Deck A holds what's playing, Deck B holds what's coming in. You crossfade between them just like a regular DJ — except inside each deck you can swap individual stems.</p>
 
         <h2>What This Unlocks</h2>
         <p>Instead of swapping whole songs every 3–5 minutes, you swap layers every 30–90 seconds. Example transition:</p>
 
-        <div class="diagram"><span class="hl">Track A</span> drums + bass + vocals playing...
+        <div class="diagram"><span class="hl">Deck A</span> playing: Track 1's drums + bass + vocals
+<span class="hl">Deck B</span> loaded: Track 2's full stem set (silent, crossfader at A)
 
-→ Fire <span class="hl">Track B</span> drums (both drum stems playing simultaneously)
-→ They're tempo-synced — they lock perfectly
-→ After 8 bars: cut Track A drums
-→ Now only Track B drums play — the groove has shifted subtly
-→ Swap the bass: fire Track B bass, cut Track A bass
-→ You're now mostly on Track B — but maybe keep Track A vocals...
-→ Fade them out over 4 bars
+→ Fire <span class="hl">Deck B</span> drums (crossfader still at A — only Deck A audible)
+→ Slide crossfader toward center: both drum stems audible, tempo-synced
+→ After 8 bars: crossfader to B, Deck A drums fade out
+→ Now only Deck B drums play — the groove has shifted
+→ Swap one more stem: cut Deck A bass, fire Deck B bass
+→ Maybe keep Deck A vocals over Deck B groove for 4 more bars
+→ Then crossfade fully to Deck B
 
 Total transition: ~45 seconds
 It felt like a build, not a cut.</div>
@@ -565,7 +566,7 @@ It felt like a build, not a cut.</div>
           <div class="win-label">You Got It When</div>
           <ul>
             <li>You can describe what Demucs does and why it runs ahead of time</li>
-            <li>You understand that each column = one stem role, each row = one source track</li>
+            <li>You understand the deck-pair model: two decks (A and B), each with 4 stem roles + a mix reference, totaling 10 audio tracks in Live</li>
             <li>You can name at least 2 moves that stems enable that a standard DJ setup cannot do</li>
           </ul>
         </div>
@@ -582,7 +583,7 @@ It felt like a build, not a cut.</div>
 
         <h2>The Hardware</h2>
         <p><strong>Focusrite Scarlett 4i4</strong> — your audio interface. The Mac sends audio here via USB. The 4i4 has 4 outputs: outs 1/2 go to your Edifier speakers (master mix). Outs 3/4 go to your Bose headphones (cue bus — what you're auditioning before it hits the speakers). This is how pros preview tracks without the crowd hearing them.</p>
-        <p><strong>Akai APC40 mk2</strong> — your controller. Connected via USB. Ableton sees it automatically as a control surface. The main pad grid is 5 columns × 8 rows — that's your stem grid. 8 faders control volume. 16 knobs do EQ.</p>
+        <p><strong>Akai APC40 mk2</strong> — your controller. Connected via USB. Ableton sees it automatically as a control surface. The main pad grid is <strong>8 columns × 5 rows</strong> — one column per stem deck. The 8 channel faders map 1:1 to the 8 stem decks (4 stems × 2 sides): faders 1–4 control Deck A's drums/bass/vocals/other, faders 5–8 control Deck B's drums/bass/vocals/other. The mix-reference tracks live beyond the default 8-strip view (use Bank-shift to reach them). Above each fader: a per-strip <span class="hl">A</span>/<span class="hl">B</span> button — already pre-assigned by our <code>.als</code> writer so Deck A tracks route to crossfader group A, Deck B to group B. The hardware crossfader sweeps between them. 8 channel knobs at the top do EQ / sends; the dedicated Cue Level knob in the master section sets your headphone volume.</p>
         <p><strong>MacBook Pro M2 Pro</strong> — runs everything. Ableton Live 12.4 + the Dance backend + the companion app. All three running simultaneously.</p>
 
         <h2>The Software Stack</h2>
@@ -826,25 +827,25 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <div class="expert-take"><p>Before anything else: get sound out of the speakers. Everything complicated comes later. Right now, fire a clip and hear it. That's lesson one.</p></div>
 
         <h2>Open Your First .als</h2>
-        <p>Navigate to <code>~/Music/Dance/Sets/</code>. Open any .als file. Ableton launches with 5 tracks already set up — one per stem role (drums, bass, vocals, other, mix). Each track may have multiple clips in its clip slots (one per source song that was in that set).</p>
+        <p>Navigate to <code>~/Music/Dance/Sets/</code>. Open any .als file. Ableton launches with <strong>10 audio tracks</strong> already set up: 8 stem decks (4 stems × A/B sides) plus 2 mix-reference tracks (one per deck). The first track you'll see is <code>Deck Drums A</code>, then <code>Deck Drums B</code>, alternating across the role pairs, with <code>Deck Mix A</code> and <code>Deck Mix B</code> at the end. The mix tracks are muted by default — they're a safety net, not an active layer.</p>
         <p>This is the <strong>Session View</strong>. It's a grid of loops. Unlike Arrangement View (the linear timeline), Session View lets you fire any clip at any time. This is your performance surface.</p>
 
         <h2>Fire Your First Clip</h2>
         <div class="step-block">
           <div class="step-title">Make Sound Now</div>
           <ol>
-            <li>In Ableton's Session View, find the first row of clips (row 1 across all 5 tracks).</li>
-            <li>Click the <strong>launch button</strong> (the triangle/play icon) on the clip in the Drums column (leftmost column).</li>
+            <li>In Ableton's Session View, look at the first row of clips. Your A-side stem tracks (<code>Deck Drums A</code>, <code>Deck Bass A</code>, etc.) have audio clips loaded; the B-side tracks are empty — they're waiting for an incoming song.</li>
+            <li>Click the <strong>launch button</strong> on the clip in <code>Deck Drums A</code> (leftmost stem track).</li>
             <li>You should hear the drum stem playing. If not, check: is the master volume up? Is the Scarlett selected as output device in Ableton?</li>
-            <li>Now click the Bass clip in the same row. Both drums and bass should be playing together.</li>
+            <li>Now click the Bass A clip in the same row. Both drums and bass should be playing together.</li>
             <li>Press the <strong>Stop All Clips</strong> button (the square at the bottom of each track's clip slots, or the "Stop" button in the transport bar).</li>
           </ol>
-          <div class="note">All clips in the same row belong to the same source track. Firing row 1 drums + row 1 bass = that source track's drums + bass playing together in sync.</div>
+          <div class="note">A-side tracks are pre-populated by <code>dance export-als</code>. B-side tracks ship empty because they're reserved for the <em>next</em> song you'll transition into. The crossfader's at center by default — both sides audible — so just firing A-side clips is enough to hear sound right now.</div>
         </div>
 
         <h2>The APC40 Grid</h2>
-        <p>The APC40's 5×8 pad grid mirrors Ableton's clip slots. Column 1 = Track 1 (drums). Column 2 = Track 2 (bass). Each row = one scene (one source song). Press a pad = fire that clip. Press a lit pad again = stop that clip. The pads glow amber when a clip is loaded, green when playing, off when empty.</p>
-        <p>Run your first few pad fires from the APC40 instead of the mouse. Press row 1, column 1 (drums). Then row 1, column 2 (bass). Feel the physical grid — this is your instrument.</p>
+        <p>The APC40's 8-column × 5-row pad grid mirrors the 8 stem decks (4 stems × A/B). Columns 1–4 = Deck A's drums / bass / vocals / other. Columns 5–8 = Deck B's same four stems. Each row = one scene. The two mix-reference tracks live just beyond the default 8-strip view; bank-shift to reach them. Above each fader you'll see <span class="hl">A</span>/<span class="hl">B</span> crossfader-group buttons — already lit per-side because our <code>.als</code> writer baked in the assignments.</p>
+        <p>Pads glow amber when a clip is loaded, green when playing, off when empty. Press a pad = fire that clip. Press a lit pad again = stop. Try firing from the APC40 instead of the mouse: row 1, column 1 (Deck A drums). Then row 1, column 5 (Deck B drums — empty unless you've loaded a second song). The physical grid is your instrument.</p>
 
         <h2>Set Your Tempo</h2>
         <p>Look at the top of the Ableton window. You'll see a tempo field (e.g., 128.00 BPM). Your .als file was generated with the detected BPM from your first track. All clips in the project are warped to this tempo. If you fire a clip from a different source track, it still plays in time — Ableton stretches it to match.</p>
@@ -869,17 +870,18 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <div class="expert-take"><p>The faders are your primary instrument. Get comfortable with them before you worry about anything else. And do your first bass swap today — it's simpler than it sounds and it immediately makes you feel like a DJ.</p></div>
 
         <h2>Fader Fundamentals</h2>
-        <p>The APC40's 8 channel faders control volume for 8 tracks. In your 5-column setup: fader 1 = drums, fader 2 = bass, fader 3 = vocals, fader 4 = other, fader 5 = mix. The master fader (on the right) controls overall output volume.</p>
+        <p>The APC40's 8 channel faders control volume for the 8 stem decks. Faders 1–4 = Deck A (drums / bass / vocals / other). Faders 5–8 = Deck B (same four roles). The master fader (right) controls overall output. The <strong>crossfader</strong> (bottom-center on the APC40) sweeps between A-group tracks and B-group tracks — pull left and only Deck A is audible; pull right and only Deck B; centered and both decks ride together.</p>
         <p>Move a fader slowly. Notice how small changes are — bringing drums from 100% to 80% is subtle but audible. 100% to 50% is obvious. 100% to 0% is a cut. You'll use all of these.</p>
 
         <h2>Ride the Groove</h2>
         <div class="step-block">
           <div class="step-title">Fader Practice (5 minutes)</div>
           <ol>
-            <li>Fire row 1 (all stems from source track 1): drums + bass + vocals + other all playing.</li>
-            <li>Slowly pull the <strong>vocals fader</strong> down to 0. Listen. The track becomes instrumental.</li>
+            <li>Load a song onto Deck A (use the ⤒A button on a SONG rec card in the companion app). All four A-side stem cells fill on row 1.</li>
+            <li>With the crossfader at the center or pulled left, fire row 1 from the APC40. Deck A's drums + bass + vocals + other are all playing.</li>
+            <li>Slowly pull <strong>fader 3</strong> (Deck A vocals) down to 0. Listen. The track becomes instrumental.</li>
             <li>Slowly bring it back up. Listen to the vocal re-enter.</li>
-            <li>Now try the <strong>drums fader</strong>: pull it down gradually. At 0%, just bass + vocals + other. Interesting texture.</li>
+            <li>Now try <strong>fader 1</strong> (Deck A drums): pull it down gradually. At 0%, just bass + vocals + other. Interesting texture.</li>
             <li>Bring drums back in. Do this a few times — feel the difference in groove presence.</li>
             <li>Practice making moves on every 8th bar (listen for phrase boundaries). Land your fader move as a new phrase starts.</li>
           </ol>
@@ -887,21 +889,23 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
 
         <h2>Your First Bass Swap</h2>
         <div class="step-block">
-          <div class="step-title">Bass Swap — Step by Step</div>
+          <div class="step-title">Bass Swap Across Decks — Step by Step</div>
           <ol>
-            <li>Fire row 1 drums + bass. Both playing.</li>
-            <li>Fire row 2 drums (from a different source track). Now both drum stems play together — layered groove.</li>
-            <li>Listen to the interplay for 8 bars. They're in sync because Ableton stretched them to the same tempo.</li>
+            <li>Deck A is playing (row 1 fired, crossfader at center or left). Drums + bass audible.</li>
+            <li>In the companion app, find a second SONG rec and click <strong>⤒B</strong> to load it onto Deck B. All four B-side stem cells fill on a fresh row.</li>
+            <li>Push the crossfader slightly toward B (~25% travel) so a hint of Deck B will bleed in once you fire its clips.</li>
+            <li>Fire <strong>Deck B's drums</strong> (APC40 row 1, column 5). Both drum stems now play together — layered groove. They lock to the same tempo because every clip is warped to master BPM.</li>
+            <li>Listen to the interplay for 8 bars. Watch the BPM-Δ chip in the master strip — if it's red (&gt;4 BPM gap) consider hitting <strong>SYNC</strong> on Deck B first.</li>
             <li>At the next phrase boundary (bar 1 of a new phrase):
               <ul>
-                <li>Lower row 1 bass fader to 0 (or press row 1 bass pad to stop it)</li>
-                <li>Immediately fire row 2 bass</li>
+                <li>Lower <strong>fader 2</strong> (Deck A bass) to 0 — or stop the Deck A bass cell with the APC pad</li>
+                <li>Immediately fire <strong>Deck B's bass</strong> (column 6)</li>
               </ul>
-              That's the bass swap. The bass identity changed. It happened clean.
+              That's the bass swap. The bass identity changed across decks. Clean.
             </li>
-            <li>Now cut row 1 drums (press the pad or lower the fader). You're fully on row 2.</li>
+            <li>Now cut Deck A drums and bring the crossfader fully to B. You're on Deck B.</li>
           </ol>
-          <div class="note">The transition probably sounded rough the first time — that's normal. Do it 3 more times. By the 4th attempt it'll feel more natural. You're building muscle memory.</div>
+          <div class="note">The transition probably sounded rough the first time — that's normal. Do it 3 more times. By the 4th attempt it'll feel more natural. You're building muscle memory <em>and</em> learning to think in two-deck terms.</div>
         </div>
 
         <h2>The First Moment</h2>
@@ -935,40 +939,54 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <div class="expert-take"><p>The companion app is your second screen. Ableton is the engine; this is your dashboard. Everything you need to make decisions in real time lives here.</p></div>
 
         <h2>Open the Booth View</h2>
-        <p>Open <code>http://localhost:5173</code> in a browser. Click the <strong>Booth</strong> tab in the top nav (or it opens there by default).</p>
-        <p>The Booth view has several sections. Here's what each one does:</p>
+        <p>Open <code>http://localhost:5173</code> in a browser (Vite may pick 5174 if 5173 is busy — check the URL bar). Click the <strong>Booth</strong> tab in the top nav (or it opens there by default).</p>
+        <p>The Booth view has six sections, top to bottom:</p>
 
-        <h2>SceneGrid</h2>
-        <p>At the top of Booth is the <strong>SceneGrid</strong> — a mirror of Ableton's clip grid. You can see which clips are playing (glowing green), which are loaded (amber), and which are empty. You can tap cells in the grid to fire clips directly from the app — same as pressing the APC40 pads. Use this when you want to fire a specific stem without reaching for the controller.</p>
+        <h2>1. MasterStrip (top header)</h2>
+        <p>Big BPM number on the left, transport icons (<strong>▶/⏸ ■ ⚠ ●</strong>), live key, ARC sparkline, Live heartbeat, RESYNC, search, view tabs. When both decks have anchors and disagree, a <strong>Δ BPM chip</strong> appears next to the tempo (amber for small gaps, rose for &gt;4 BPM — a hint to hit SYNC before transitioning).</p>
 
-        <h2>MasterVisualizer (Stacked Stem Waveforms)</h2>
-        <p>Below the grid is a row of waveform strips — one per stem role. Each strip shows the actual audio waveform of the currently-playing clip for that role, with a playhead moving in real time. You can see at a glance how dense each stem is right now and where the next phrase break is coming.</p>
+        <h2>2. The Two Decks (DECK A | DECK B)</h2>
+        <p>Two big panels side by side, A on the left (violet accent), B on the right (indigo). Each shows:</p>
+        <ul>
+          <li>Deck identity header — <strong>DECK A</strong> or <strong>DECK B</strong>, plus the anchored track's title / artist / BPM / key / energy</li>
+          <li>Per-deck transport: <strong>▶</strong> fires that deck's anchored scene, <strong>■</strong> halts every clip on that side, <strong>PFL</strong> toggle routes that deck to your headphones</li>
+          <li><strong>SYNC</strong> button when the deck's source BPM differs from master — one click snaps master tempo to match</li>
+          <li>A big stacked-stem waveform of what's anchored, with section bands + cue tick markers. Hover any marker for a tooltip; click a cue or section to seek to that point. The playhead scrolls in real time as Live plays.</li>
+        </ul>
 
-        <h2>ComboStrip (Rec Banners)</h2>
-        <p>Each deck column has a recommendation banner showing which tracks the AI thinks fit best in that column right now. The recs are scored based on: key compatibility with what's playing, BPM proximity, energy match, and embedding similarity. The companion app's AI has seen your whole library and runs this math continuously.</p>
+        <h2>3. Crossfader</h2>
+        <p>A horizontal gradient bar between the two decks. Mirrors the APC40 hardware crossfader live. Drag the on-screen handle as a fallback. A on the left, B on the right — the gradient tells you which deck is dominant at any position.</p>
 
-        <h2>CueStrip</h2>
-        <p>The CueStrip shows what's currently soloed in your headphones — what you're auditioning before committing to the master. If you solo a track in Ableton, it appears here. One-click <strong>Load to master</strong> fires all its stems into the active columns.</p>
+        <h2>4. SceneGrid (10 columns, mirror layout)</h2>
+        <p>Below the decks is the canonical 10-column scene grid. Columns read left-to-right as: <code>DRUMS | BASS | VOCALS | MELODY | SONG</code> for Deck A, then mirrored back <code>SONG | MELODY | VOCALS | BASS | DRUMS</code> for Deck B. Each row is a scene. Every cell shows a small <span class="hl">A</span> or <span class="hl">B</span> badge so you always know which deck the slot belongs to. Tap any loaded cell to fire/stop it; tap the row label on the left to fire the whole scene (anchor mode).</p>
 
-        <h2>SetRail (⌘\\ to open)</h2>
-        <p>The slide-out panel on the right. Shows your active set (planned tracklist) and tail recommendations based on what you've been playing. More on this in Lesson 5.3.</p>
+        <h2>5. CueStrip + Rec Banners</h2>
+        <p>The CueStrip shows what's currently being auditioned through your headphones (the Cue track). One-click <strong>Load to master</strong> commits it to a real deck row. Below: five rec banners, one per source role (drums / bass / vocals / melody / song). Each rec card has <strong>▶ ⤒A ⤒B</strong> buttons — preview, load to Deck A, load to Deck B. Stem cards also have a tiny <strong>↗</strong> that pins the track to the SONG rec list.</p>
+
+        <h2>6. SetRail (⌘\\ to open)</h2>
+        <p>Slide-out panel on the right. Active set tracklist + tail recommendations scored against the trailing arc. More on this in Lesson 5.3.</p>
 
         <div class="step-block">
           <div class="step-title">Explore the Booth View</div>
           <ol>
             <li>Open the companion app with the backend running and an .als file open in Ableton.</li>
-            <li>Play a clip in Ableton. Watch the corresponding cell in SceneGrid turn green.</li>
-            <li>Watch the waveform in MasterVisualizer animate with the playhead.</li>
-            <li>Look at the ComboStrip banners — do you recognize any of the suggested tracks?</li>
-            <li>Press ⌘\\ to open the SetRail. Close it again with ⌘\\.</li>
+            <li>Load a song to Deck A from any rec card's ⤒A button.</li>
+            <li>Watch Deck A's waveform header populate with the track's metadata and stacked waveform.</li>
+            <li>Fire the row from the APC40 — the deck's ▶ live badge lights up and the playhead starts scrolling.</li>
+            <li>Hover any section band or cue tick on the deck waveform — the tooltip pops above the marker.</li>
+            <li>Click a section or cue marker — the playhead jumps there (Live time-codes via OSC).</li>
+            <li>Push the APC40 crossfader — the on-screen crossfader bar follows.</li>
+            <li>Load a different song to Deck B (⤒B). Watch the Δ BPM chip appear in the MasterStrip if the BPMs differ.</li>
+            <li>Press ⌘\\ to open the SetRail. Close with ⌘\\ again.</li>
           </ol>
         </div>
 
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
-            <li>You can name each section of the Booth view and what it shows</li>
-            <li>You've seen the SceneGrid update live when you fire a clip in Ableton</li>
+            <li>You can name all six sections of the Booth and what each is for</li>
+            <li>You understand the two-deck layout — A on the left, B on the right, crossfader between them</li>
+            <li>You can hover and click section/cue markers on a deck waveform to jump positions</li>
             <li>You can open and close the SetRail with ⌘\\</li>
           </ul>
         </div>
