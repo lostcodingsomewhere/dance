@@ -32,20 +32,30 @@ export function MasterStrip() {
 
   // Camelot key of the dominant playing cell — the harmonic anchor for compat
   // math. We scan playing_clips against the deck columns and pick the first
-  // cell that's actually playing (drums first, so the kick's root note
-  // anchors when present). Falls back to null when nothing is firing.
+  // cell that's actually playing (vocals first — the human voice anchors
+  // perceived key most strongly). Falls back to null when nothing is firing.
+  //
+  // Deck-pair: scans both A and B sides per source role; first playing cell
+  // wins regardless of side.
   const currentKey = useMemo<string | null>(() => {
     const columns = deckMap.data?.columns;
     const cells = deckMap.data?.cells ?? [];
     const playing = state.playing_clips ?? {};
     if (!columns) return null;
-    for (const role of ["vocals", "bass", "drums", "other", "mix"]) {
-      const trackIdx = columns[role];
+    const orderedDeckKinds = [
+      "vocals_a", "vocals_b",
+      "bass_a", "bass_b",
+      "drums_a", "drums_b",
+      "other_a", "other_b",
+      "mix",
+    ];
+    for (const dk of orderedDeckKinds) {
+      const trackIdx = columns[dk];
       if (trackIdx == null) continue;
       const sIdx = playing[trackIdx];
       if (sIdx == null) continue;
       const cell = cells.find(
-        (c) => c.scene_index === sIdx && c.kind === role,
+        (c) => c.scene_index === sIdx && c.kind === dk,
       );
       if (cell?.key_camelot) return cell.key_camelot;
     }

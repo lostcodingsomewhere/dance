@@ -219,10 +219,20 @@ class AbletonBridge:
         try:
             data = json.loads(raw)
             cols = data.get("deck_columns")
+            is_pre_pair_shape = False
             if isinstance(cols, dict):
-                self._deck_columns = {
-                    self._migrate_deck_kind(str(k)): int(v) for k, v in cols.items()
-                }
+                # If the persisted columns dict doesn't include the new A/B
+                # deck kinds, it's a pre-pair shape (5 columns). Drop it
+                # entirely so the next push_track_to_live recreates the
+                # full 9-deck layout in Live. Migrating in place would
+                # leave us with 4 stem decks instead of 8 — worse than
+                # rebuilding.
+                key_set = set(cols.keys())
+                if "drums_a" not in key_set and "drums" in key_set:
+                    is_pre_pair_shape = True
+                    self._deck_columns = None
+                else:
+                    self._deck_columns = {str(k): int(v) for k, v in cols.items()}
             cells = data.get("deck_cells", [])
             if isinstance(cells, list):
                 self._deck_cells = {
@@ -233,14 +243,20 @@ class AbletonBridge:
             if isinstance(cue, int):
                 self._cue_track_idx = cue
             logger.info(
-                "Restored bridge state: %d columns, %d cells",
+                "Restored bridge state: %d columns, %d cells%s",
                 len(self._deck_columns or {}),
                 len(self._deck_cells),
+                " (pre-pair columns discarded — will rebuild)"
+                    if is_pre_pair_shape else "",
             )
             # Forward-migrate any pre-A/B state so the next persist writes
-            # in the new shape and we never re-process this.
-            if any(k in {"drums", "bass", "vocals", "other"}
-                   for _, k in self._deck_cells):
+            # in the new shape and we never re-process this. Triggered
+            # either by old cells (renamed by _migrate_deck_kind) or by
+            # the columns-discard branch above.
+            if is_pre_pair_shape or any(
+                k in {"drums", "bass", "vocals", "other"}
+                for _, k in self._deck_cells
+            ):
                 self._persist_state()  # pragma: no cover - migration edge
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             logger.warning("Could not parse persisted bridge state: %s", exc)

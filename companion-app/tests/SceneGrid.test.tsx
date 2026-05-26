@@ -66,8 +66,9 @@ beforeEach(() => {
   fireCellMutate.mockReset();
 });
 
-// Helper: build a full 4-stem row (drums/bass/vocals/other) from one source
-// track so anchor-mode tests don't have to enumerate the cells inline.
+// Helper: build a full 4-stem row from one source track. ``side`` picks
+// which deck pair gets the stems (A or B). Anchor-mode tests typically
+// use 'a' (the conventional primary side).
 function fillRow(
   sceneIndex: number,
   track: {
@@ -78,15 +79,26 @@ function fillRow(
     key_camelot: string;
     floor_energy: number;
   },
+  side: "a" | "b" = "a",
 ) {
-  for (const kind of ["drums", "bass", "vocals", "other"]) {
+  for (const source of ["drums", "bass", "vocals", "other"]) {
     state.cells.push({
       scene_index: sceneIndex,
-      kind,
+      kind: `${source}_${side}`,
       ...track,
     });
   }
 }
+
+// 9 deck columns (8 stem decks A/B per role + mix) — the post-deck-pair
+// reality. Tests use this constant rather than re-typing it everywhere.
+const DECK_COLUMNS: Record<string, number> = {
+  drums_a: 0, drums_b: 1,
+  bass_a: 2, bass_b: 3,
+  vocals_a: 4, vocals_b: 5,
+  other_a: 6, other_b: 7,
+  mix: 8,
+};
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -99,7 +111,7 @@ describe("SceneGrid", () => {
   });
 
   it("renders 3 rows by default once deck columns exist, with an expand toggle", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+    state.columns = DECK_COLUMNS;
     renderGrid();
     // Default-collapsed: rows 1..3 visible, 4..8 hidden behind expand toggle.
     for (let i = 1; i <= 3; i++) {
@@ -112,7 +124,7 @@ describe("SceneGrid", () => {
   });
 
   it("expands to 8 rows when the toggle is clicked", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+    state.columns = DECK_COLUMNS;
     renderGrid();
     fireEvent.click(
       screen.getByRole("button", { name: /show all 8 rows/i }),
@@ -122,8 +134,8 @@ describe("SceneGrid", () => {
     }
   });
 
-  it("shows the loaded track title on each cell of an anchor-loaded row", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+  it("shows the loaded track title on each A-side half-cell of an anchor row + once in the SONG shadow", () => {
+    state.columns = DECK_COLUMNS;
     fillRow(0, {
       track_id: 42,
       title: "Test Track",
@@ -131,17 +143,16 @@ describe("SceneGrid", () => {
       bpm: 128,
       key_camelot: "8A",
       floor_energy: 6,
-    });
+    }, "a");
     renderGrid();
     const titles = screen.getAllByText(/Test Track/i);
-    // Four cells (drums/bass/vocals/other) on the loaded row display title.
-    // The "Song" column cell stays empty for whole-song loads (the mix
-    // column is never populated by push_track_to_live).
-    expect(titles.length).toBe(4);
+    // 4 A-side half-cells (drums_a/bass_a/vocals_a/other_a) + 1 SONG
+    // shadow cell that infers the anchor track = 5 total.
+    expect(titles.length).toBe(5);
   });
 
   it("fires the whole scene when its row label is clicked", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+    state.columns = DECK_COLUMNS;
     fillRow(2, {
       track_id: 7,
       title: "Anchor Track",
@@ -156,12 +167,12 @@ describe("SceneGrid", () => {
     expect(fireSceneMutate).toHaveBeenCalledWith(2);
   });
 
-  it("fires only the matching cell when a loaded cell is clicked", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
-    // Single-stem load: drums-only in scene 0.
+  it("fires only the matching half-cell when a loaded cell is clicked", () => {
+    state.columns = DECK_COLUMNS;
+    // Single-stem load: drums on A-side of scene 0.
     state.cells.push({
       scene_index: 0,
-      kind: "drums",
+      kind: "drums_a",
       track_id: 11,
       title: "Cellable",
       artist: "Tester",
@@ -170,18 +181,19 @@ describe("SceneGrid", () => {
       floor_energy: 4,
     });
     renderGrid();
-    // The drums cell shows its source-track title; other cells stay empty.
-    const drumsCell = screen.getByTitle(/Drums: Cellable/i);
+    // The drums-A half-cell shows its source-track title; other half-
+    // cells stay empty. drums_a → Live track index 0 per DECK_COLUMNS.
+    const drumsCell = screen.getByTitle(/Drums A: Cellable/i);
     fireEvent.click(drumsCell);
     expect(fireCellMutate).toHaveBeenCalledWith({ track: 0, slot: 0 });
   });
 
   it("supports cells in the same row sourced from different tracks", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+    state.columns = DECK_COLUMNS;
     state.cells.push(
       {
         scene_index: 0,
-        kind: "drums",
+        kind: "drums_a",
         track_id: 11,
         title: "Drum Donor",
         artist: "A",
@@ -191,7 +203,7 @@ describe("SceneGrid", () => {
       },
       {
         scene_index: 0,
-        kind: "vocals",
+        kind: "vocals_a",
         track_id: 22,
         title: "Vocal Donor",
         artist: "B",
@@ -201,16 +213,47 @@ describe("SceneGrid", () => {
       },
     );
     renderGrid();
-    // Both cells render with their own source-track titles.
-    expect(screen.getByTitle(/Drums: Drum Donor/i)).toBeInTheDocument();
-    expect(screen.getByTitle(/Vocals: Vocal Donor/i)).toBeInTheDocument();
+    // Both half-cells render with their own source-track titles.
+    expect(screen.getByTitle(/Drums A: Drum Donor/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Vocals A: Vocal Donor/i)).toBeInTheDocument();
   });
 
-  it("highlights cells that are currently playing", () => {
-    state.columns = { drums: 0, bass: 1, vocals: 2, other: 3, mix: 4 };
+  it("supports A and B sides of the same role from different tracks", () => {
+    state.columns = DECK_COLUMNS;
+    state.cells.push(
+      {
+        scene_index: 0,
+        kind: "drums_a",
+        track_id: 11,
+        title: "Current Drums",
+        artist: "A",
+        bpm: 128,
+        key_camelot: "8A",
+        floor_energy: 7,
+      },
+      {
+        scene_index: 0,
+        kind: "drums_b",
+        track_id: 22,
+        title: "Incoming Drums",
+        artist: "B",
+        bpm: 128,
+        key_camelot: "8A",
+        floor_energy: 7,
+      },
+    );
+    renderGrid();
+    // The two sides of the drums column render independently — this is
+    // the whole point of deck pairs.
+    expect(screen.getByTitle(/Drums A: Current Drums/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Drums B: Incoming Drums/i)).toBeInTheDocument();
+  });
+
+  it("highlights half-cells that are currently playing", () => {
+    state.columns = DECK_COLUMNS;
     state.cells.push({
       scene_index: 0,
-      kind: "drums",
+      kind: "drums_a",
       track_id: 33,
       title: "Now Playing",
       artist: "Tester",
@@ -218,11 +261,11 @@ describe("SceneGrid", () => {
       key_camelot: "9A",
       floor_energy: 7,
     });
+    // drums_a is at Live track 0 per DECK_COLUMNS.
     state.playingClips = { 0: 0 };
     renderGrid();
-    // Playing cell label reads "⏹ playing" (tap to stop) — the label text
-    // can appear elsewhere too, so we look for the explicit stop affordance.
-    const playingLabels = screen.getAllByText(/playing/i);
-    expect(playingLabels.length).toBeGreaterThan(0);
+    // The Stop tooltip flags the playing half-cell.
+    const stopBtn = screen.getByTitle(/Stop drums a/i);
+    expect(stopBtn).toBeInTheDocument();
   });
 });

@@ -42,6 +42,46 @@ export const STEM_ONLY_COLUMNS: readonly StemRole[] = [
   "other",
 ];
 
+/** Deck-pair side: cells in Live now live on either the A or B deck per
+ * source role, so the DJ can pre-stage the next song without nuking
+ * what's playing. ``null`` for mix (single deck). */
+export type DeckSide = "a" | "b";
+
+/** Map a backend DeckCell.kind ("drums_a", "drums_b", "mix") back to
+ * its source role ("drums", "mix"). The deck-pair reshape introduced
+ * the _a/_b suffix; the frontend's mental model is still 5 columns by
+ * role, so we strip the suffix at the boundary. */
+export function sourceKindOf(deckKind: string): StemRole {
+  if (deckKind.endsWith("_a") || deckKind.endsWith("_b")) {
+    const src = deckKind.slice(0, -2);
+    if (
+      src === "drums" || src === "bass" || src === "vocals" || src === "other"
+    ) {
+      return src;
+    }
+  }
+  if (
+    deckKind === "drums" || deckKind === "bass" || deckKind === "vocals"
+    || deckKind === "other" || deckKind === "mix"
+  ) {
+    return deckKind;
+  }
+  return "mix"; // fallback — keeps the type concrete
+}
+
+/** Map a backend DeckCell.kind to its A/B side, or ``null`` for mix. */
+export function sideOf(deckKind: string): DeckSide | null {
+  if (deckKind.endsWith("_a")) return "a";
+  if (deckKind.endsWith("_b")) return "b";
+  return null;
+}
+
+/** For a source role + side, build the backend deck-kind string. */
+export function deckKindOf(role: StemRole, side: DeckSide | null): string {
+  if (role === "mix") return "mix";
+  return side ? `${role}_${side}` : role;
+}
+
 /**
  * Per-column visual tokens used across the Booth's stacked strips
  * (column headers · combo cards · scene cells · rec cards). Same tint

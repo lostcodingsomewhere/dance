@@ -52,13 +52,36 @@ export function ComboStrip() {
 
   // Per-role: { sceneIdx, cell, trackIdx, livePosBeats } for whatever's
   // currently playing in that role's column. Drives one card.
+  //
+  // Deck-pair: each role now has two Live tracks (A and B). Per role we
+  // pick the side that's actively playing — prefer A on ties, fall back
+  // to A's track when neither is playing so the card still has somewhere
+  // to anchor its seek callbacks.
   const cards = useMemo(() => {
     if (!columns) return null;
     return stemColumns.map((role) => {
-      const trackIdx = columns[role];
-      const sceneIdx = trackIdx != null ? playing[trackIdx] : undefined;
+      if (role === "mix") {
+        const trackIdx = columns["mix"];
+        const sceneIdx = trackIdx != null ? playing[trackIdx] : undefined;
+        const cell =
+          sceneIdx != null ? cellAt.get(`${sceneIdx}|mix`) : undefined;
+        const livePosBeats =
+          trackIdx != null ? positions[String(trackIdx)] : undefined;
+        return { role: role as StemRole, sceneIdx, cell, trackIdx, livePosBeats };
+      }
+      const aIdx = columns[`${role}_a`];
+      const bIdx = columns[`${role}_b`];
+      const aPlayingScene = aIdx != null ? playing[aIdx] : undefined;
+      const bPlayingScene = bIdx != null ? playing[bIdx] : undefined;
+      const chosenSide: "a" | "b" =
+        aPlayingScene != null ? "a" : bPlayingScene != null ? "b" : "a";
+      const trackIdx = chosenSide === "a" ? aIdx : bIdx;
+      const sceneIdx =
+        chosenSide === "a" ? aPlayingScene : bPlayingScene;
       const cell =
-        sceneIdx != null ? cellAt.get(`${sceneIdx}|${role}`) : undefined;
+        sceneIdx != null && trackIdx != null
+          ? cellAt.get(`${sceneIdx}|${role}_${chosenSide}`)
+          : undefined;
       const livePosBeats =
         trackIdx != null ? positions[String(trackIdx)] : undefined;
       return { role: role as StemRole, sceneIdx, cell, trackIdx, livePosBeats };
