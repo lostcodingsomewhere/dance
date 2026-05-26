@@ -259,21 +259,21 @@ function Cell({
   if (shadow && cell) {
     return (
       <div
-        className={`rounded-md border-dashed border h-14 px-2 py-1 overflow-hidden opacity-40 ${styles.border}`}
+        className={`rounded-md border-2 border-dashed h-14 px-2 py-1 overflow-hidden bg-neutral-800/60 border-neutral-500`}
         title={`Inferred from stems: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}`}
         aria-label={`${roleLabel(role)} (inferred from stems)`}
         data-testid="scene-cell-shadow"
       >
-        <div className="text-xs truncate font-medium leading-tight text-neutral-300 italic">
+        <div className="text-xs truncate font-medium leading-tight text-neutral-100">
           {cell.title ?? `Track #${cell.track_id}`}
         </div>
         {cell.artist && (
-          <div className="text-[10px] truncate leading-tight text-neutral-500 italic">
+          <div className="text-[10px] truncate leading-tight text-neutral-300">
             {cell.artist}
           </div>
         )}
-        <div className="text-[9px] truncate font-mono leading-none mt-0.5 text-neutral-600 uppercase tracking-wider">
-          shadow
+        <div className="text-[9px] truncate font-mono leading-none mt-0.5 text-neutral-400 uppercase tracking-wider">
+          ◇ anchor
         </div>
       </div>
     );
