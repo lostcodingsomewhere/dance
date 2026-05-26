@@ -5,6 +5,7 @@ import {
   ROLE_STYLES,
   TWO_DECK_COLUMN_ORDER,
   deckColumnLabel,
+  roleLabel,
   sideOf,
   sourceKindOf,
   type DeckSide,
@@ -83,19 +84,21 @@ function ColumnHeaderChip({
   const sideBadge = side?.toUpperCase() ?? "";
   // B-side decks get a subtler header treatment — slightly dimmed so
   // A/B are visually distinguishable even though they share the role
-  // color. The B-side darker treatment matches the .als track colors.
+  // color and the same role label.
   const styles = ROLE_STYLES[role as StemRole];
+  // Strip the A/B suffix from the visible label — the deck container
+  // above identifies which side this is. We keep the suffix in the
+  // tooltip + aria for accessibility / debugging.
+  const visibleLabel = roleLabel(role);
   return (
     <div
-      title={`${deckColumnLabel(deckKind)} — APC40 strip routes to crossfader ${sideBadge}`}
+      title={`${deckColumnLabel(deckKind)} — routes to crossfader ${sideBadge}`}
       className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-[10px] uppercase tracking-wider font-semibold transition-all ${
         styles.header
-      } ${side === "b" ? "opacity-70" : ""}`}
+      } ${side === "b" ? "opacity-75" : ""}`}
     >
       <RoleIcon role={role} size={12} />
-      <span className="flex-1 truncate text-[10px]">
-        {deckColumnLabel(deckKind)}
-      </span>
+      <span className="flex-1 truncate text-[10px]">{visibleLabel}</span>
       {trackIdx != null && (
         <button
           type="button"

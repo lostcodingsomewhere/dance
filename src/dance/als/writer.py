@@ -492,7 +492,14 @@ def _build_audio_clip(
     _val(clip, "Annotation", "")
     _val(clip, "ColorIndex", STEM_COLOR_INDEX.get(entry.kind, 0))
     _val(clip, "LaunchMode", "0")
-    _val(clip, "LaunchQuantisation", "0")
+    # 1 bar quantization — fired clips wait for the next bar boundary
+    # before starting, so two-deck transitions land beat-aligned with
+    # whatever's already playing. Live's LaunchQuantisation enum: 0=None,
+    # 1=8 bars, 2=4 bars, 3=2 bars, 4=1 bar, 5=1/2, 6=1/2T, 7=1/4, ...
+    # Previously this was 0 (None) and we relied on the project-level
+    # Song.clip_trigger_quantization fallback — too fragile, breaks if
+    # that ever drifts.
+    _val(clip, "LaunchQuantisation", "4")
     # TimeSignature is a CLASS element in Live's clip schema (carries
     # Numerator/Denominator children), not a leaf with Value attr. Omit
     # and let the clip inherit the project's 4/4.

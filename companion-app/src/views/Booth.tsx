@@ -1,11 +1,10 @@
 import { BoothColumnHeaders } from "../components/BoothColumnHeaders";
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
-import { ComboStrip } from "../components/ComboStrip";
 import { CueStrip } from "../components/CueStrip";
 import { SceneGrid } from "../components/SceneGrid";
+import { TwoDeckStrip } from "../components/TwoDeckStrip";
 import { useAutoLog } from "../hooks/useAutoLog";
 import { useAutoSession } from "../hooks/useAutoSession";
-import { useAppStore } from "../store";
 
 /**
  * The Booth — the only screen you should look at during a set.
@@ -45,23 +44,29 @@ import { useAppStore } from "../store";
 export function Booth() {
   useAutoSession();
   useAutoLog();
-  // User-customizable column order — drag a column header in the booth to
-  // reorder. Defaults to the canonical drums/bass/vocals/other/mix layout.
-  const stemColumns = useAppStore((s) => s.stemColumnOrder);
+
+  // Source roles for the rec banner — 4 stem feeds + 1 song feed.
+  // Recs are role-scoped (not side-scoped); each card's ⤒A/⤒B buttons
+  // pick the deck at load time.
+  const recRoles = ["drums", "bass", "vocals", "other", "mix"];
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <main className="flex-1 flex flex-col min-h-0 gap-2 px-4 py-3 overflow-y-auto">
+        {/* Two-deck Traktor-style "now playing" — replaces ComboStrip.
+            One stacked-stem waveform per deck side. */}
+        <TwoDeckStrip />
         <BoothColumnHeaders />
-        <ComboStrip />
         <SceneGrid />
         <CueStrip />
-        <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1">
-          {/* Leading spacer mirrors SceneGrid's row-label column so the
-              5 rec banners line up under the 5 stem columns. */}
+        {/* Recs banner: 5 source-role feeds. Each card spans 2 of the
+            10 grid cols below so they sit above their A/B pair. */}
+        <div className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1">
           <div aria-hidden="true" />
-          {stemColumns.map((c) => (
-            <ColumnRecBanner key={c} column={c} k={5} />
+          {recRoles.map((c) => (
+            <div key={c} className="col-span-2">
+              <ColumnRecBanner column={c} k={5} />
+            </div>
           ))}
         </div>
       </main>
