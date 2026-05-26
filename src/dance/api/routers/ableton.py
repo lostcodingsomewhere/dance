@@ -45,6 +45,22 @@ def stop(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return {"ok": True}
 
 
+@router.post("/record/{state}")
+def record(state: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Toggle Live's session record. ``state`` is ``on`` or ``off``.
+
+    No bookkeeping beyond the OSC toggle — Live owns the actual capture.
+    The FE drives elapsed-time ticking off the moment we returned ``ok``.
+    """
+    if state not in ("on", "off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"record state must be 'on' or 'off', got {state!r}",
+        )
+    bridge.client.set_record_mode(state == "on")
+    return {"ok": True, "recording": state == "on"}
+
+
 @router.post("/tempo")
 def tempo(
     body: TempoRequest,

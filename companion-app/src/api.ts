@@ -454,6 +454,13 @@ export function abletonStop(): Promise<void> {
   return request<void>("/ableton/stop", { method: "POST" });
 }
 
+export function abletonRecord(on: boolean): Promise<{ ok: boolean; recording: boolean }> {
+  return request<{ ok: boolean; recording: boolean }>(
+    `/ableton/record/${on ? "on" : "off"}`,
+    { method: "POST" },
+  );
+}
+
 export function abletonSetTempo(bpm: number): Promise<void> {
   return request<void>("/ableton/tempo", {
     method: "POST",

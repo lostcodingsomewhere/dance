@@ -81,6 +81,14 @@ class AbletonOSCClient:
         """
         self._send("/live/song/stop_all_clips")
 
+    def set_record_mode(self, on: bool) -> None:
+        """Toggle Live's session record. When on, fired clips that have
+        an armed track record into the next empty slot. We use it as a
+        plain "capture this take" affordance — UI guards live in the API
+        layer.
+        """
+        self._send("/live/song/set/record_mode", 1 if on else 0)
+
     # ------------------------------------------------------------------
     # Mixer
     # ------------------------------------------------------------------

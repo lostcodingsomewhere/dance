@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
@@ -122,29 +122,37 @@ export function MasterStrip() {
         </div>
       </div>
 
-      {/* Transport */}
+      {/* Transport — icons only. Three distinct actions:
+            ▶/⏸  toggle play / pause Live's transport (clock)
+            ■    stop transport (same OSC, but the visual "halt" state)
+            🛑   panic — stop every firing clip but leave transport
+                 running so the next fire syncs cleanly
+            ●    session record toggle */}
       <div className="flex items-center gap-1 px-1 border-l border-neutral-800 h-10">
         <button
           type="button"
           onClick={() => play.mutate()}
-          className={`min-h-[40px] min-w-[60px] px-3 rounded-md font-semibold text-sm ${
+          className={`min-h-[40px] w-10 rounded-md font-semibold text-base flex items-center justify-center ${
             state.is_playing
               ? "bg-emerald-500 text-neutral-950"
               : "bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
           }`}
-          aria-label="Play"
+          aria-label={state.is_playing ? "Pause" : "Play"}
+          title={state.is_playing ? "Pause transport" : "Play transport"}
         >
-          {state.is_playing ? "Playing" : "Play"}
+          {state.is_playing ? <IconPause /> : <IconPlay />}
         </button>
         <button
           type="button"
           onClick={() => stop.mutate()}
-          className="min-h-[40px] min-w-[56px] px-3 rounded-md bg-neutral-800 text-neutral-200 hover:bg-neutral-700 font-semibold text-sm"
-          aria-label="Stop"
+          className="min-h-[40px] w-10 rounded-md bg-neutral-800 text-neutral-200 hover:bg-neutral-700 flex items-center justify-center"
+          aria-label="Stop transport"
+          title="Stop transport (master clock halts)"
         >
-          Stop
+          <IconStop />
         </button>
         <PanicButton />
+        <RecordButton />
       </div>
 
       {/* Camelot key of the dominant playing scene (the anchor for compat). */}
@@ -200,25 +208,7 @@ export function MasterStrip() {
         </kbd>
       </button>
 
-      {/* View nav */}
-      <nav className="flex items-center gap-1" role="tablist">
-        {VIEWS.map((v) => (
-          <button
-            key={v.id}
-            role="tab"
-            aria-selected={view === v.id}
-            onClick={() => store.setView(v.id)}
-            title={v.hint}
-            className={`min-h-[40px] px-3 rounded-md font-semibold text-sm ${
-              view === v.id
-                ? "bg-neutral-100 text-neutral-950"
-                : "text-neutral-300 hover:bg-neutral-800"
-            }`}
-          >
-            {v.label}
-          </button>
-        ))}
-      </nav>
+      <ViewNav view={view} />
     </header>
   );
 }
@@ -269,18 +259,24 @@ function HeartbeatDot({ alive }: { alive: boolean }) {
   );
 }
 
+/** Panic = stop every firing clip but leave the master transport running,
+ * so the next fired clip syncs cleanly. Distinct from the Stop button,
+ * which halts the master clock. Two-click "arm + fire" gesture so it can't
+ * be hit by accident during a set.
+ */
 function PanicButton() {
   const [armed, setArmed] = useState(false);
-  const stop = useMutation({ mutationFn: api.abletonStop });
+  const panic = useMutation({ mutationFn: api.abletonStopAllClips });
   if (!armed) {
     return (
       <button
         type="button"
         onClick={() => setArmed(true)}
-        className="min-h-[40px] px-3 rounded-md bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40 font-semibold text-sm"
-        title="Hard-stop. Click once to arm; click again to fire."
+        className="min-h-[40px] w-10 rounded-md bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40 flex items-center justify-center"
+        aria-label="Panic — stop all clips"
+        title="Panic: stop all firing clips, keep transport running. Click once to arm; click again to fire."
       >
-        ⏻
+        <IconPanic />
       </button>
     );
   }
@@ -288,15 +284,275 @@ function PanicButton() {
     <button
       type="button"
       onClick={() => {
-        stop.mutate();
+        panic.mutate();
         setArmed(false);
       }}
       onBlur={() => setArmed(false)}
       autoFocus
-      className="min-h-[40px] px-3 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm"
-      title="Fires Stop — click to commit"
+      className="min-h-[40px] px-3 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1"
+      title="Stop all clips — click to commit"
     >
-      PANIC
+      <IconPanic /> PANIC
     </button>
+  );
+}
+
+/** Session record toggle. Live captures into armed tracks; we just
+ * flip the global record_mode. Local elapsed-time ring ticks off when
+ * we received the ok response — no separate /status endpoint needed
+ * since record is binary and we own the source of truth here.
+ */
+function RecordButton() {
+  const [recording, setRecording] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const toggle = useMutation({
+    mutationFn: (on: boolean) => api.abletonRecord(on),
+    onSuccess: (res) => {
+      setRecording(res.recording);
+      setStartedAt(res.recording ? Date.now() : null);
+      setElapsed(0);
+    },
+  });
+  useEffect(() => {
+    if (!recording || startedAt == null) return;
+    const id = window.setInterval(() => {
+      setElapsed(Date.now() - startedAt);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [recording, startedAt]);
+  const mm = Math.floor(elapsed / 60_000).toString().padStart(2, "0");
+  const ss = Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0");
+  return (
+    <button
+      type="button"
+      onClick={() => toggle.mutate(!recording)}
+      disabled={toggle.isPending}
+      className={`min-h-[40px] rounded-md flex items-center justify-center gap-1.5 font-mono tabular-nums text-[11px] transition-colors disabled:opacity-50 ${
+        recording
+          ? "w-[72px] px-2 bg-rose-600 text-white"
+          : "w-10 bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40"
+      }`}
+      aria-label={recording ? `Stop recording (${mm}:${ss})` : "Start recording"}
+      title={
+        recording
+          ? `Recording — ${mm}:${ss}. Click to stop.`
+          : "Start session record (Live captures into armed tracks)"
+      }
+    >
+      {recording ? <IconRecordStop /> : <IconRecordDot />}
+      {recording && <span>{mm}:{ss}</span>}
+    </button>
+  );
+}
+
+function IconPlay() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <polygon points="3,2 12,7 3,12" />
+    </svg>
+  );
+}
+
+function IconPause() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <rect x="3" y="2" width="3" height="10" rx="0.5" />
+      <rect x="8" y="2" width="3" height="10" rx="0.5" />
+    </svg>
+  );
+}
+
+function IconStop() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <rect x="2.5" y="2.5" width="9" height="9" rx="1" />
+    </svg>
+  );
+}
+
+function IconPanic() {
+  // Triangle with an exclamation — "stop everything firing right now."
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <path d="M7 1.2L13 12.5H1z" fillOpacity="0.15" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <rect x="6.4" y="5" width="1.2" height="4" rx="0.4" />
+      <rect x="6.4" y="9.6" width="1.2" height="1.4" rx="0.4" />
+    </svg>
+  );
+}
+
+function IconRecordDot() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+      <circle cx="6" cy="6" r="4" />
+    </svg>
+  );
+}
+
+function IconRecordStop() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+      <rect x="1" y="1" width="8" height="8" rx="0.5" />
+    </svg>
+  );
+}
+
+function IconBooth({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <rect x="0" y="0" width="6" height="6" rx="1.2"/>
+      <rect x="8" y="0" width="6" height="6" rx="1.2"/>
+      <rect x="0" y="8" width="6" height="6" rx="1.2"/>
+      <rect x="8" y="8" width="6" height="6" rx="1.2"/>
+    </svg>
+  );
+}
+
+function IconSet({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <circle cx="1.5" cy="2.5" r="1.5"/>
+      <rect x="4.5" y="1.5" width="9.5" height="2" rx="1"/>
+      <circle cx="1.5" cy="7" r="1.5"/>
+      <rect x="4.5" y="6" width="9.5" height="2" rx="1"/>
+      <circle cx="1.5" cy="11.5" r="1.5"/>
+      <rect x="4.5" y="10.5" width="7" height="2" rx="1"/>
+    </svg>
+  );
+}
+
+function IconPipeline({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <circle cx="2" cy="7" r="2"/>
+      <rect x="5" y="6.2" width="2.5" height="1.6" rx="0.8"/>
+      <circle cx="9.5" cy="7" r="2"/>
+      <rect x="12" y="6.2" width="2" height="1.6" rx="0.8"/>
+    </svg>
+  );
+}
+
+function IconCourse({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <path d="M7 1L8.5 5h4L9.5 7.5 11 12 7 9.5 3 12l1.5-4.5L1.5 5h4z"/>
+    </svg>
+  );
+}
+
+// In Booth view the nav collapses: only the active Booth tab stays visible,
+// and Set / Pipeline / Course move into a ⋯ dropdown so they don't clutter
+// the live performance surface.
+function ViewNav({ view }: { view: ViewName }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const isBooth = view === "booth";
+
+  const tabCls = (active: boolean) =>
+    `min-h-[40px] px-3 rounded-md font-semibold text-sm flex items-center gap-1.5 ${
+      active ? "bg-neutral-100 text-neutral-950" : "text-neutral-300 hover:bg-neutral-800"
+    }`;
+
+  return (
+    <nav className="relative flex items-center gap-1" role="tablist">
+      {/* Booth tab — always visible */}
+      <button
+        role="tab"
+        aria-selected={isBooth}
+        onClick={() => store.setView("booth")}
+        title="Live performance — SceneGrid + recs"
+        className={tabCls(isBooth)}
+      >
+        <IconBooth />
+        Booth
+      </button>
+
+      {/* Set + Pipeline tabs: visible when not in Booth */}
+      {!isBooth && (
+        <>
+          <button
+            role="tab"
+            aria-selected={view === "set"}
+            onClick={() => store.setView("set")}
+            title="Edit the active set"
+            className={tabCls(view === "set")}
+          >
+            <IconSet />
+            Set
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "pipeline"}
+            onClick={() => store.setView("pipeline")}
+            title="Ingest & processing status"
+            className={tabCls(view === "pipeline")}
+          >
+            <IconPipeline />
+            Pipeline
+          </button>
+          <a
+            href="/course/index.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open DJ course (progress saves automatically)"
+            className={tabCls(false)}
+          >
+            <IconCourse className="text-emerald-400" />
+            Course
+          </a>
+        </>
+      )}
+
+      {/* In Booth: ⋯ overflow menu with Set / Pipeline / Course */}
+      {isBooth && (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            onBlur={(e) => {
+              if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
+                setMenuOpen(false);
+              }
+            }}
+            title="Set, Pipeline, Course"
+            className={`min-h-[40px] w-10 rounded-md font-semibold text-lg flex items-center justify-center transition-colors ${
+              menuOpen
+                ? "bg-neutral-800 text-neutral-100"
+                : "text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300"
+            }`}
+          >
+            ···
+          </button>
+
+          {menuOpen && (
+            <div className="absolute right-0 top-[calc(100%+4px)] z-50 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden min-w-[148px]">
+              <button
+                type="button"
+                onClick={() => { store.setView("set"); setMenuOpen(false); }}
+                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
+              >
+                <IconSet className="text-neutral-500" /> Set
+              </button>
+              <button
+                type="button"
+                onClick={() => { store.setView("pipeline"); setMenuOpen(false); }}
+                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
+              >
+                <IconPipeline className="text-neutral-500" /> Pipeline
+              </button>
+              <a
+                href="/course/index.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMenuOpen(false)}
+                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
+              >
+                <IconCourse className="text-emerald-500" /> Course
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+    </nav>
   );
 }
