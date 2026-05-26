@@ -46,6 +46,33 @@ def stop(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return {"ok": True}
 
 
+@router.post("/transport/fire-deck/{side}/{scene_index}")
+def fire_deck(
+    side: str,
+    scene_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Fire all 5 cells (4 stems + mix) on Deck ``side`` (``a`` or
+    ``b``) at the given scene. Per-deck play."""
+    if side not in ("a", "b"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"side must be 'a' or 'b', got {side!r}",
+        )
+    return bridge.fire_deck(side, scene_index)
+
+
+@router.post("/transport/stop-deck/{side}")
+def stop_deck(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Stop every clip on Deck ``side``. Master transport unaffected."""
+    if side not in ("a", "b"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"side must be 'a' or 'b', got {side!r}",
+        )
+    return bridge.stop_deck(side)
+
+
 @router.post("/pfl/{side}")
 def set_pfl(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     """Route Deck A, Deck B, or neither into the headphone cue.

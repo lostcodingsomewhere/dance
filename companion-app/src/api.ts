@@ -474,6 +474,22 @@ export function abletonSetPfl(
   return request("/ableton/pfl/" + side, { method: "POST" });
 }
 
+export function abletonFireDeck(
+  side: "a" | "b",
+  sceneIndex: number,
+): Promise<{ ok: boolean; side: string; scene_index: number; fired: number }> {
+  return request(
+    `/ableton/transport/fire-deck/${side}/${sceneIndex}`,
+    { method: "POST" },
+  );
+}
+
+export function abletonStopDeck(
+  side: "a" | "b",
+): Promise<{ ok: boolean; side: string; stopped: number }> {
+  return request(`/ableton/transport/stop-deck/${side}`, { method: "POST" });
+}
+
 export function abletonSetTempo(bpm: number): Promise<void> {
   return request<void>("/ableton/tempo", {
     method: "POST",

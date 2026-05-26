@@ -46,6 +46,13 @@ export function TwoDeckStrip() {
     setPfl.mutate(next ?? "off");
   }
   const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
+  const fireDeck = useMutation({
+    mutationFn: (vars: { side: "a" | "b"; sceneIdx: number }) =>
+      api.abletonFireDeck(vars.side, vars.sceneIdx),
+  });
+  const stopDeck = useMutation({
+    mutationFn: (side: "a" | "b") => api.abletonStopDeck(side),
+  });
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -82,6 +89,8 @@ export function TwoDeckStrip() {
         pflActive={pflSide === "a"}
         onTogglePfl={() => togglePfl("a")}
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
+        onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "a", sceneIdx })}
+        onStopDeck={() => stopDeck.mutate("a")}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -97,6 +106,8 @@ export function TwoDeckStrip() {
         pflActive={pflSide === "b"}
         onTogglePfl={() => togglePfl("b")}
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
+        onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "b", sceneIdx })}
+        onStopDeck={() => stopDeck.mutate("b")}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -119,6 +130,8 @@ function DeckPanel({
   pflActive,
   onTogglePfl,
   onSyncTempo,
+  onFireDeck,
+  onStopDeck,
   onSeek,
 }: {
   side: "a" | "b";
@@ -131,6 +144,8 @@ function DeckPanel({
   pflActive: boolean;
   onTogglePfl: () => void;
   onSyncTempo: (bpm: number) => void;
+  onFireDeck: (sceneIdx: number) => void;
+  onStopDeck: () => void;
   onSeek: (track: number, slot: number, beats: number) => void;
 }) {
   const SOURCE_ROLES = ["drums", "bass", "vocals", "other"] as const;
@@ -238,12 +253,15 @@ function DeckPanel({
         side={side}
         sideLabel={sideLabel}
         anchorCell={anchorCell}
+        anchorSceneIdx={anchor?.sceneIdx}
         isPureAnchor={anchor?.isPureAnchor ?? false}
         firing={anchor?.firing ?? false}
         pflActive={pflActive}
         onTogglePfl={onTogglePfl}
         projectTempo={tempo}
         onSyncTempo={onSyncTempo}
+        onFireDeck={onFireDeck}
+        onStopDeck={onStopDeck}
       />
       <DeckWaveform
         side={side}
@@ -266,22 +284,28 @@ function DeckHeader({
   side,
   sideLabel,
   anchorCell,
+  anchorSceneIdx,
   isPureAnchor,
   firing,
   pflActive,
   onTogglePfl,
   projectTempo,
   onSyncTempo,
+  onFireDeck,
+  onStopDeck,
 }: {
   side: "a" | "b";
   sideLabel: string;
   anchorCell: DeckCell | undefined;
+  anchorSceneIdx: number | undefined;
   isPureAnchor: boolean;
   firing: boolean;
   pflActive: boolean;
   onTogglePfl: () => void;
   projectTempo: number | null;
   onSyncTempo: (bpm: number) => void;
+  onFireDeck: (sceneIdx: number) => void;
+  onStopDeck: () => void;
 }) {
   const accentText = side === "a" ? "text-violet-200" : "text-indigo-200";
   // Sync gesture: snap the project's master tempo to this deck's
@@ -301,6 +325,37 @@ function DeckHeader({
           ▶ live
         </span>
       )}
+      {/* Per-deck play / stop. Play fires all 5 of this side's cells
+          (4 stems + mix) at the anchor scene; stop halts every clip
+          on this side's tracks. Disabled when no anchor scene exists
+          yet (nothing to fire). */}
+      <button
+        type="button"
+        onClick={() => anchorSceneIdx != null && onFireDeck(anchorSceneIdx)}
+        disabled={anchorSceneIdx == null}
+        title={
+          anchorSceneIdx == null
+            ? `Deck ${sideLabel} is empty`
+            : `Play Deck ${sideLabel} (fire scene ${anchorSceneIdx + 1})`
+        }
+        aria-label={`Play Deck ${sideLabel}`}
+        className={`text-[10px] leading-none rounded px-1.5 py-1 border transition-colors ${
+          firing
+            ? "bg-emerald-500/40 text-emerald-50 border-emerald-300/60"
+            : "bg-neutral-900 text-neutral-300 hover:bg-emerald-900/40 hover:text-emerald-200 border-neutral-700 disabled:opacity-40 disabled:hover:bg-neutral-900 disabled:hover:text-neutral-300"
+        }`}
+      >
+        ▶
+      </button>
+      <button
+        type="button"
+        onClick={onStopDeck}
+        title={`Stop Deck ${sideLabel} (halt all of this side's clips)`}
+        aria-label={`Stop Deck ${sideLabel}`}
+        className="text-[10px] leading-none rounded px-1.5 py-1 border bg-neutral-900 text-neutral-400 hover:bg-rose-950/40 hover:text-rose-200 border-neutral-700 transition-colors"
+      >
+        ■
+      </button>
       <button
         type="button"
         onClick={onTogglePfl}

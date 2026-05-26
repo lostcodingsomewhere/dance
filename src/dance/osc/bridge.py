@@ -792,6 +792,50 @@ class AbletonBridge:
                 return i
             i += 1
 
+    def fire_deck(self, side: str, scene_index: int) -> dict[str, Any]:
+        """Fire every cell on a deck side at one scene — the per-deck
+        "play" button. Fires all 5 of the side's tracks (4 stems + mix)
+        at the given scene; quiet on empty slots (Live ignores them).
+
+        ``side`` must be ``"a"`` or ``"b"``. Returns
+        ``{"ok": bool, "side": str, "scene_index": int, "fired": int}``.
+        """
+        if side not in ("a", "b"):
+            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        fired = 0
+        for kind, idx in self._deck_columns.items():
+            if not kind.endswith(f"_{side}"):
+                continue
+            try:
+                self.client.fire_clip(idx, scene_index)
+                fired += 1
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        return {"ok": True, "side": side, "scene_index": scene_index, "fired": fired}
+
+    def stop_deck(self, side: str) -> dict[str, Any]:
+        """Stop every clip on a deck side — the per-deck "stop" button.
+
+        Iterates the side's 5 tracks and stops_all_clips on each, so any
+        firing OR queued clip is halted. Master transport keeps running.
+        """
+        if side not in ("a", "b"):
+            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        stopped = 0
+        for kind, idx in self._deck_columns.items():
+            if not kind.endswith(f"_{side}"):
+                continue
+            try:
+                self.client.stop_track(idx)
+                stopped += 1
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        return {"ok": True, "side": side, "stopped": stopped}
+
     def set_pfl_side(self, side: str | None) -> dict[str, Any]:
         """Route an entire deck side (A or B) to the headphone cue bus.
 

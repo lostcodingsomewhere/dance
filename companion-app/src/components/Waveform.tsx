@@ -121,7 +121,12 @@ export function Waveform({
           .filter((r) => r.region_type === "cue" || r.region_type === "phrase")
           .map((r) => {
             const x = Math.max(0, Math.min(100, (r.position_ms / totalMs) * 100));
-            return { id: r.id, x };
+            // Pretty time stamp for hover tooltip: "1:23"
+            const sec = Math.floor(r.position_ms / 1000);
+            const stamp = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+            const label =
+              r.region_type === "phrase" ? "Phrase" : "Cue";
+            return { id: r.id, x, stamp, label, ratio: r.position_ms / totalMs };
           })
       : [];
 
@@ -355,6 +360,47 @@ export function Waveform({
         >
           {b.icon}
         </div>
+      ))}
+      {/* Cue / phrase hover overlays — give the 1px-wide SVG ticks a
+          proper click target (a ~14px-wide invisible strip centered
+          on the tick) with a title for the hover timestamp and an
+          onClick that seeks straight to the cue. Without these the
+          ticks were purely decorative.
+          z-indexed above section bands so cues inside a section's
+          band still get their own click target. */}
+      {cueTicks.map((t) => (
+        <button
+          key={`cue-hover-${t.id}`}
+          type="button"
+          data-testid="waveform-cue-hover"
+          title={`${t.label} @ ${t.stamp} — click to jump`}
+          aria-label={`Jump to ${t.label.toLowerCase()} at ${t.stamp}`}
+          onClick={
+            onSeek
+              ? (e) => {
+                  e.stopPropagation();
+                  onSeek(t.ratio);
+                }
+              : undefined
+          }
+          onMouseMove={
+            onSeek ? () => setHoverRatio(t.ratio) : undefined
+          }
+          onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
+          style={{
+            position: "absolute",
+            left: `${t.x}%`,
+            top: 0,
+            transform: "translateX(-50%)",
+            width: 14,
+            height: "100%",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: onSeek ? "pointer" : "default",
+            zIndex: 1,
+          }}
+        />
       ))}
     </div>
   );
