@@ -326,6 +326,42 @@ export function ingestSpotifyTrack(
   });
 }
 
+export interface IngestPlaylistResult {
+  playlist_id: string;
+  total_in_playlist: number;
+  added: number;
+  skipped_existing: number;
+  /** Of ``skipped_existing``, how many had their spotify_id back-filled
+   *  onto a previously-unlinked Track (because their (artist, title)
+   *  fuzzy-matched a CSV-ingested track). */
+  backfilled: number;
+  failed: number;
+  track_ids: number[];
+  job_ids: string[];
+}
+
+/** Paste a Spotify playlist URL — backend fetches the track list via Web
+ *  API, dedupes against the existing library, and spawns a yt-dlp
+ *  download job for every new ID. See ``POST /pipeline/ingest/playlist``.
+ *
+ *  ``userToken``: optional Spotify USER OAuth token. Required in practice
+ *  because Spotify's Nov 2024 API policy blocks Client Credentials apps
+ *  from reading playlist tracks. Grab one from exportify.net DevTools
+ *  (any /me/playlists request → Authorization header → copy Bearer
+ *  value). Lives in memory only — never persisted to localStorage. */
+export function ingestSpotifyPlaylist(
+  playlistUrl: string,
+  userToken?: string,
+): Promise<IngestPlaylistResult> {
+  return request<IngestPlaylistResult>("/pipeline/ingest/playlist", {
+    method: "POST",
+    body: JSON.stringify({
+      playlist_url: playlistUrl,
+      user_token: userToken || null,
+    }),
+  });
+}
+
 // Pipeline ops --------------------------------------------------------------
 
 export function getPipelineStatus(): Promise<PipelineStatus> {

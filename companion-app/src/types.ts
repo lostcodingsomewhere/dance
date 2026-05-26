@@ -200,6 +200,7 @@ export interface SetTrack {
   bpm: number | null;
   key_camelot: string | null;
   floor_energy: number | null;
+  duration_seconds: number | null;
   /** Underlying Track's pipeline state — drives the rail's ⌛/⚠ chip
    *  for freshly-ingested tracks that haven't finished processing yet. */
   track_state: string | null;
@@ -301,6 +302,9 @@ export interface DeckCell {
   bpm: number | null;
   key_camelot: string | null;
   floor_energy: number | null;
+  /** Total track duration in seconds. Lets the cell render a length badge
+   *  ("3:45") without a separate /tracks/{id} fetch. */
+  duration_seconds: number | null;
 }
 
 export interface DeckMap {

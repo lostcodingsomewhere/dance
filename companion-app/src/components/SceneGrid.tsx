@@ -8,12 +8,9 @@ import {
   useStopCell,
   useStopScene,
 } from "../hooks/useTransport";
-import {
-  ROLE_STYLES,
-  STEM_COLUMNS,
-  roleLabel,
-  type StemRole,
-} from "../lib/roles";
+import { formatDuration } from "../lib/format";
+import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { useAppStore } from "../store";
 import type { DeckCell } from "../types";
 
 const COLLAPSED_ROWS = 3;
@@ -40,6 +37,11 @@ export function SceneGrid() {
   const stopCell = useStopCell();
   const deleteCell = useDeleteCell();
   const [expanded, setExpanded] = useState(false);
+  // User-customizable column order — reorder via drag-and-drop on the
+  // BoothColumnHeaders chips. We render cells in this order; the
+  // underlying Ableton track index stays the same (looked up via
+  // ``columns[role]``).
+  const stemColumns = useAppStore((s) => s.stemColumnOrder);
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -86,9 +88,9 @@ export function SceneGrid() {
           repeated inside each. */}
       {rows.map((sceneIdx) => {
         // Anchor mode: all 4 stem cells in this row point at the same track.
-        const rowCells = STEM_COLUMNS.filter((r) => r !== "mix").map((r) =>
-          cellAt.get(`${sceneIdx}|${r}`),
-        );
+        const rowCells = stemColumns
+          .filter((r) => r !== "mix")
+          .map((r) => cellAt.get(`${sceneIdx}|${r}`));
         const rowTrackIds = rowCells.map((c) => c?.track_id ?? null);
         const isAnchorReady =
           rowTrackIds.every((t) => t != null) &&
@@ -115,7 +117,7 @@ export function SceneGrid() {
               }
               pending={fireScene.isPending || stopScene.isPending}
             />
-            {STEM_COLUMNS.map((role) => {
+            {stemColumns.map((role) => {
               const trackIdx = columns[role];
               const cell = cellAt.get(`${sceneIdx}|${role}`);
               const isPlaying =
@@ -123,7 +125,7 @@ export function SceneGrid() {
               return (
                 <Cell
                   key={role}
-                  role={role}
+                  role={role as StemRole}
                   cell={cell}
                   loaded={cell != null}
                   playing={isPlaying}
@@ -286,7 +288,7 @@ function Cell({
                 {cell.artist}
               </div>
             )}
-            {(cell.bpm != null || cell.key_camelot || cell.floor_energy != null) && (
+            {(cell.bpm != null || cell.key_camelot || cell.floor_energy != null || cell.duration_seconds != null) && (
               <div className={`text-[9px] truncate font-mono leading-none mt-0.5 ${playing ? "text-emerald-200/70" : "text-neutral-500"}`}>
                 {cell.bpm != null && <span>{cell.bpm.toFixed(1)}</span>}
                 {cell.key_camelot && (
@@ -294,6 +296,9 @@ function Cell({
                 )}
                 {cell.floor_energy != null && (
                   <span className="ml-1">· E{cell.floor_energy}</span>
+                )}
+                {cell.duration_seconds != null && (
+                  <span className="ml-1">· {formatDuration(cell.duration_seconds)}</span>
                 )}
               </div>
             )}

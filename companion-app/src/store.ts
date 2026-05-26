@@ -14,8 +14,15 @@ interface AppState {
   loadedDecks: Record<number, LoadedDeck>;
   commandBarOpen: boolean;
   /** Whether the Set Rail drawer is open in Booth. Auto-collapses 3s after
-   *  a clip fire so the SceneGrid stays sovereign during a mix. */
+   *  a clip fire so the SceneGrid stays sovereign during a mix — UNLESS
+   *  pinned (see ``setRailPinned``). */
   setRailOpen: boolean;
+  /** Pin the Set Rail open. When true, the rail is rendered inline (the
+   *  top nav + main column shrink to make room) instead of overlaying as
+   *  a fixed drawer, and the auto-collapse-after-clip-fire behavior is
+   *  suspended. Default true in Booth — the rail is a planning instrument
+   *  the user explicitly asked to see at all times during a set. */
+  setRailPinned: boolean;
   /**
    * Currently auditioning candidate in the Cue track (headphones-only via
    * Scarlett outs 3/4). Cleared on stopPreview or when the user commits a
@@ -38,9 +45,24 @@ interface AppState {
    * committing the whole song.
    */
   pinnedStemRecs: Record<string, ColumnRec[]>;
+  /**
+   * Visual order of the 5 stem columns in the Booth (drums/bass/vocals/
+   * other/mix). Defaults to the canonical order from ``lib/roles``, but
+   * the user can drag column headers around to reorder. Persisted to
+   * localStorage so the layout sticks across reloads. Reordering is
+   * purely cosmetic — the underlying Ableton track indices don't move;
+   * we just iterate this list when rendering SceneGrid / ComboStrip /
+   * BoothColumnHeaders / rec banners.
+   */
+  stemColumnOrder: string[];
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
+
+// Canonical default order — mirrors ``lib/roles.STEM_COLUMNS``. Re-declared
+// here to avoid a circular import (the store can't reach into ``lib`` if
+// ``lib`` ever imports the store). Keep the two in sync.
+const DEFAULT_STEM_COLUMN_ORDER = ["drums", "bass", "vocals", "other", "mix"];
 
 function readPersisted(): Partial<AppState> {
   if (typeof window === "undefined") return {};
@@ -48,11 +70,24 @@ function readPersisted(): Partial<AppState> {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    // Only loadedDecks persists — legacy ``stack`` and ``pinnedSongRecs``
-    // keys may still live in storage from older versions; the migration
-    // prompt reads ``stack`` directly to import it as a Set.
+    // ``loadedDecks`` survives reloads so the SceneGrid mirror keeps its
+    // mapping of which dance-track is in which scene. ``setRailPinned``
+    // and ``stemColumnOrder`` also persist so the user's column layout
+    // and "always-open rail" preferences stick. The rest (open,
+    // previewing, pinned recs) is intentionally ephemeral.
+    const persistedOrder = parsed.stemColumnOrder;
+    // Validate that the persisted order has all 5 expected columns and
+    // nothing extra (defends against storage rot if we ever rename a stem).
+    const isValidOrder =
+      Array.isArray(persistedOrder) &&
+      persistedOrder.length === DEFAULT_STEM_COLUMN_ORDER.length &&
+      DEFAULT_STEM_COLUMN_ORDER.every((c) => persistedOrder.includes(c));
     return {
       loadedDecks: parsed.loadedDecks ?? {},
+      setRailPinned: parsed.setRailPinned ?? true,
+      stemColumnOrder: isValidOrder
+        ? persistedOrder
+        : DEFAULT_STEM_COLUMN_ORDER,
     };
   } catch {
     return {};
@@ -66,6 +101,8 @@ function persist(s: AppState): void {
       STORAGE_KEY,
       JSON.stringify({
         loadedDecks: s.loadedDecks,
+        setRailPinned: s.setRailPinned,
+        stemColumnOrder: s.stemColumnOrder,
       }),
     );
   } catch {
@@ -79,9 +116,11 @@ const initial: AppState = {
   loadedDecks: {},
   commandBarOpen: false,
   setRailOpen: false,
+  setRailPinned: true,
   previewing: null,
   pinnedSongRecs: [],
   pinnedStemRecs: { drums: [], bass: [], vocals: [], other: [] },
+  stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
   ...readPersisted(),
 };
 
@@ -181,6 +220,36 @@ export const store = {
   },
   toggleSetRail(): void {
     state = { ...state, setRailOpen: !state.setRailOpen };
+    emit();
+  },
+  setSetRailPinned(pinned: boolean): void {
+    if (state.setRailPinned === pinned) return;
+    state = { ...state, setRailPinned: pinned };
+    emit();
+  },
+  toggleSetRailPinned(): void {
+    state = { ...state, setRailPinned: !state.setRailPinned };
+    emit();
+  },
+  /** Replace the column order — typically called when a drag-and-drop
+   *  on the Booth's column headers settles. Validates the new array has
+   *  exactly the 5 canonical columns; falls back to the default if not.
+   *  Cheap defense against bad payloads (e.g. a stale browser tab). */
+  setStemColumnOrder(order: string[]): void {
+    const sameLen = order.length === DEFAULT_STEM_COLUMN_ORDER.length;
+    const sameSet =
+      sameLen && DEFAULT_STEM_COLUMN_ORDER.every((c) => order.includes(c));
+    const next = sameSet ? [...order] : DEFAULT_STEM_COLUMN_ORDER;
+    if (
+      state.stemColumnOrder.length === next.length &&
+      state.stemColumnOrder.every((v, i) => v === next[i])
+    )
+      return;
+    state = { ...state, stemColumnOrder: next };
+    emit();
+  },
+  resetStemColumnOrder(): void {
+    state = { ...state, stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER };
     emit();
   },
   setPreviewing(p: { trackId: number; column: string } | null): void {

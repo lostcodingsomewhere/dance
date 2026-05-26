@@ -52,9 +52,17 @@ class AbletonOSCListener:
     def start(self) -> None:
         if self._server is not None:
             raise RuntimeError("Listener already started")
-        self._server = osc_server.ThreadingOSCUDPServer(
-            (self.host, self.port), self._dispatcher
-        )
+        # ``allow_reuse_address = True`` makes the socket re-bindable while
+        # the kernel is still holding the previous instance's binding in
+        # TIME_WAIT. Without it, a rapid backend restart (common during
+        # dev) hits "OSError 48: Address already in use" and the bridge
+        # silently fails to start — which manifests as a "Live offline"
+        # MasterStrip dot + null AbletonState in the FE. SO_REUSEADDR is
+        # safe here because we only ever run a single bridge per process,
+        # and there's no security exposure on loopback UDP.
+        srv_cls = osc_server.ThreadingOSCUDPServer
+        srv_cls.allow_reuse_address = True
+        self._server = srv_cls((self.host, self.port), self._dispatcher)
         # Re-read bound port in case caller passed 0 (auto-assign).
         self.port = self._server.server_address[1]
         self._thread = threading.Thread(

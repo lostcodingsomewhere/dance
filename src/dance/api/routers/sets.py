@@ -118,6 +118,11 @@ def _set_to_out(session: Session, s: Set) -> dict:
                 "bpm": float(a.bpm) if a and a.bpm is not None else None,
                 "key_camelot": a.key_camelot if a else None,
                 "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
+                "duration_seconds": (
+                    float(track.duration_seconds)
+                    if track and track.duration_seconds is not None
+                    else None
+                ),
                 "track_state": str(track.state) if track else None,
                 "track_error": track.error_message if track else None,
             }

@@ -1505,9 +1505,7 @@ def test_pipeline_process_creates_job_with_stage_items(client: TestClient, monke
         stdout = ""
         stderr = ""
 
-    monkeypatch.setattr(
-        "subprocess.run", lambda *a, **kw: _FakeProc()
-    )
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _FakeProc())
     # The worker imports subprocess at function scope; patch the module's
     # global reference too so the lookup inside _run_dispatcher_job's
     # function body resolves to the stub.
@@ -1571,9 +1569,7 @@ def test_pipeline_process_loops_until_state_signature_stable(
     import subprocess as _sub
 
     monkeypatch.setattr(_sub, "run", _fake_run)
-    monkeypatch.setattr(
-        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
-    )
+    monkeypatch.setattr(pipeline_mod, "_track_state_signature", lambda _: next(sig_seq))
 
     r = client.post("/api/v1/pipeline/process")
     assert r.status_code == 200
@@ -1630,12 +1626,8 @@ def test_pipeline_process_runs_build_graph_for_newly_complete_tracks(
     import subprocess as _sub
 
     monkeypatch.setattr(_sub, "run", _fake_run)
-    monkeypatch.setattr(
-        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
-    )
-    monkeypatch.setattr(
-        pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq)
-    )
+    monkeypatch.setattr(pipeline_mod, "_track_state_signature", lambda _: next(sig_seq))
+    monkeypatch.setattr(pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq))
 
     r = client.post("/api/v1/pipeline/process")
     assert r.status_code == 200
@@ -1662,11 +1654,7 @@ def test_pipeline_process_runs_build_graph_for_newly_complete_tracks(
     # Sanity: the IDs passed are the *diff* (3, 4), not the full {1,2,3,4}.
     graph_cmd = graph_calls[0]
     assert "--track-id" in graph_cmd
-    track_id_args = [
-        graph_cmd[i + 1]
-        for i, arg in enumerate(graph_cmd)
-        if arg == "--track-id"
-    ]
+    track_id_args = [graph_cmd[i + 1] for i, arg in enumerate(graph_cmd) if arg == "--track-id"]
     assert sorted(track_id_args) == ["3", "4"], (
         f"build-graph should target only newly-complete IDs (3, 4); "
         f"got --track-id args: {track_id_args}"
@@ -1696,12 +1684,8 @@ def test_pipeline_process_skips_build_graph_when_no_new_completes(
     import subprocess as _sub
 
     monkeypatch.setattr(_sub, "run", _fake_run)
-    monkeypatch.setattr(
-        pipeline_mod, "_track_state_signature", lambda _: next(sig_seq)
-    )
-    monkeypatch.setattr(
-        pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq)
-    )
+    monkeypatch.setattr(pipeline_mod, "_track_state_signature", lambda _: next(sig_seq))
+    monkeypatch.setattr(pipeline_mod, "_complete_track_ids", lambda _: next(complete_seq))
 
     r = client.post("/api/v1/pipeline/process")
     assert r.status_code == 200
@@ -1715,8 +1699,7 @@ def test_pipeline_process_skips_build_graph_when_no_new_completes(
 
     graph_calls = [c for c in captured_cmds if "build-graph" in c]
     assert graph_calls == [], (
-        f"build-graph should be skipped when no new completes; "
-        f"got: {captured_cmds}"
+        f"build-graph should be skipped when no new completes; got: {captured_cmds}"
     )
 
 
@@ -2711,9 +2694,7 @@ def test_search_tracks_respects_bpm_filter(client: TestClient, session, make_tra
 # ---------------------------------------------------------------------------
 
 
-def test_set_track_stem_kinds_default_null(
-    client: TestClient, session, make_track
-) -> None:
+def test_set_track_stem_kinds_default_null(client: TestClient, session, make_track) -> None:
     t = make_track(title="t")
     session.commit()
     sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
@@ -2721,9 +2702,7 @@ def test_set_track_stem_kinds_default_null(
     assert r.json()["tracks"][0]["stem_kinds"] is None
 
 
-def test_set_track_stem_kinds_set_on_add(
-    client: TestClient, session, make_track
-) -> None:
+def test_set_track_stem_kinds_set_on_add(client: TestClient, session, make_track) -> None:
     t = make_track(title="t")
     session.commit()
     sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
@@ -2748,9 +2727,7 @@ def test_set_track_stem_kinds_dedupes_and_normalizes(
     assert r.json()["tracks"][0]["stem_kinds"] == ["drums", "bass"]
 
 
-def test_set_track_stem_kinds_rejects_unknown_kind(
-    client: TestClient, session, make_track
-) -> None:
+def test_set_track_stem_kinds_rejects_unknown_kind(client: TestClient, session, make_track) -> None:
     t = make_track(title="t")
     session.commit()
     sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
@@ -2775,9 +2752,7 @@ def test_set_track_stem_kinds_rejects_empty_list_on_add(
     assert r.status_code == 400
 
 
-def test_set_track_stem_kinds_patch_set(
-    client: TestClient, session, make_track
-) -> None:
+def test_set_track_stem_kinds_patch_set(client: TestClient, session, make_track) -> None:
     t = make_track(title="t")
     session.commit()
     sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
@@ -2811,9 +2786,7 @@ def test_set_track_stem_kinds_patch_omitted_keeps_existing(
     assert r.json()["tracks"][0]["note"] == "cue here"
 
 
-def test_set_track_stem_kinds_patch_null_clears(
-    client: TestClient, session, make_track
-) -> None:
+def test_set_track_stem_kinds_patch_null_clears(client: TestClient, session, make_track) -> None:
     """PATCH with explicit null clears the filter."""
     t = make_track(title="t")
     session.commit()
@@ -2835,20 +2808,25 @@ def test_set_track_stem_kinds_patch_null_clears(
 # ---------------------------------------------------------------------------
 
 
-def _install_fake_spotify_client(monkeypatch, hits=None, track=None):
+def _install_fake_spotify_client(monkeypatch, hits=None, track=None, playlist=None):
     """Swap the module-level Spotify client for a stub so tests never hit
     the real API. Patches both the source module *and* every router that
     imported ``get_default_client`` by reference (FastAPI routers grab it
-    at import time)."""
+    at import time).
+
+    ``playlist``: optional list of ``SpotifyTrackHit`` to return from
+    ``get_playlist_tracks``. Lets the /pipeline/ingest/playlist tests stub
+    a deterministic playlist payload."""
     from dance.spotify import search as spotify_search
     from dance.api.routers import spotify as spotify_router
 
     class _FakeClient:
         configured = True
 
-        def __init__(self, _hits, _track):
+        def __init__(self, _hits, _track, _playlist):
             self._hits = _hits or []
             self._track = _track
+            self._playlist = _playlist or []
 
         def search_tracks(self, q, limit=8):  # noqa: ARG002
             return list(self._hits)
@@ -2858,7 +2836,10 @@ def _install_fake_spotify_client(monkeypatch, hits=None, track=None):
                 raise spotify_search.SpotifySearchError("no track configured")
             return self._track
 
-    fake = _FakeClient(hits, track)
+        def get_playlist_tracks(self, url, user_token=None):  # noqa: ARG002
+            return list(self._playlist)
+
+    fake = _FakeClient(hits, track, playlist)
     factory = lambda _settings: fake  # noqa: E731
     monkeypatch.setattr(spotify_search, "get_default_client", factory)
     monkeypatch.setattr(spotify_router, "get_default_client", factory)
@@ -2897,9 +2878,7 @@ def test_spotify_search_returns_hits(client: TestClient, monkeypatch) -> None:
     assert body["hits"][0]["artist"] == "Four Tet"
 
 
-def test_spotify_search_503_when_not_configured(
-    client: TestClient, monkeypatch
-) -> None:
+def test_spotify_search_503_when_not_configured(client: TestClient, monkeypatch) -> None:
     """No credentials → endpoint returns 503 with a friendly hint."""
     from dance.spotify import search as spotify_search
     from dance.api.routers import spotify as spotify_router
@@ -2915,9 +2894,7 @@ def test_spotify_search_503_when_not_configured(
     assert "DANCE_SPOTIFY_CLIENT_ID" in r.json()["detail"]
 
 
-def test_ingest_track_creates_pending_row(
-    client: TestClient, session, monkeypatch
-) -> None:
+def test_ingest_track_creates_pending_row(client: TestClient, session, monkeypatch) -> None:
     """Optimistic ingest creates a Track row immediately with state=pending
     and returns its id so the FE can add to the active set right away."""
     _install_fake_spotify_client(
@@ -2927,9 +2904,7 @@ def test_ingest_track_creates_pending_row(
     # Mock the download worker so we don't actually shell out to yt-dlp.
     import dance.api.routers.pipeline as pipeline_mod
 
-    monkeypatch.setattr(
-        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
 
     r = client.post(
         "/api/v1/pipeline/ingest/track",
@@ -2951,33 +2926,21 @@ def test_ingest_track_creates_pending_row(
     assert track.state == "pending"
 
 
-def test_ingest_track_idempotent_on_spotify_id(
-    client: TestClient, session, monkeypatch
-) -> None:
+def test_ingest_track_idempotent_on_spotify_id(client: TestClient, session, monkeypatch) -> None:
     """Calling twice for the same spotify_id returns the existing track."""
-    _install_fake_spotify_client(
-        monkeypatch, track=_make_hit(spotify_id="dup001")
-    )
+    _install_fake_spotify_client(monkeypatch, track=_make_hit(spotify_id="dup001"))
     import dance.api.routers.pipeline as pipeline_mod
 
-    monkeypatch.setattr(
-        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
 
-    first = client.post(
-        "/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}
-    ).json()
-    second = client.post(
-        "/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}
-    ).json()
+    first = client.post("/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}).json()
+    second = client.post("/api/v1/pipeline/ingest/track", json={"spotify_id": "dup001"}).json()
     assert first["track_id"] == second["track_id"]
     assert first["already_existed"] is False
     assert second["already_existed"] is True
 
 
-def test_ingest_track_accepts_caller_supplied_metadata(
-    client: TestClient, monkeypatch
-) -> None:
+def test_ingest_track_accepts_caller_supplied_metadata(client: TestClient, monkeypatch) -> None:
     """If FE ships title+artist (from a prior search hit), no Spotify
     lookup is needed — useful so the endpoint works in tests / dev w/o
     creds, and avoids one HTTP roundtrip in production."""
@@ -2986,14 +2949,10 @@ def test_ingest_track_accepts_caller_supplied_metadata(
     class _UnconfClient:
         configured = False
 
-    monkeypatch.setattr(
-        spotify_search, "get_default_client", lambda _settings: _UnconfClient()
-    )
+    monkeypatch.setattr(spotify_search, "get_default_client", lambda _settings: _UnconfClient())
     import dance.api.routers.pipeline as pipeline_mod
 
-    monkeypatch.setattr(
-        pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
 
     r = client.post(
         "/api/v1/pipeline/ingest/track",
@@ -3008,9 +2967,159 @@ def test_ingest_track_accepts_caller_supplied_metadata(
     assert r.json()["state"] == "pending"
 
 
-def test_set_track_out_surfaces_track_state(
-    client: TestClient, session, make_track
+def test_ingest_playlist_creates_rows_and_dedupes(
+    client: TestClient, session, monkeypatch, make_track
 ) -> None:
+    """Playlist ingest: bulk-create Track rows from a Spotify playlist URL,
+    skip IDs already in the DB, and return per-track IDs the FE can use to
+    drop the whole playlist into the active Set in one shot."""
+    # 3 tracks in the playlist; one (sid=existing-001) already in the DB.
+    existing = make_track(title="Already Here", spotify_id="existing-001")
+    session.commit()
+
+    playlist_hits = [
+        _make_hit(spotify_id="new-001", title="Brand New 1"),
+        _make_hit(spotify_id="new-002", title="Brand New 2"),
+        _make_hit(spotify_id="existing-001", title="Already Here"),
+    ]
+    _install_fake_spotify_client(monkeypatch, playlist=playlist_hits)
+
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "https://open.spotify.com/playlist/abc123xyz"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["playlist_id"] == "abc123xyz"
+    assert body["total_in_playlist"] == 3
+    assert body["added"] == 2
+    assert body["skipped_existing"] == 1
+    assert body["failed"] == 0
+    # All 3 IDs surface (2 new + 1 existing) so the FE can bulk-add to set.
+    assert existing.id in body["track_ids"]
+    assert len(body["track_ids"]) == 3
+    assert len(body["job_ids"]) == 2  # one per newly-created row
+
+
+def test_ingest_playlist_rejects_bad_url(client: TestClient, monkeypatch) -> None:
+    """A URL we can't extract a playlist ID from → 400 with a hint."""
+    _install_fake_spotify_client(monkeypatch, playlist=[])
+    r = client.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "not-a-real-url"},
+    )
+    assert r.status_code == 400
+    assert "playlist" in r.json()["detail"].lower()
+
+
+def test_ingest_playlist_503_when_unconfigured(client: TestClient, monkeypatch) -> None:
+    """No Spotify creds → friendly 503."""
+    from dance.spotify import search as spotify_search
+
+    class _UnconfClient:
+        configured = False
+
+    monkeypatch.setattr(spotify_search, "get_default_client", lambda _settings: _UnconfClient())
+    r = client.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "https://open.spotify.com/playlist/abc"},
+    )
+    assert r.status_code == 503
+
+
+def test_ingest_playlist_fuzzy_dedup_backfills_spotify_id(
+    client: TestClient, session, monkeypatch, make_track
+) -> None:
+    """A playlist hit whose (artist, title) fuzzy-matches an existing Track
+    (CSV-ingested, ``spotify_id=None``) should NOT create a duplicate. It
+    should backfill the Spotify ID onto the existing row and count as
+    ``skipped_existing`` with ``backfilled > 0``."""
+    # Existing Track from a prior CSV / library scan — no spotify_id.
+    existing = make_track(title="Pressure", artist="RÜFÜS DU SOL", spotify_id=None)
+    session.commit()
+
+    # Playlist returns one hit with the same artist+title (case + accents differ).
+    playlist_hits = [
+        _make_hit(spotify_id="rufus001", title="Pressure", artist="Rufus Du Sol"),
+    ]
+    _install_fake_spotify_client(monkeypatch, playlist=playlist_hits)
+
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "https://open.spotify.com/playlist/xyz789"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["added"] == 0
+    assert body["skipped_existing"] == 1
+    assert body["backfilled"] == 1
+    assert body["track_ids"] == [existing.id]
+
+    # The existing track's spotify_id should now be set.
+    session.expire_all()
+    refreshed = session.get(type(existing), existing.id)
+    assert refreshed is not None
+    assert refreshed.spotify_id == "rufus001"
+
+
+def test_ingest_playlist_fuzzy_dedup_skips_when_spotify_id_already_set(
+    client: TestClient, session, monkeypatch, make_track
+) -> None:
+    """If the fuzzy-matched existing track ALREADY has a different
+    spotify_id, we just skip — don't overwrite (some other playlist or
+    Cmd-K ingest put it there for a reason). ``backfilled`` stays 0."""
+    existing = make_track(
+        title="Pressure", artist="RÜFÜS DU SOL", spotify_id="some-other-id"
+    )
+    session.commit()
+    playlist_hits = [
+        _make_hit(spotify_id="rufus001", title="Pressure", artist="Rufus Du Sol"),
+    ]
+    _install_fake_spotify_client(monkeypatch, playlist=playlist_hits)
+
+    import dance.api.routers.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", lambda *a, **kw: None)
+
+    r = client.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "https://open.spotify.com/playlist/xyz789"},
+    )
+    body = r.json()
+    assert body["added"] == 0
+    assert body["skipped_existing"] == 1
+    assert body["backfilled"] == 0  # existing already had a different ID — left alone
+
+    session.expire_all()
+    refreshed = session.get(type(existing), existing.id)
+    assert refreshed.spotify_id == "some-other-id"  # unchanged
+
+
+def test_extract_playlist_id_forms() -> None:
+    """Cover the URL shapes the FE/CLI will throw at the extractor."""
+    from dance.spotify.search import extract_playlist_id
+
+    assert (
+        extract_playlist_id("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc")
+        == "37i9dQZF1DXcBWIGoYBM5M"
+    )
+    assert (
+        extract_playlist_id("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M") == "37i9dQZF1DXcBWIGoYBM5M"
+    )
+    assert extract_playlist_id("37i9dQZF1DXcBWIGoYBM5M") == "37i9dQZF1DXcBWIGoYBM5M"
+    assert extract_playlist_id("") is None
+    assert extract_playlist_id("garbage") is None
+
+
+def test_set_track_out_surfaces_track_state(client: TestClient, session, make_track) -> None:
     """Tracks freshly ingested via Spotify carry track_state=pending; the
     rail needs that to render its ⌛ chip."""
     t = make_track(title="pending-thing", state="pending")
@@ -3037,9 +3146,7 @@ def test_health_deps_reports_all_four_checks(client: TestClient) -> None:
     assert isinstance(body["all_green"], bool)
 
 
-def test_health_deps_missing_yt_dlp_makes_ok_false(
-    client: TestClient, monkeypatch
-) -> None:
+def test_health_deps_missing_yt_dlp_makes_ok_false(client: TestClient, monkeypatch) -> None:
     """When yt-dlp isn't reachable the report flips ``ok`` false so the
     FE can surface a red chip. Patches the resolver in the app module
     (where _deps_status imports it) so the override actually takes."""

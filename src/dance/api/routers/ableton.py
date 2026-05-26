@@ -223,11 +223,7 @@ def load_track(
 
     stems: list[StemFile] = []
     if body.include_stems:
-        stems = (
-            session.query(StemFile)
-            .filter(StemFile.track_id == body.track_id)
-            .all()
-        )
+        stems = session.query(StemFile).filter(StemFile.track_id == body.track_id).all()
 
     try:
         result = bridge.push_track_to_live(
@@ -249,17 +245,11 @@ def load_track(
     is_full_song = body.kinds is None and body.include_stems
     if is_full_song and stems_loaded == 4:
         message = (
-            f"Loaded {title!r} into scene {result['scene_index'] + 1}. "
-            f"Fire the scene to play."
+            f"Loaded {title!r} into scene {result['scene_index'] + 1}. Fire the scene to play."
         )
     elif stems_loaded > 0:
-        kinds_summary = (
-            ", ".join(body.kinds) if body.kinds else f"{stems_loaded}/4 stems"
-        )
-        message = (
-            f"Loaded {kinds_summary} from {title!r} on "
-            f"scene {result['scene_index'] + 1}."
-        )
+        kinds_summary = ", ".join(body.kinds) if body.kinds else f"{stems_loaded}/4 stems"
+        message = f"Loaded {kinds_summary} from {title!r} on scene {result['scene_index'] + 1}."
     else:
         message = f"Could not load {title!r} — check warnings."
 
@@ -293,9 +283,7 @@ def deck_map(
     def _lookup(track_id: int) -> tuple[Track | None, AudioAnalysis | None]:
         if track_id in track_cache:
             return track_cache[track_id]
-        track = (
-            session.query(Track).filter(Track.id == track_id).one_or_none()
-        )
+        track = session.query(Track).filter(Track.id == track_id).one_or_none()
         analysis = (
             session.query(AudioAnalysis)
             .filter(
@@ -340,6 +328,7 @@ def deck_map(
                 bpm=getattr(analysis, "bpm", None),
                 key_camelot=getattr(analysis, "key_camelot", None),
                 floor_energy=getattr(analysis, "floor_energy", None),
+                duration_seconds=getattr(track, "duration_seconds", None),
             )
         )
     return DeckMapOut(columns=state["columns"], cells=cells)
@@ -417,9 +406,7 @@ def resync_decks(
             paren = clip_name[opener + 1 : -1].strip().lower()
             if paren == kind:
                 title = clip_name[:opener].strip()
-        track = (
-            session.query(Track).filter(Track.title == title).one_or_none()
-        )
+        track = session.query(Track).filter(Track.title == title).one_or_none()
         if track is None:
             unmatched.append({**entry, "tried_title": title})
             continue
@@ -445,9 +432,7 @@ _STEM_COLUMNS = {"drums", "bass", "vocals", "other"}
 _MIX_COLUMN = "mix"
 
 
-def _resolve_preview_path(
-    session: Session, track_id: int, column: str
-) -> str | None:
+def _resolve_preview_path(session: Session, track_id: int, column: str) -> str | None:
     """Look up the audio file on disk for a given preview request.
 
     For stem columns we return the matching StemFile.path; for the mix
@@ -493,9 +478,7 @@ def preview(
         )
 
     track = session.query(Track).filter(Track.id == body.track_id).one_or_none()
-    label = (
-        f"PREVIEW · {(track.title if track else None) or f'#{body.track_id}'} ({body.column})"
-    )
+    label = f"PREVIEW · {(track.title if track else None) or f'#{body.track_id}'} ({body.column})"
 
     try:
         result = bridge.preview_audio(audio_path, label=label)

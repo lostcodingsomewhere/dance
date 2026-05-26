@@ -5,6 +5,7 @@ import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
 import { useRegions } from "../hooks/useRegions";
 import { useTrackWaveform } from "../hooks/useWaveform";
+import { formatDuration, formatRemaining } from "../lib/format";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
 import { RoleIcon } from "./RoleIcon";
@@ -77,17 +78,18 @@ export function CueStrip() {
   // loop by default. Without tempo/beat we just hide the playhead.
   const tempo = ableton.tempo;
   const beat = ableton.beat;
+  const duration =
+    track?.duration_seconds ?? waveform.data?.duration_seconds ?? null;
   let playheadPosition: number | undefined = undefined;
-  if (
-    tempo != null &&
-    beat != null &&
-    waveform.data?.duration_seconds &&
-    waveform.data.duration_seconds > 0
-  ) {
-    const elapsedSec = (beat / tempo) * 60;
-    playheadPosition = (elapsedSec % waveform.data.duration_seconds) /
-      waveform.data.duration_seconds;
+  let elapsedSec: number | undefined = undefined;
+  if (tempo != null && beat != null && duration && duration > 0) {
+    elapsedSec = (beat / tempo) * 60;
+    playheadPosition = (elapsedSec % duration) / duration;
   }
+  const remaining =
+    duration != null && elapsedSec != null
+      ? duration - (elapsedSec % duration)
+      : null;
 
   return (
     <div
@@ -119,6 +121,21 @@ export function CueStrip() {
             {analysis?.floor_energy != null && (
               <span className="ml-1.5 text-neutral-600">
                 · E{analysis.floor_energy}
+              </span>
+            )}
+            {duration != null && (
+              <span
+                className="ml-1.5 tabular-nums text-cyan-300/70"
+                title={
+                  elapsedSec != null
+                    ? "elapsed / remaining"
+                    : "preview duration"
+                }
+              >
+                ·{" "}
+                {elapsedSec != null
+                  ? `${formatDuration(elapsedSec % duration)} ${formatRemaining(remaining)}`
+                  : formatDuration(duration)}
               </span>
             )}
           </div>

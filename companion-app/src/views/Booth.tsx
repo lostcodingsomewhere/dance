@@ -5,8 +5,7 @@ import { CueStrip } from "../components/CueStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { useAutoLog } from "../hooks/useAutoLog";
 import { useAutoSession } from "../hooks/useAutoSession";
-
-const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
+import { useAppStore } from "../store";
 
 /**
  * The Booth — the only screen you should look at during a set.
@@ -46,6 +45,9 @@ const STEM_COLUMNS = ["drums", "bass", "vocals", "other", "mix"];
 export function Booth() {
   useAutoSession();
   useAutoLog();
+  // User-customizable column order — drag a column header in the booth to
+  // reorder. Defaults to the canonical drums/bass/vocals/other/mix layout.
+  const stemColumns = useAppStore((s) => s.stemColumnOrder);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -58,7 +60,7 @@ export function Booth() {
           {/* Leading spacer mirrors SceneGrid's row-label column so the
               5 rec banners line up under the 5 stem columns. */}
           <div aria-hidden="true" />
-          {STEM_COLUMNS.map((c) => (
+          {stemColumns.map((c) => (
             <ColumnRecBanner key={c} column={c} k={5} />
           ))}
         </div>

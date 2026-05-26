@@ -9,6 +9,7 @@ import {
   spotifySearch,
 } from "../api";
 import { useActiveSet, useAddTrackToSet } from "../hooks/useSets";
+import { formatDuration, formatDurationMs } from "../lib/format";
 import { store, useAppStore } from "../store";
 import type { Recommendation, SpotifyTrackHit, Track } from "../types";
 import { BpmRangePicker } from "./BpmRangePicker";
@@ -392,6 +393,7 @@ function TrackRow({
       bpm={analysis?.bpm ?? null}
       keyCamelot={analysis?.key_camelot ?? null}
       floorEnergy={analysis?.floor_energy ?? null}
+      durationSeconds={track.duration_seconds}
       score={null}
       trackId={track.id}
       filePath={track.file_path}
@@ -414,6 +416,7 @@ function RecRow({
       bpm={rec.bpm}
       keyCamelot={rec.key_camelot}
       floorEnergy={rec.floor_energy}
+      durationSeconds={null}
       score={rec.score}
       trackId={rec.track_id}
       filePath={rec.file_path}
@@ -428,6 +431,7 @@ function RowShell({
   bpm,
   keyCamelot,
   floorEnergy,
+  durationSeconds,
   score,
   trackId,
   filePath,
@@ -438,6 +442,7 @@ function RowShell({
   bpm: number | null;
   keyCamelot: string | null;
   floorEnergy: number | null;
+  durationSeconds: number | null;
   score: number | null;
   trackId: number;
   filePath: string | null;
@@ -496,6 +501,11 @@ function RowShell({
         </div>
         <div className="text-xs text-neutral-500 truncate">
           {artist ?? "Unknown"}
+          {durationSeconds != null && (
+            <span className="ml-2 font-mono text-neutral-600" title="Track duration">
+              {formatDuration(durationSeconds)}
+            </span>
+          )}
           {bpm != null && (
             <span className="ml-2 font-mono">{bpm.toFixed(1)} BPM</span>
           )}
@@ -568,12 +578,7 @@ function SpotifyHitRow({
     }
   }
 
-  const durMin =
-    hit.duration_ms != null
-      ? `${Math.floor(hit.duration_ms / 60000)}:${String(
-          Math.floor((hit.duration_ms % 60000) / 1000),
-        ).padStart(2, "0")}`
-      : null;
+  const durMin = hit.duration_ms != null ? formatDurationMs(hit.duration_ms) : null;
 
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60">

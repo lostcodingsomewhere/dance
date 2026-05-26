@@ -12,6 +12,20 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { pushTrackToLive, searchTracks, updateSetTrackNote } from "../api";
 import {
   useActiveSet,
@@ -22,6 +36,12 @@ import {
   useRemoveTrackFromSet,
   useTailRecs,
 } from "../hooks/useSets";
+import {
+  usePreviewState,
+  useStartPreview,
+  useStopPreview,
+} from "../hooks/usePreview";
+import { formatDuration } from "../lib/format";
 import { store } from "../store";
 import type { DanceSet, SetTrack, Track } from "../types";
 import { EnergyBar } from "../components/EnergyBar";
@@ -113,6 +133,26 @@ function Header({ set }: { set: DanceSet }) {
 }
 
 function LeftPane({ set }: { set: DanceSet }) {
+  const move = useMoveTrackInSet();
+  // 8px activation distance — buttons + the keep-text-selectable cells
+  // inside the row are click-targets, so we need a small drag threshold
+  // to disambiguate quick clicks from drags.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
+
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const newIdx = set.tracks.findIndex((t) => t.track_id === Number(over.id));
+    if (newIdx < 0) return;
+    move.mutate({
+      setId: set.id,
+      trackId: Number(active.id),
+      position: newIdx,
+    });
+  }
+
   return (
     <section className="flex flex-col min-h-0 border border-neutral-800 rounded-md">
       <div className="px-3 py-2 border-b border-neutral-900 text-[10px] uppercase tracking-wider text-neutral-500">
@@ -124,17 +164,27 @@ function LeftPane({ set }: { set: DanceSet }) {
             Empty set — pick from the right pane or open ⌘K to find tracks.
           </div>
         ) : (
-          <ol className="flex flex-col gap-1">
-            {set.tracks.map((t, i) => (
-              <EditableTrackRow
-                key={t.track_id}
-                setId={set.id}
-                track={t}
-                index={i}
-                isLast={i === set.tracks.length - 1}
-              />
-            ))}
-          </ol>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={set.tracks.map((t) => t.track_id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ol className="flex flex-col gap-1">
+                {set.tracks.map((t, i) => (
+                  <EditableTrackRow
+                    key={t.track_id}
+                    setId={set.id}
+                    track={t}
+                    index={i}
+                  />
+                ))}
+              </ol>
+            </SortableContext>
+          </DndContext>
         )}
       </div>
     </section>
@@ -145,15 +195,28 @@ function EditableTrackRow({
   setId,
   track,
   index,
-  isLast,
 }: {
   setId: number;
   track: SetTrack;
   index: number;
-  isLast: boolean;
 }) {
-  const move = useMoveTrackInSet();
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: track.track_id });
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   const remove = useRemoveTrackFromSet();
+  const startPreview = useStartPreview();
+  const stopPreview = useStopPreview();
+  const previewing = usePreviewState();
+  const isPreviewingThis = previewing?.trackId === track.track_id;
   // Load-into-Live respects the per-slot stem_kinds filter so the editor's
   // load action matches the rail's. Disabled while the track is still
   // running through the pipeline (no stems on disk yet to push over OSC).
@@ -168,8 +231,24 @@ function EditableTrackRow({
   const [noteDraft, setNoteDraft] = useState(track.note ?? "");
 
   return (
-    <li className="rounded-md border border-neutral-800 bg-neutral-900/40">
+    <li
+      ref={setNodeRef}
+      style={sortableStyle}
+      {...attributes}
+      className={`relative rounded-md border border-neutral-800 bg-neutral-900/40 ${
+        isDragging ? "opacity-40 z-30" : ""
+      }`}
+    >
       <div className="flex items-center gap-2 px-2 py-1.5">
+        {/* Drag handle — only this element gets the drag listeners. */}
+        <div
+          {...listeners}
+          title="Drag to reorder"
+          aria-label="drag handle"
+          className="w-4 self-stretch flex items-center justify-center cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 select-none touch-none"
+        >
+          ⋮⋮
+        </div>
         <span className="font-mono text-[10px] text-neutral-500 tabular-nums w-6 text-right">
           {index + 1}
         </span>
@@ -180,10 +259,29 @@ function EditableTrackRow({
           </div>
           <div className="text-xs text-neutral-500 truncate">
             {track.artist ?? "—"}
+            {track.duration_seconds != null && (
+              <span
+                className="ml-2 font-mono text-neutral-600"
+                title="Track duration"
+              >
+                {formatDuration(track.duration_seconds)}
+              </span>
+            )}
             {track.bpm != null && (
               <span className="ml-2 font-mono">{track.bpm.toFixed(0)} BPM</span>
             )}
           </div>
+          {/* Inline note — visible at all times so plan annotations show
+              up at a glance without hovering or opening the editor. */}
+          {track.note && !noteOpen && (
+            <div
+              className="text-[11px] text-amber-200/80 italic truncate mt-0.5 flex items-baseline gap-1"
+              title={track.note}
+            >
+              <span aria-hidden="true">📝</span>
+              <span className="truncate">{track.note}</span>
+            </div>
+          )}
         </div>
         <EnergyBar energy={track.floor_energy ?? null} size="sm" />
         <StemKindsChip
@@ -192,6 +290,36 @@ function EditableTrackRow({
           stemKinds={track.stem_kinds}
           variant="full"
         />
+        <button
+          type="button"
+          disabled={
+            isProcessing(track) ||
+            startPreview.isPending ||
+            stopPreview.isPending
+          }
+          onClick={() => {
+            if (isPreviewingThis) {
+              stopPreview.mutate();
+            } else {
+              startPreview.mutate({ trackId: track.track_id, column: "mix" });
+            }
+          }}
+          className={`px-2 h-6 text-xs font-medium rounded inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed ${
+            isPreviewingThis
+              ? "text-cyan-200 bg-cyan-500/30 hover:bg-cyan-500/40"
+              : "text-cyan-300 hover:text-cyan-100 hover:bg-cyan-500/20"
+          }`}
+          title={
+            isProcessing(track)
+              ? "Pipeline still running — preview enabled when complete"
+              : isPreviewingThis
+                ? "Stop preview (Cue Out → headphones)"
+                : "Cue preview in headphones (Scarlett outs 3/4) — master untouched"
+          }
+          aria-label={isPreviewingThis ? "stop cue preview" : "cue preview"}
+        >
+          {isPreviewingThis ? "■ Cue" : "▶ Cue"}
+        </button>
         <button
           type="button"
           disabled={isProcessing(track) || forceLoad.isPending}
@@ -205,28 +333,6 @@ function EditableTrackRow({
           aria-label="load into Live"
         >
           → Live
-        </button>
-        <button
-          type="button"
-          disabled={index === 0 || move.isPending}
-          onClick={() =>
-            move.mutate({ setId, trackId: track.track_id, position: index - 1 })
-          }
-          className="w-6 h-6 text-neutral-500 hover:text-neutral-100 hover:bg-neutral-800 rounded inline-flex items-center justify-center disabled:opacity-30"
-          title="Move up"
-        >
-          ▲
-        </button>
-        <button
-          type="button"
-          disabled={isLast || move.isPending}
-          onClick={() =>
-            move.mutate({ setId, trackId: track.track_id, position: index + 1 })
-          }
-          className="w-6 h-6 text-neutral-500 hover:text-neutral-100 hover:bg-neutral-800 rounded inline-flex items-center justify-center disabled:opacity-30"
-          title="Move down"
-        >
-          ▼
         </button>
         <button
           type="button"
@@ -307,6 +413,47 @@ function NoteEditor({
         Save
       </button>
     </div>
+  );
+}
+
+/**
+ * Shared Cue/preview button — toggles between "▶ Cue" (start) and "■ Cue"
+ * (stop) and uses the existing preview state hooks so only one row at a
+ * time shows the active state. Used in the Library + Tail-recs panes
+ * where rows are read-only (not part of a set yet) but the DJ still
+ * wants to audition before committing.
+ */
+function CuePreviewButton({ trackId }: { trackId: number }) {
+  const startPreview = useStartPreview();
+  const stopPreview = useStopPreview();
+  const previewing = usePreviewState();
+  const isPreviewingThis = previewing?.trackId === trackId;
+  return (
+    <button
+      type="button"
+      disabled={startPreview.isPending || stopPreview.isPending}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (isPreviewingThis) {
+          stopPreview.mutate();
+        } else {
+          startPreview.mutate({ trackId, column: "mix" });
+        }
+      }}
+      className={`text-xs px-2 py-1 rounded inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed ${
+        isPreviewingThis
+          ? "text-cyan-200 bg-cyan-500/30 hover:bg-cyan-500/40"
+          : "text-cyan-300 hover:text-cyan-100 hover:bg-cyan-500/20"
+      }`}
+      title={
+        isPreviewingThis
+          ? "Stop preview (Cue Out → headphones)"
+          : "Cue preview in headphones (Scarlett outs 3/4) — master untouched"
+      }
+      aria-label={isPreviewingThis ? "stop cue preview" : "cue preview"}
+    >
+      {isPreviewingThis ? "■ Cue" : "▶ Cue"}
+    </button>
   );
 }
 
@@ -412,6 +559,11 @@ function LibraryRow({
         </div>
         <div className="text-xs text-neutral-500 truncate">
           {track.artist ?? "—"}
+          {track.duration_seconds != null && (
+            <span className="ml-2 font-mono text-neutral-600" title="Track duration">
+              {formatDuration(track.duration_seconds)}
+            </span>
+          )}
           {track.analysis?.bpm != null && (
             <span className="ml-2 font-mono">
               {track.analysis.bpm.toFixed(0)} BPM
@@ -420,6 +572,7 @@ function LibraryRow({
         </div>
       </div>
       <EnergyBar energy={track.analysis?.floor_energy ?? null} size="sm" />
+      <CuePreviewButton trackId={track.id} />
       <button
         type="button"
         disabled={alreadyInSet || add.isPending}
@@ -479,6 +632,7 @@ function TailRecsPane({ set }: { set: DanceSet }) {
               </div>
             </div>
             <EnergyBar energy={r.floor_energy ?? null} size="sm" />
+            <CuePreviewButton trackId={r.track_id} />
             <button
               type="button"
               onClick={() => add.mutate({ setId: set.id, trackId: r.track_id })}

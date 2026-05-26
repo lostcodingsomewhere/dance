@@ -37,6 +37,8 @@ from dance.api.deps import get_session, get_settings
 from dance.api.jobs import get_job_registry
 from dance.api.schemas import (
     IngestCommitRequest,
+    IngestPlaylistRequest,
+    IngestPlaylistResult,
     IngestPreviewRequest,
     IngestPreviewResponse,
     IngestPreviewRow,
@@ -109,9 +111,7 @@ def _save_watch_state(settings: Settings) -> None:
 # These states mean "this track still has work to do." Used by both the
 # /status endpoint's ``in_progress`` flag and the watch loop's
 # pending-work check.
-_TERMINAL_STATES: frozenset[str] = frozenset(
-    {TrackState.COMPLETE.value, TrackState.ERROR.value}
-)
+_TERMINAL_STATES: frozenset[str] = frozenset({TrackState.COMPLETE.value, TrackState.ERROR.value})
 
 
 def _pending_track_count(settings: Settings) -> int:
@@ -121,9 +121,7 @@ def _pending_track_count(settings: Settings) -> int:
     session = SessionLocal()
     try:
         return int(
-            session.query(func.count(Track.id))
-            .filter(~Track.state.in_(_TERMINAL_STATES))
-            .scalar()
+            session.query(func.count(Track.id)).filter(~Track.state.in_(_TERMINAL_STATES)).scalar()
             or 0
         )
     finally:
@@ -167,9 +165,7 @@ def start_watch_thread(settings: Settings) -> None:
         if _WATCH_STARTED:
             return
         _load_watch_state(settings)
-        t = threading.Thread(
-            target=_watch_loop, args=(settings,), daemon=True, name="watch-loop"
-        )
+        t = threading.Thread(target=_watch_loop, args=(settings,), daemon=True, name="watch-loop")
         t.start()
         _WATCH_STARTED = True
         logger.info(
@@ -189,11 +185,7 @@ def get_pipeline_status(session: Session = Depends(get_session)) -> PipelineStat
     "separated" is genuinely halfway done even though zero tracks have
     reached the terminal state.
     """
-    rows = (
-        session.query(Track.state, func.count(Track.id))
-        .group_by(Track.state)
-        .all()
-    )
+    rows = session.query(Track.state, func.count(Track.id)).group_by(Track.state).all()
     by_state = {state: int(count) for state, count in rows}
     counts = {s.value: by_state.get(s.value, 0) for s in TrackState}
     total = sum(counts.values())
@@ -230,9 +222,7 @@ def get_pipeline_status(session: Session = Depends(get_session)) -> PipelineStat
     }
     weighted_total = sum(counts[s] * _STAGE_PROGRESS[s] for s in counts)
     max_possible = total * 6
-    weighted_progress = (
-        round((weighted_total / max_possible) * 100, 1) if max_possible else 0.0
-    )
+    weighted_progress = round((weighted_total / max_possible) * 100, 1) if max_possible else 0.0
 
     return PipelineStatusOut(
         counts=counts,
@@ -264,11 +254,7 @@ def get_pipeline_recent(
     q = session.query(Track)
     if state is not None:
         q = q.filter(Track.state == state)
-    tracks = (
-        q.order_by(desc(Track.updated_at), desc(Track.id))
-        .limit(limit)
-        .all()
-    )
+    tracks = q.order_by(desc(Track.updated_at), desc(Track.id)).limit(limit).all()
     return [
         PipelineRecentTrackOut(
             id=t.id,
@@ -297,9 +283,7 @@ def _classify_rows(
     - A track in the DB has a fuzzy-matching (artist, title).
     """
     existing_rows = session.query(Track.id, Track.artist, Track.title).all()
-    idx = index_existing(
-        [(int(tid), a, t) for tid, a, t in existing_rows]
-    )
+    idx = index_existing([(int(tid), a, t) for tid, a, t in existing_rows])
 
     new: list[IngestPreviewRow] = []
     dupes: list[IngestPreviewRow] = []
@@ -457,9 +441,7 @@ def ingest_track(
     if not spotify_id:
         raise HTTPException(status_code=400, detail="spotify_id is required")
 
-    existing = (
-        session.query(Track).filter(Track.spotify_id == spotify_id).first()
-    )
+    existing = session.query(Track).filter(Track.spotify_id == spotify_id).first()
     if existing is not None:
         return IngestTrackResult(
             track_id=int(existing.id),
@@ -491,13 +473,9 @@ def ingest_track(
         try:
             hit = client.get_track(spotify_id)
         except SpotifyAuthError as exc:
-            raise HTTPException(
-                status_code=503, detail=f"Spotify auth: {exc}"
-            ) from exc
+            raise HTTPException(status_code=503, detail=f"Spotify auth: {exc}") from exc
         except SpotifySearchError as exc:
-            raise HTTPException(
-                status_code=502, detail=f"Spotify error: {exc}"
-            ) from exc
+            raise HTTPException(status_code=502, detail=f"Spotify error: {exc}") from exc
         title = title or hit.title
         artist = artist or hit.artist
         duration_ms = duration_ms or hit.duration_ms
@@ -556,6 +534,200 @@ def ingest_track(
         state=str(track.state),
         job_id=job.id,
         already_existed=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Playlist ingest — paste a Spotify URL, get every new track auto-downloaded
+# ---------------------------------------------------------------------------
+
+
+@router.post("/ingest/playlist", response_model=IngestPlaylistResult)
+def ingest_playlist(
+    body: IngestPlaylistRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> IngestPlaylistResult:
+    """Paste a Spotify playlist URL → bulk-ingest every track in it.
+
+    Pipeline:
+
+    1. Resolve the URL/ID to a Spotify playlist via the Web API.
+    2. For each track:
+       - If a Track row with that ``spotify_id`` already exists → skip
+         (return its id in the response so the FE can still e.g. drop the
+         whole playlist into the active Set).
+       - Otherwise, create an optimistic Track row in ``pending`` state
+         (mirrors ``/ingest/track``) and spawn a yt-dlp download job.
+
+    The response gives counts upfront + IDs of every touched track + job
+    IDs for the new downloads. The FE can subscribe to ``/pipeline/jobs/{id}``
+    for live progress, or just poll ``/pipeline/recent`` like the bulk CSV
+    flow does.
+    """
+    from dance.spotify.search import (
+        SpotifyAuthError,
+        SpotifySearchError,
+        extract_playlist_id,
+        get_default_client,
+    )
+
+    playlist_id = extract_playlist_id(body.playlist_url)
+    if not playlist_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Couldn't extract a Spotify playlist ID from "
+                f"{body.playlist_url!r}. Paste the full URL "
+                "(https://open.spotify.com/playlist/...)"
+            ),
+        )
+
+    client = get_default_client(settings)
+    # Playlist reads need *some* auth — Client Credentials usually 403s
+    # on /tracks for non-owned playlists post-Nov 2024, so a user OAuth
+    # token is the practical path. Fail early if nothing's configured AND
+    # the caller didn't paste a token.
+    if not client.configured and not body.user_token:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Spotify not configured — set DANCE_SPOTIFY_CLIENT_ID and "
+                "DANCE_SPOTIFY_CLIENT_SECRET in ~/.dance/.env (or paste a "
+                "user OAuth token from exportify.net DevTools into the form)"
+            ),
+        )
+
+    try:
+        hits = client.get_playlist_tracks(
+            body.playlist_url, user_token=body.user_token
+        )
+    except SpotifyAuthError as exc:
+        # User-token-required errors (401 expired, 403 needs user token)
+        # both surface as SpotifyAuthError — return 401 so the FE can
+        # prompt for a fresh token specifically.
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except SpotifySearchError as exc:
+        raise HTTPException(status_code=502, detail=f"Spotify: {exc}") from exc
+
+    if not hits:
+        return IngestPlaylistResult(
+            playlist_id=playlist_id,
+            total_in_playlist=0,
+            added=0,
+            skipped_existing=0,
+            failed=0,
+            track_ids=[],
+            job_ids=[],
+        )
+
+    # Two-stage dedup:
+    #   - exact spotify_id match (fast, fully reliable for tracks ingested via
+    #     /spotify/search or a prior playlist run)
+    #   - fuzzy (artist, title) match (catches tracks ingested via CSV /
+    #     library scan where spotify_id was never set — without this,
+    #     re-ingesting via a playlist creates a duplicate Track row even
+    #     though the same audio is already in the library).
+    # When fuzzy matches a pre-existing row that has no spotify_id, we
+    # *back-fill* that ID onto the existing row so the next playlist
+    # ingest of the same track short-circuits via the exact-ID path.
+    existing_rows = (
+        session.query(Track.id, Track.spotify_id)
+        .filter(Track.spotify_id.in_([h.spotify_id for h in hits]))
+        .all()
+    )
+    existing_by_sid: dict[str, int] = {sid: int(tid) for tid, sid in existing_rows}
+
+    # Fuzzy index over *all* tracks in the library — small enough to be cheap
+    # (low thousands at most) and avoids per-hit DB queries.
+    full_index_rows = session.query(Track.id, Track.artist, Track.title).all()
+    fuzzy_index = index_existing(
+        [(int(tid), a, t) for tid, a, t in full_index_rows]
+    )
+
+    registry = get_job_registry()
+    added_track_ids: list[int] = []
+    skipped_track_ids: list[int] = []
+    job_ids: list[str] = []
+    failed = 0
+    backfilled_spotify_ids = 0
+
+    for hit in hits:
+        # Stage 1: exact spotify_id match — skip outright.
+        if hit.spotify_id in existing_by_sid:
+            skipped_track_ids.append(existing_by_sid[hit.spotify_id])
+            continue
+        # Stage 2: fuzzy (artist, title) match — likely a CSV-ingested twin.
+        # Back-fill the spotify_id so future ingests dedup on the fast path.
+        fuzzy_match = find_duplicate(
+            hit.artist or "", hit.title or "", fuzzy_index
+        )
+        if fuzzy_match is not None:
+            existing_track = session.get(Track, fuzzy_match)
+            if existing_track is not None:
+                if existing_track.spotify_id is None:
+                    existing_track.spotify_id = hit.spotify_id
+                    backfilled_spotify_ids += 1
+                    session.commit()
+                skipped_track_ids.append(fuzzy_match)
+                continue
+        # Mirror the per-track flow in ``ingest_track`` — same shape so the
+        # downstream pipeline can't tell the difference.
+        csv_row = CsvRow(
+            artist=hit.artist or "Unknown",
+            title=hit.title or "(untitled)",
+            album=hit.album or "",
+            duration_s=int(hit.duration_ms / 1000) if hit.duration_ms else 0,
+        )
+        expected_path = expected_target(settings.library_dir, csv_row)
+        placeholder_hash = f"pending:{hit.spotify_id}"[:64]
+        try:
+            track = Track(
+                file_hash=placeholder_hash,
+                spotify_id=hit.spotify_id,
+                file_path=str(expected_path),
+                file_name=expected_path.name,
+                file_size_bytes=0,
+                title=hit.title,
+                artist=hit.artist,
+                duration_seconds=(hit.duration_ms / 1000.0) if hit.duration_ms else None,
+                state=TrackState.PENDING.value,
+            )
+            session.add(track)
+            session.commit()
+            session.refresh(track)
+        except Exception:  # noqa: BLE001 — race with concurrent ingests
+            session.rollback()
+            failed += 1
+            continue
+
+        job = registry.create("spotify_ingest", [f"{hit.artist} - {hit.title}"])
+        thread = threading.Thread(
+            target=_run_spotify_ingest_job,
+            args=(
+                job.id,
+                int(track.id),
+                csv_row,
+                settings.library_dir,
+                settings.db_url,
+                settings.youtube_cookies_file,
+            ),
+            daemon=True,
+            name=f"spotify-playlist-{job.id}",
+        )
+        thread.start()
+        added_track_ids.append(int(track.id))
+        job_ids.append(job.id)
+
+    return IngestPlaylistResult(
+        playlist_id=playlist_id,
+        total_in_playlist=len(hits),
+        added=len(added_track_ids),
+        skipped_existing=len(skipped_track_ids),
+        backfilled=backfilled_spotify_ids,
+        failed=failed,
+        track_ids=added_track_ids + skipped_track_ids,
+        job_ids=job_ids,
     )
 
 
@@ -673,11 +845,7 @@ def _track_state_signature(db_url: str) -> tuple:
 
     SessionLocal = get_session_factory(db_url)  # noqa: N806
     with SessionLocal() as s:
-        rows = (
-            s.query(Track.state, func.count(Track.id))
-            .group_by(Track.state)
-            .all()
-        )
+        rows = s.query(Track.state, func.count(Track.id)).group_by(Track.state).all()
     return tuple(sorted((str(state), int(count)) for state, count in rows))
 
 
@@ -689,9 +857,7 @@ def _complete_track_ids(db_url: str) -> set[int]:
     with SessionLocal() as s:
         return {
             tid
-            for (tid,) in s.query(Track.id)
-            .filter(Track.state == TrackState.COMPLETE.value)
-            .all()
+            for (tid,) in s.query(Track.id).filter(Track.state == TrackState.COMPLETE.value).all()
         }
 
 
@@ -803,27 +969,34 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
             newly_complete = sorted(completed_after - completed_before)
             if newly_complete:
                 graph_cmd = [
-                    sys.executable, "-m", "dance.cli", "build-graph",
+                    sys.executable,
+                    "-m",
+                    "dance.cli",
+                    "build-graph",
                 ]
                 for tid in newly_complete:
                     graph_cmd.extend(["--track-id", str(tid)])
                 with open(log_path, "a") as log_fp:
                     log_fp.write(
-                        f"\n=== build-graph for "
-                        f"{len(newly_complete)} newly-complete track(s) ===\n"
+                        f"\n=== build-graph for {len(newly_complete)} newly-complete track(s) ===\n"
                     )
                     log_fp.flush()
                     graph_proc = subprocess.run(
-                        graph_cmd, cwd=str(cwd), env=env,
-                        stdout=log_fp, stderr=subprocess.STDOUT,
-                        text=True, timeout=10 * 60,  # graph build is fast
+                        graph_cmd,
+                        cwd=str(cwd),
+                        env=env,
+                        stdout=log_fp,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        timeout=10 * 60,  # graph build is fast
                     )
                 if graph_proc.returncode != 0:
                     logger.warning(
                         "build-graph subprocess failed (rc=%d) for tracks %s — "
                         "pipeline still considered successful; rebuild later "
                         "via `dance build-graph`",
-                        graph_proc.returncode, newly_complete,
+                        graph_proc.returncode,
+                        newly_complete,
                     )
 
         # Subprocess done. Mark stage items as ok (we can't tell per-stage
@@ -839,9 +1012,7 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
                 tail = log_path.read_text()[-500:].replace("\n", " | ")
             except OSError:
                 tail = "(log unreadable)"
-            registry.set_status(
-                job_id, "error", error=f"rc={last_rc}: {tail}"
-            )
+            registry.set_status(job_id, "error", error=f"rc={last_rc}: {tail}")
     except subprocess.TimeoutExpired:
         registry.set_status(job_id, "error", error="pipeline exceeded 1h timeout")
     except Exception as e:  # noqa: BLE001
@@ -900,9 +1071,7 @@ def set_watch(
     always running; this flag controls whether it actually triggers
     pipeline runs."""
     if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
-        raise HTTPException(
-            status_code=400, detail="body must be {enabled: bool}"
-        )
+        raise HTTPException(status_code=400, detail="body must be {enabled: bool}")
     _WATCH_STATE["enabled"] = body["enabled"]
     _save_watch_state(settings)
     return {
@@ -935,9 +1104,7 @@ def trigger_process(
     if not _PROCESS_LOCK.acquire(blocking=False):
         # Defensive: lock without an active job means a previous run crashed
         # without releasing. Clear and re-acquire.
-        logger.warning(
-            "PROCESS_LOCK was held without an active job; force-acquiring."
-        )
+        logger.warning("PROCESS_LOCK was held without an active job; force-acquiring.")
         try:
             _PROCESS_LOCK.release()
         except RuntimeError:

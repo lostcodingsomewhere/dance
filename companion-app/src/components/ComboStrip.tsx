@@ -4,12 +4,9 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
-import {
-  ROLE_STYLES,
-  STEM_COLUMNS,
-  roleLabel,
-  type StemRole,
-} from "../lib/roles";
+import { formatDuration, formatRemaining } from "../lib/format";
+import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { useAppStore } from "../store";
 import type { DeckCell } from "../types";
 import { Waveform } from "./Waveform";
 
@@ -33,6 +30,10 @@ export function ComboStrip() {
   const ableton = useAbletonState();
   const deckMap = useDeckMap();
   const seek = useSeekClip();
+  // Render combo cards in the user's chosen column order. Underlying
+  // Ableton track indices come from ``columns[role]`` which is identity-
+  // mapped, so reordering is purely cosmetic.
+  const stemColumns = useAppStore((s) => s.stemColumnOrder);
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -52,16 +53,16 @@ export function ComboStrip() {
   // currently playing in that role's column. Drives one card.
   const cards = useMemo(() => {
     if (!columns) return null;
-    return STEM_COLUMNS.map((role) => {
+    return stemColumns.map((role) => {
       const trackIdx = columns[role];
       const sceneIdx = trackIdx != null ? playing[trackIdx] : undefined;
       const cell =
         sceneIdx != null ? cellAt.get(`${sceneIdx}|${role}`) : undefined;
       const livePosBeats =
         trackIdx != null ? positions[String(trackIdx)] : undefined;
-      return { role, sceneIdx, cell, trackIdx, livePosBeats };
+      return { role: role as StemRole, sceneIdx, cell, trackIdx, livePosBeats };
     });
-  }, [columns, playing, positions, cellAt]);
+  }, [columns, playing, positions, cellAt, stemColumns]);
 
   if (!columns) {
     return (
@@ -146,20 +147,31 @@ function ComboCard({
   // the clip — so ``playing_position`` is in clip-beats indexed against
   // analyzed_bpm. Using Live's tempo would scale the playhead by
   // ``live_tempo / analyzed_bpm`` when the user tempo'd up or down.
-  const duration = waveform.data?.duration_seconds;
+  // Prefer the cell's reported duration (comes from Track.duration_seconds
+  // — set during the analyze stage, doesn't require a waveform fetch)
+  // and fall back to the waveform's measured duration. Waveform load can
+  // lag the deck cell during a fresh load.
+  const duration = cell?.duration_seconds ?? waveform.data?.duration_seconds;
   const clipBpm = cell?.bpm ?? tempo;
   let position: number | undefined = undefined;
+  let elapsedSec: number | undefined = undefined;
   if (cell && duration && duration > 0 && clipBpm != null && clipBpm > 0) {
     if (livePosBeats != null) {
-      const elapsedSec = (livePosBeats / clipBpm) * 60;
+      elapsedSec = (livePosBeats / clipBpm) * 60;
       position = (elapsedSec % duration) / duration;
     } else if (beat != null && tempo != null) {
       // Master-beat fallback uses project tempo since beat is in
       // project-time, not clip-time.
-      const elapsedSec = (beat / tempo) * 60;
+      elapsedSec = (beat / tempo) * 60;
       position = (elapsedSec % duration) / duration;
     }
   }
+  // Remaining = duration - (elapsed mod duration). Wraps with the clip
+  // so a 4-minute loop continually shows -4:00 down to 0:00.
+  const remaining =
+    duration != null && elapsedSec != null
+      ? duration - (elapsedSec % duration)
+      : null;
 
   // Click-to-jump: SNAPS the click to the start of the section it
   // landed in, then converts that section-start to clip beats and
@@ -203,11 +215,30 @@ function ComboCard({
           </span>
         )}
       </div>
-      {cell.artist && (
-        <div className="text-[10px] text-neutral-400 truncate leading-tight">
-          {cell.artist}
-        </div>
-      )}
+      <div className="flex items-baseline gap-1.5 leading-tight">
+        {cell.artist && (
+          <div className="text-[10px] text-neutral-400 truncate flex-1">
+            {cell.artist}
+          </div>
+        )}
+        {/* Time pair — elapsed / remaining when actively playing, else
+            just the total duration. Tabular-nums so the digit slots don't
+            jitter when the playhead advances. */}
+        {duration != null && (
+          <div
+            className="text-[10px] font-mono tabular-nums text-neutral-500 shrink-0"
+            title={
+              elapsedSec != null
+                ? "elapsed / remaining"
+                : "track duration"
+            }
+          >
+            {elapsedSec != null
+              ? `${formatDuration(elapsedSec % duration)} ${formatRemaining(remaining)}`
+              : formatDuration(duration)}
+          </div>
+        )}
+      </div>
       <Waveform
         peaks={waveform.data?.peaks ?? []}
         position={position}

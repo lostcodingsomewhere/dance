@@ -266,6 +266,7 @@ class SetTrackOut(_Base):
     bpm: float | None = None
     key_camelot: str | None = None
     floor_energy: int | None = None
+    duration_seconds: float | None = None
     # Pipeline state of the underlying Track. Lets the rail show a ⌛
     # chip while a freshly-ingested track is still downloading / processing.
     track_state: str | None = None
@@ -450,6 +451,10 @@ class DeckCellOut(BaseModel):
     bpm: float | None = None
     key_camelot: str | None = None
     floor_energy: int | None = None
+    # Surfaced so the SceneGrid + ComboStrip can show a length badge
+    # ("3:45") without a second /tracks/{id} fetch per cell. Comes from
+    # Track.duration_seconds, set during the analyze stage.
+    duration_seconds: float | None = None
 
 
 class DeckMapOut(BaseModel):
@@ -633,6 +638,56 @@ class IngestTrackResult(BaseModel):
     already_existed: bool = False
 
 
+class IngestPlaylistRequest(BaseModel):
+    """Body for ``POST /api/v1/pipeline/ingest/playlist``.
+
+    Takes a Spotify playlist URL (or raw ID) and the backend fetches the
+    track list via Spotify Web API, creates optimistic Track rows for
+    every new ID, and spawns yt-dlp jobs to download missing audio.
+    De-duped on ``spotify_id`` against the existing library.
+
+    ``user_token``: optional Spotify USER OAuth token (Authorization Code
+    flow). Spotify's Nov 2024 API policy blocks Client Credentials apps
+    from reading playlist track lists — a user token is required.
+    Falls back to ``DANCE_SPOTIFY_USER_TOKEN`` env var; if neither is
+    set, the request fails with a hint.
+    """
+
+    playlist_url: str
+    user_token: str | None = None
+
+
+class IngestPlaylistResult(BaseModel):
+    """Reply for ``/pipeline/ingest/playlist``.
+
+    Returns counts upfront so the UI can show "added 12 new tracks, 28
+    already in library, 1 failed". Job IDs let the UI subscribe to per-
+    track download progress via the existing ``/pipeline/jobs/{id}``
+    endpoint — one job per newly-added track.
+    """
+
+    playlist_id: str
+    total_in_playlist: int
+    added: int
+    """New Track rows created (and yt-dlp jobs spawned)."""
+    skipped_existing: int
+    """Tracks whose ``spotify_id`` was already in the DB, OR whose
+    (artist, title) fuzzy-matched an existing Track — unchanged either way."""
+    backfilled: int = 0
+    """Of ``skipped_existing``, how many had their ``spotify_id`` back-
+    filled onto a previously-unlinked Track row. Surfaces "I just
+    enriched N existing tracks with playlist metadata" to the UI."""
+    failed: int
+    """Tracks Spotify gave us but ingest couldn't accept (rare; usually
+    a placeholder-hash collision)."""
+    track_ids: list[int]
+    """IDs of every Track this call touched — both newly created AND
+    pre-existing matches. Lets the FE drop the whole playlist into the
+    active Set in one shot."""
+    job_ids: list[str]
+    """Background-job IDs, one per newly-spawned download."""
+
+
 class JobItemOut(BaseModel):
     label: str
     status: str
@@ -665,6 +720,8 @@ __all__ = [
     "PreviewRequest",
     "PreviewResult",
     "IngestCommitRequest",
+    "IngestPlaylistRequest",
+    "IngestPlaylistResult",
     "IngestPreviewRequest",
     "IngestPreviewResponse",
     "IngestPreviewRow",

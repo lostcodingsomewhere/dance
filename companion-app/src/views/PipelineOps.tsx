@@ -21,6 +21,11 @@ interface ScanToast {
   tone: "ok" | "err";
 }
 
+interface PlaylistToast {
+  text: string;
+  tone: "ok" | "err";
+}
+
 const POLL_MS = 3000;
 const RECENT_LIMIT = 30;
 const FILTERED_LIMIT = 200;
@@ -543,6 +548,14 @@ export function PipelineOps() {
   /** When set, the activity table filters to this state. Driven by tile clicks. */
   const [filterState, setFilterState] = useState<string | null>(null);
   const [scanToast, setScanToast] = useState<ScanToast | null>(null);
+  const [playlistToast, setPlaylistToast] = useState<PlaylistToast | null>(null);
+  const [playlistOpen, setPlaylistOpen] = useState(false);
+  const [playlistUrl, setPlaylistUrl] = useState("");
+  // Spotify user OAuth token — pasted from exportify.net DevTools (any
+  // /me/playlists request → copy Bearer header value). Required in
+  // practice since Spotify's Nov 2024 API policy blocks Client Creds
+  // from reading playlist tracks. Lives in memory only.
+  const [playlistToken, setPlaylistToken] = useState("");
   const [viewMode, setViewMode] = useState<OpsViewMode>(() => {
     if (typeof window === "undefined") return "grid";
     return (
@@ -596,6 +609,32 @@ export function PipelineOps() {
     onError: (err: Error) => {
       setScanToast({ text: err.message, tone: "err" });
       setTimeout(() => setScanToast(null), 5000);
+    },
+  });
+
+  const playlistMutation = useMutation({
+    mutationFn: (args: { url: string; token?: string }) =>
+      api.ingestSpotifyPlaylist(args.url, args.token),
+    onSuccess: (r) => {
+      const backfillBit =
+        r.backfilled > 0 ? ` (${r.backfilled} got their Spotify ID linked)` : "";
+      setPlaylistToast({
+        text: `Playlist ${r.playlist_id}: added ${r.added}, ${r.skipped_existing} already in library${backfillBit}${
+          r.failed ? `, ${r.failed} failed` : ""
+        }.${r.added ? " Downloads queued — watch the Jobs panel." : ""}`,
+        tone: r.failed ? "err" : "ok",
+      });
+      setPlaylistUrl("");
+      // Intentionally do NOT clear the token — user might paste multiple
+      // playlists in a row; a token lasts ~1 hour so reusing it is fine.
+      setPlaylistOpen(false);
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      qc.invalidateQueries({ queryKey: ["pipeline-recent", filterState] });
+      setTimeout(() => setPlaylistToast(null), 8000);
+    },
+    onError: (err: Error) => {
+      setPlaylistToast({ text: err.message, tone: "err" });
+      setTimeout(() => setPlaylistToast(null), 12000);
     },
   });
 
@@ -707,6 +746,18 @@ export function PipelineOps() {
           </button>
           <button
             type="button"
+            onClick={() => setPlaylistOpen((v) => !v)}
+            className={`px-3 py-2 rounded-lg text-sm font-semibold ${
+              playlistOpen
+                ? "bg-violet-500/20 text-violet-200 ring-1 ring-violet-400/40"
+                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-100"
+            }`}
+            title="Paste a Spotify playlist URL — backend fetches the track list and queues downloads"
+          >
+            + Spotify Playlist
+          </button>
+          <button
+            type="button"
             onClick={() => setIngestOpen(true)}
             className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm font-semibold"
           >
@@ -755,6 +806,98 @@ export function PipelineOps() {
           }`}
         >
           {scanToast.text}
+        </div>
+      )}
+
+      {playlistOpen && (
+        <div className="px-6 py-3 border-b border-neutral-800 bg-neutral-900/40 flex flex-col gap-3">
+          <div className="text-xs text-neutral-500 max-w-3xl leading-relaxed">
+            Paste a public Spotify playlist URL. We fetch the track list,
+            dedupe against your library on Spotify ID, and queue yt-dlp
+            downloads for everything new. Re-running the same URL later picks
+            up newly-added tracks (the rest skip).
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="text"
+              value={playlistUrl}
+              onChange={(e) => setPlaylistUrl(e.target.value)}
+              placeholder="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+              className="flex-1 min-w-[20rem] bg-neutral-900 border border-neutral-800 rounded px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-neutral-600 font-mono"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && playlistUrl.trim()) {
+                  playlistMutation.mutate({
+                    url: playlistUrl.trim(),
+                    token: playlistToken.trim() || undefined,
+                  });
+                }
+                if (e.key === "Escape") setPlaylistOpen(false);
+              }}
+            />
+            <button
+              type="button"
+              disabled={!playlistUrl.trim() || playlistMutation.isPending}
+              onClick={() =>
+                playlistMutation.mutate({
+                  url: playlistUrl.trim(),
+                  token: playlistToken.trim() || undefined,
+                })
+              }
+              className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {playlistMutation.isPending ? "Fetching…" : "Queue downloads"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlaylistOpen(false)}
+              className="text-xs text-neutral-500 hover:text-neutral-200"
+            >
+              Cancel
+            </button>
+          </div>
+          <details className="text-xs text-neutral-500 max-w-3xl">
+            <summary className="cursor-pointer hover:text-neutral-200">
+              {playlistToken
+                ? `Spotify user token set (${playlistToken.length} chars) — click to edit`
+                : "Spotify user token (required since Nov 2024) ▸"}
+            </summary>
+            <div className="mt-2 leading-relaxed text-neutral-500">
+              Spotify's Client Credentials flow can't read playlist tracks
+              anymore (returns 403). Paste a USER OAuth token here:
+              <ol className="ml-4 mt-1 list-decimal space-y-0.5">
+                <li>Open <a className="underline hover:text-neutral-300" href="https://exportify.net" target="_blank" rel="noopener noreferrer">exportify.net</a> and log in.</li>
+                <li>Open DevTools → Network → click any playlist.</li>
+                <li>Find a request to <code className="text-neutral-400">api.spotify.com</code>, copy the <code className="text-neutral-400">authorization: Bearer …</code> header.</li>
+                <li>Paste the whole token (including or excluding the <code className="text-neutral-400">Bearer </code> prefix) below.</li>
+              </ol>
+              <p className="mt-1">Tokens expire after ~1 hour. Lives in memory only — never persisted. To make it stick across reloads, set <code className="text-neutral-400">DANCE_SPOTIFY_USER_TOKEN</code> in <code className="text-neutral-400">~/.dance/.env</code>.</p>
+            </div>
+            <input
+              type="password"
+              value={playlistToken}
+              onChange={(e) => {
+                // Strip an optional "Bearer " prefix so the user can paste
+                // either form (the raw token, or the full "Bearer xxx" string).
+                const v = e.target.value.replace(/^Bearer\s+/i, "");
+                setPlaylistToken(v);
+              }}
+              placeholder="BQDFy…"
+              autoComplete="off"
+              className="mt-2 w-full bg-neutral-900 border border-neutral-800 rounded px-2 py-1.5 text-xs text-neutral-300 outline-none focus:border-neutral-600 font-mono"
+            />
+          </details>
+        </div>
+      )}
+
+      {playlistToast && (
+        <div
+          className={`px-6 py-2 text-sm ${
+            playlistToast.tone === "ok"
+              ? "bg-emerald-500/10 text-emerald-200"
+              : "bg-rose-500/10 text-rose-200"
+          }`}
+        >
+          {playlistToast.text}
         </div>
       )}
 
