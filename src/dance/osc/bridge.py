@@ -803,6 +803,10 @@ class AbletonBridge:
         # `include_stems` accepted for backward-compat with the old API; when
         # False we still default ``kinds`` to ``[]`` so nothing loads.
         include_stems: bool = True,
+        # Optional deck side override. ``None`` lets _pick_side auto-pick
+        # the less-full side at the target row. ``"a"`` or ``"b"`` forces
+        # that side, used by the UI's explicit A/B load buttons.
+        side: str | None = None,
     ) -> dict[str, Any]:
         """Stage some or all of a track's stems on a scene in Live's session view.
 
@@ -881,8 +885,13 @@ class AbletonBridge:
 
         # Pick the side (A or B) for this load. All stems of one
         # push_track_to_live call go to the SAME side so anchor-detection
-        # stays meaningful per side. _pick_side prefers the less-full side.
-        side = self._pick_side(scene_index=scene_index)
+        # stays meaningful per side. Explicit caller override (UI's A/B
+        # buttons) wins; otherwise _pick_side picks the less-full side.
+        if side in ("a", "b"):
+            chosen_side: str = side
+        else:
+            chosen_side = self._pick_side(scene_index=scene_index)
+        side = chosen_side
 
         # Validate sources for this load.
         title = (track.title or track.file_name or f"Track {track.id}").strip()

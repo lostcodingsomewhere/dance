@@ -241,6 +241,11 @@ def load_track(
     if body.include_stems:
         stems = session.query(StemFile).filter(StemFile.track_id == body.track_id).all()
 
+    if body.side is not None and body.side not in ("a", "b"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"side must be 'a' or 'b' (or omitted to auto-pick), got {body.side!r}",
+        )
     try:
         result = bridge.push_track_to_live(
             track,
@@ -248,6 +253,7 @@ def load_track(
             include_stems=body.include_stems,
             scene_index=body.scene_index,
             kinds=body.kinds,
+            side=body.side,
         )
     except OSError as exc:
         logger.warning("OSC send failed during load-track: %s", exc)

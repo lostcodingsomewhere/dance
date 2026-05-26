@@ -412,6 +412,12 @@ class LoadTrackRequest(BaseModel):
     # ``["drums"]``) loads only those cells, leaving the rest of the row
     # untouched. Live-remixing mode lives here.
     kinds: list[str] | None = None
+    # Which deck side to load into. ``None`` lets the bridge auto-pick via
+    # _pick_side (prefers the side with fewer cells at the target row).
+    # Explicit ``"a"`` or ``"b"`` overrides — used by the rec cards' A/B
+    # load buttons so the DJ has direct control over which deck gets the
+    # incoming track.
+    side: str | None = None
 
 
 class LoadTrackResult(BaseModel):

@@ -633,6 +633,8 @@ export function pushTrackToLive(
     sceneIndex?: number;
     /** Subset of stem kinds to load. ``undefined`` = whole song (all 4). */
     kinds?: string[];
+    /** Force deck side. ``undefined`` lets the bridge auto-pick. */
+    side?: "a" | "b";
   } = {},
 ): Promise<LoadTrackResult> {
   return request<LoadTrackResult>("/ableton/load-track", {
@@ -642,6 +644,7 @@ export function pushTrackToLive(
       include_stems: options.includeStems ?? true,
       scene_index: options.sceneIndex ?? null,
       kinds: options.kinds ?? null,
+      side: options.side ?? null,
     }),
   });
 }

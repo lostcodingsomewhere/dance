@@ -110,12 +110,13 @@ function RecCard({
   const isSongCard = column === "mix";
 
   const load = useMutation({
-    mutationFn: () =>
+    mutationFn: (vars: { side: "a" | "b" }) =>
       pushTrackToLive(rec.track_id, {
         includeStems: true,
         kinds: isSongCard ? undefined : [column],
+        side: vars.side,
       }),
-    onSuccess: (result) => {
+    onSuccess: (result, vars) => {
       // Auto-stop any preview when committing — the candidate is now
       // on master, so cue should go silent.
       if (previewing) stopPreview.mutate();
@@ -133,6 +134,8 @@ function RecCard({
         // committed to a real deck.
         store.unpinFromSong(rec.track_id);
       }
+      // Surface side in dev tools for debugging — not user-facing.
+      void vars.side;
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
       qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
     },
@@ -239,13 +242,12 @@ function RecCard({
           <span className="ml-1.5 text-neutral-600">· E{energy}</span>
         )}
       </div>
-      {/* Two icon actions per card: preview + load. Both act on the
-          card's own column (stem cards load that stem, song card loads
-          the whole song). Stem cards get one extra tiny ↗ that sends
-          the track to the SONG column's rec list — unified action
-          model: every card just previews / loads its own column, and
-          ↗ is the "consider this for song mode too" gesture. */}
-      <div className="mt-1 grid gap-1 grid-cols-[auto_1fr_auto]">
+      {/* Preview + two explicit load buttons (A / B). The two-deck
+          mental model means the DJ almost always knows which side they
+          want — auto-pick is too clever. A loads to Deck A, B to Deck
+          B. Stem cards get one extra tiny ↗ to also pin the track to
+          the SONG column's rec list. */}
+      <div className="mt-1 grid gap-1 grid-cols-[auto_1fr_1fr_auto]">
         <button
           type="button"
           onClick={onPreview}
@@ -268,21 +270,31 @@ function RecCard({
         </button>
         <button
           type="button"
-          onClick={() => load.mutate()}
+          onClick={() => load.mutate({ side: "a" })}
           disabled={load.isPending}
           title={
             isSongCard
-              ? "Load all 4 stems into a fresh row (anchor-ready)"
-              : `Load the ${roleLabel(column).toLowerCase()} stem into the next free slot`
+              ? "Load all 4 stems into Deck A"
+              : `Load ${roleLabel(column).toLowerCase()} into Deck A`
           }
-          className="h-7 text-sm rounded bg-violet-700/70 hover:bg-violet-700 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center"
-          aria-label={
-            isSongCard
-              ? "load whole song"
-              : `load ${roleLabel(column).toLowerCase()}`
-          }
+          className="h-7 text-xs font-bold rounded bg-violet-700/70 hover:bg-violet-600 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
+          aria-label={`load to deck A`}
         >
-          {load.isPending ? "…" : "⤒"}
+          {load.isPending ? "…" : <><span>⤒</span><span>A</span></>}
+        </button>
+        <button
+          type="button"
+          onClick={() => load.mutate({ side: "b" })}
+          disabled={load.isPending}
+          title={
+            isSongCard
+              ? "Load all 4 stems into Deck B"
+              : `Load ${roleLabel(column).toLowerCase()} into Deck B`
+          }
+          className="h-7 text-xs font-bold rounded bg-violet-900/70 hover:bg-violet-800 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
+          aria-label={`load to deck B`}
+        >
+          {load.isPending ? "…" : <><span>⤒</span><span>B</span></>}
         </button>
         {!isSongCard && (
           <button
