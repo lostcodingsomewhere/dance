@@ -441,16 +441,32 @@ export function Waveform({
                 ? hoverMarker.x
                 : hoverMarker.x + hoverMarker.w / 2
             }%`,
-            bottom: "calc(100% + 2px)",
+            bottom: "calc(100% + 6px)",
             transform: "translateX(-50%)",
             zIndex: 10,
             pointerEvents: "none",
           }}
-          className="px-1.5 py-0.5 rounded-md bg-neutral-900/95 border border-neutral-700 text-neutral-100 text-[10px] font-mono whitespace-nowrap shadow-lg"
+          className="px-3 py-1.5 rounded-md bg-neutral-900/95 border border-neutral-600 text-white text-sm font-medium whitespace-nowrap shadow-xl backdrop-blur-sm"
         >
-          {hoverMarker.kind === "cue"
-            ? `${hoverMarker.label} · ${hoverMarker.stamp}`
-            : hoverMarker.label}
+          {hoverMarker.kind === "cue" ? (
+            <>
+              <span className="text-neutral-100">{hoverMarker.label}</span>
+              <span className="ml-2 font-mono text-neutral-300 tabular-nums">
+                {hoverMarker.stamp}
+              </span>
+            </>
+          ) : (
+            <span className="uppercase tracking-wide">{hoverMarker.label}</span>
+          )}
+          {/* Caret pointing down to the marker */}
+          <div
+            className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0"
+            style={{
+              borderLeft: "5px solid transparent",
+              borderRight: "5px solid transparent",
+              borderTop: "5px solid rgba(23, 23, 23, 0.95)",
+            }}
+          />
         </div>
       )}
     </div>
