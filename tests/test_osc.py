@@ -386,6 +386,97 @@ def test_bridge_push_track_to_live_creates_tracks_in_order():
         assert "Bass" in joined
         assert "Vocals" in joined
         assert "Other" in joined
+        # Mix track is muted on creation (reference / parachute, not
+        # double-summed audio).
+        mutes = [
+            args for addr, args in received if addr == "/live/track/set/mute"
+        ]
+        # The mix is the FIRST deck column at idx 10; expect (10, 1).
+        assert (10, 1) in mutes
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
+    """A whole-song load also drops the original mix file into the SONG
+    cell. Without this the UI's SceneGrid renders the SONG column as empty
+    after every load — looks broken, even though the stems were loaded.
+    """
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+    received: list[tuple[str, tuple[Any, ...]]] = []
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.on_any(lambda a, args: received.append((a, args)))
+    fake_live_listener.start()
+
+    # Real on-disk files so the existence guards pass.
+    mix_path = tmp_path / "song.wav"
+    mix_path.write_bytes(b"RIFF")
+    drums_path = tmp_path / "drums.wav"
+    drums_path.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        track = _stub_track(id=7, title="My Song", file_path=str(mix_path))
+        stems = [_stub_stem("drums", str(drums_path))]
+        bridge.push_track_to_live(track, stems, include_stems=True)
+
+        # Mix track is column 0 (idx 10); the create_audio_clip for it
+        # should reference the source mix file. Re-scan ``received`` each
+        # poll so we see messages that arrive after the assert is set up.
+        def saw_mix_clip() -> bool:
+            return any(
+                addr == "/live/clip_slot/create_audio_clip"
+                and args[0] == 10
+                and args[2] == str(mix_path)
+                for addr, args in received
+            )
+        assert _wait_for(saw_mix_clip)
+        # _deck_cells records the mix cell so the API reports it as loaded.
+        assert (0, "mix") in bridge._deck_cells
+        assert bridge._deck_cells[(0, "mix")] == 7
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):
+    """Single-stem loads (kinds=['drums']) must NOT drop the mix file —
+    the mix cell stays empty so we don't fight the user's remix in progress.
+    """
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.start()
+
+    mix_path = tmp_path / "song.wav"
+    mix_path.write_bytes(b"RIFF")
+    drums_path = tmp_path / "drums.wav"
+    drums_path.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        track = _stub_track(id=7, file_path=str(mix_path))
+        stems = [_stub_stem("drums", str(drums_path))]
+        bridge.push_track_to_live(track, stems, kinds=["drums"])
+        # No mix entry in deck_cells — single-stem load doesn't touch it.
+        mix_cells = [k for k in bridge._deck_cells if k[1] == "mix"]
+        assert mix_cells == []
     finally:
         bridge.stop()
         fake_live_listener.stop()

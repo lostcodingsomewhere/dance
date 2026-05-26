@@ -665,8 +665,10 @@ class AbletonBridge:
 
         Used as the default load slot for whole-song (anchor) loads so that a
         fresh row is reserved for the 4-stem combo. Excludes the ``mix`` kind
-        from the emptiness check since the mix cell is intentionally left
-        blank by push_track_to_live for the standard 4-stem layout.
+        from the emptiness check: full-song loads populate mix alongside the
+        stems (so checking stems alone is equivalent), and single-stem loads
+        leave mix empty by design (so including it would conflate "no anchor
+        yet" with "this row is free").
         """
         kinds = ("drums", "bass", "vocals", "other")
         i = 0
@@ -767,8 +769,11 @@ class AbletonBridge:
                 warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
 
         # Auto-load each requested stem into the matching deck column on the
-        # chosen scene. Mix is intentionally never loaded (summing stems
-        # already approximates the full mix; doubling it would clip).
+        # chosen scene. The mix cell is also populated on full-song loads —
+        # the file goes in muted (the mix *track* is muted at creation, see
+        # _create_deck_columns) so it doesn't double the summed stems, but
+        # the DJ can unmute it to A/B against the original or fall back to
+        # it if a stem is glitchy/missing.
         stems_loaded = 0
         for kind in valid_kinds:
             stem = stems_by_kind.get(kind)
@@ -785,6 +790,24 @@ class AbletonBridge:
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
                 warnings.append(f"OSC send for {kind} failed: {exc}")
+
+        # Whole-song loads also drop the original mix file into the SONG
+        # cell. Without this, the SceneGrid renders the SONG cell as empty
+        # after a load — looks broken, doesn't match the offline .als writer
+        # which has done the same thing for offline-generated sets all along
+        # (see als/writer.py — `muted=(entry.kind == "mix")`).
+        if full_song and track.file_path:
+            mix_path = Path(track.file_path)
+            if mix_path.exists():
+                mix_idx = deck_columns["mix"]
+                try:
+                    self.client.create_audio_clip(mix_idx, scene_index, str(mix_path))
+                    self.client.set_clip_name(mix_idx, scene_index, f"{title} (mix)")
+                    self._deck_cells[(scene_index, "mix")] = track.id
+                except OSError as exc:  # pragma: no cover - best-effort
+                    warnings.append(f"OSC send for mix failed: {exc}")
+            else:
+                warnings.append(f"mix file missing on disk: {track.file_path!r}")
 
         try:
             self.client.show_message(
@@ -811,6 +834,11 @@ class AbletonBridge:
         Indices are *predicted* (created via fire-and-forget OSC). The caller
         is responsible for using them in subsequent OSC calls in the same
         order, which is safe because AbletonOSC processes commands serially.
+
+        The mix track is muted at creation: it holds the original full-track
+        recording as a reference / parachute, and would double the audio if
+        unmuted alongside the summed stems. The DJ unmutes it explicitly
+        when they want to A/B against the original or fall back to it.
         """
         columns: dict[str, int] = {}
         idx = start_index
@@ -818,6 +846,11 @@ class AbletonBridge:
             self.client.create_audio_track(-1)
             self.client.set_track_name(idx, self._DECK_DISPLAY_NAMES[kind])
             self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
+            if kind == "mix":
+                try:
+                    self.client.set_track_mute(idx, True)
+                except OSError:  # pragma: no cover - best-effort
+                    pass
             columns[kind] = idx
             idx += 1
         self._subscribe_deck_columns(columns)
