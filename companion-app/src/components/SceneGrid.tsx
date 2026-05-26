@@ -122,12 +122,23 @@ export function SceneGrid() {
               const cell = cellAt.get(`${sceneIdx}|${role}`);
               const isPlaying =
                 trackIdx != null && playing[trackIdx] === sceneIdx;
+              // Shadow cell: when the SONG slot is empty but the 4 stems
+              // all come from the same track, surface that track as a
+              // ghost cell so the row visibly belongs to a song. UI-only
+              // — Live's SONG slot stays empty (no audio implications);
+              // this just makes the row legible at a glance.
+              const showShadow =
+                role === "mix" && cell == null && isAnchorReady;
+              const shadowCell: DeckCell | undefined = showShadow
+                ? rowCells.find((c) => c != null) ?? undefined
+                : undefined;
               return (
                 <Cell
                   key={role}
                   role={role as StemRole}
-                  cell={cell}
+                  cell={shadowCell ?? cell}
                   loaded={cell != null}
+                  shadow={showShadow}
                   playing={isPlaying}
                   beatMs={beatMs}
                   onTap={
@@ -226,6 +237,7 @@ function Cell({
   beatMs,
   onTap,
   onRemove,
+  shadow = false,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
@@ -237,8 +249,35 @@ function Cell({
    * appears on hover. The X stops + deletes via the bridge — the slot
    * stays, ready to receive the next ``Load to Live``. */
   onRemove?: () => void;
+  /** UI-only ghost render: track is *inferred* from the row's stems but
+   * not actually loaded in Live. Used in the SONG column when all 4
+   * stems point at the same track. No interaction — read-only label. */
+  shadow?: boolean;
 }) {
   const styles = ROLE_STYLES[role];
+
+  if (shadow && cell) {
+    return (
+      <div
+        className={`rounded-md border-dashed border h-14 px-2 py-1 overflow-hidden opacity-40 ${styles.border}`}
+        title={`Inferred from stems: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}`}
+        aria-label={`${roleLabel(role)} (inferred from stems)`}
+        data-testid="scene-cell-shadow"
+      >
+        <div className="text-xs truncate font-medium leading-tight text-neutral-300 italic">
+          {cell.title ?? `Track #${cell.track_id}`}
+        </div>
+        {cell.artist && (
+          <div className="text-[10px] truncate leading-tight text-neutral-500 italic">
+            {cell.artist}
+          </div>
+        )}
+        <div className="text-[9px] truncate font-mono leading-none mt-0.5 text-neutral-600 uppercase tracking-wider">
+          shadow
+        </div>
+      </div>
+    );
+  }
 
   if (!loaded) {
     return (
