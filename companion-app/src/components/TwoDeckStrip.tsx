@@ -60,17 +60,34 @@ export function TwoDeckStrip() {
     queryFn: api.abletonFxState,
     refetchInterval: 2000,
   });
-  const fxFilter = useMutation({
-    mutationFn: (side: "a" | "b") => api.abletonFxFilter(side),
+  const fxToggle = useMutation({
+    mutationFn: (vars: { fx: "filter" | "reverb" | "delay"; side: "a" | "b" }) =>
+      api.abletonFxToggle(vars.fx, vars.side),
+    onSuccess: () => fxState.refetch(),
+  });
+  const fxSweep = useMutation({
+    mutationFn: (vars: {
+      fx: "filter" | "reverb" | "delay";
+      side: "a" | "b";
+      bars: number;
+      direction?: "in" | "out" | "auto";
+    }) =>
+      api.abletonFxSweep(vars.fx, vars.side, {
+        bars: vars.bars,
+        direction: vars.direction ?? "auto",
+      }),
     onSuccess: () => fxState.refetch(),
   });
   const fxFire = useMutation({
     mutationFn: (name: string) => api.abletonFxFire(name),
   });
   const filterActive = fxState.data?.filter ?? { a: false, b: false };
-  const filterAvailable =
-    fxState.data?.discovered?.returns
-    && "filter" in fxState.data.discovered.returns;
+  const reverbActive = fxState.data?.reverb ?? { a: false, b: false };
+  const delayActive = fxState.data?.delay ?? { a: false, b: false };
+  const returns = fxState.data?.discovered?.returns ?? {};
+  const filterAvailable = "filter" in returns;
+  const reverbAvailable = "reverb" in returns;
+  const delayAvailable = "delay" in returns;
   const riserAvailable =
     fxState.data?.discovered?.scenes
     && "riser" in fxState.data.discovered.scenes;
@@ -143,7 +160,18 @@ export function TwoDeckStrip() {
         onStopDeck={() => stopDeck.mutate("a")}
         filterActive={filterActive.a}
         filterAvailable={!!filterAvailable}
-        onToggleFilter={() => fxFilter.mutate("a")}
+        onToggleFilter={() =>
+          fxToggle.mutate({ fx: "filter", side: "a" })
+        }
+        onSweepFilter={(bars) =>
+          fxSweep.mutate({ fx: "filter", side: "a", bars })
+        }
+        reverbActive={reverbActive.a}
+        reverbAvailable={reverbAvailable}
+        onToggleReverb={() => fxToggle.mutate({ fx: "reverb", side: "a" })}
+        delayActive={delayActive.a}
+        delayAvailable={delayAvailable}
+        onToggleDelay={() => fxToggle.mutate({ fx: "delay", side: "a" })}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -163,7 +191,18 @@ export function TwoDeckStrip() {
         onStopDeck={() => stopDeck.mutate("b")}
         filterActive={filterActive.b}
         filterAvailable={!!filterAvailable}
-        onToggleFilter={() => fxFilter.mutate("b")}
+        onToggleFilter={() =>
+          fxToggle.mutate({ fx: "filter", side: "b" })
+        }
+        onSweepFilter={(bars) =>
+          fxSweep.mutate({ fx: "filter", side: "b", bars })
+        }
+        reverbActive={reverbActive.b}
+        reverbAvailable={reverbAvailable}
+        onToggleReverb={() => fxToggle.mutate({ fx: "reverb", side: "b" })}
+        delayActive={delayActive.b}
+        delayAvailable={delayAvailable}
+        onToggleDelay={() => fxToggle.mutate({ fx: "delay", side: "b" })}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -192,6 +231,13 @@ function DeckPanel({
   filterActive,
   filterAvailable,
   onToggleFilter,
+  onSweepFilter,
+  reverbActive,
+  reverbAvailable,
+  onToggleReverb,
+  delayActive,
+  delayAvailable,
+  onToggleDelay,
   onSeek,
 }: {
   side: "a" | "b";
@@ -209,6 +255,13 @@ function DeckPanel({
   filterActive: boolean;
   filterAvailable: boolean;
   onToggleFilter: () => void;
+  onSweepFilter: (bars: number) => void;
+  reverbActive: boolean;
+  reverbAvailable: boolean;
+  onToggleReverb: () => void;
+  delayActive: boolean;
+  delayAvailable: boolean;
+  onToggleDelay: () => void;
   onSeek: (track: number, slot: number, beats: number) => void;
 }) {
   const SOURCE_ROLES = ["drums", "bass", "vocals", "other"] as const;
@@ -328,6 +381,13 @@ function DeckPanel({
         filterActive={filterActive}
         filterAvailable={filterAvailable}
         onToggleFilter={onToggleFilter}
+        onSweepFilter={onSweepFilter}
+        reverbActive={reverbActive}
+        reverbAvailable={reverbAvailable}
+        onToggleReverb={onToggleReverb}
+        delayActive={delayActive}
+        delayAvailable={delayAvailable}
+        onToggleDelay={onToggleDelay}
       />
       <DeckWaveform
         side={side}
@@ -362,6 +422,13 @@ function DeckHeader({
   filterActive,
   filterAvailable,
   onToggleFilter,
+  onSweepFilter,
+  reverbActive,
+  reverbAvailable,
+  onToggleReverb,
+  delayActive,
+  delayAvailable,
+  onToggleDelay,
 }: {
   side: "a" | "b";
   sideLabel: string;
@@ -378,6 +445,13 @@ function DeckHeader({
   filterActive: boolean;
   filterAvailable: boolean;
   onToggleFilter: () => void;
+  onSweepFilter: (bars: number) => void;
+  reverbActive: boolean;
+  reverbAvailable: boolean;
+  onToggleReverb: () => void;
+  delayActive: boolean;
+  delayAvailable: boolean;
+  onToggleDelay: () => void;
 }) {
   const accentText = side === "a" ? "text-violet-200" : "text-indigo-200";
   // Sync gesture: snap the project's master tempo to this deck's
@@ -448,14 +522,20 @@ function DeckHeader({
       </button>
       <button
         type="button"
-        onClick={onToggleFilter}
+        onClick={(e) => {
+          // Shift-click = continuous 4-bar sweep. Plain click = snap toggle.
+          // Gives DJs both gestures on one button: tap for instant, hold
+          // shift for analog-style ramp.
+          if (e.shiftKey) onSweepFilter(4);
+          else onToggleFilter();
+        }}
         disabled={!filterAvailable}
         title={
           !filterAvailable
             ? "No 'Filter' return in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
             : filterActive
-            ? `Filter off — Deck ${sideLabel} returns to full range`
-            : `Filter on — HPF Deck ${sideLabel} (cuts lows for transitions)`
+            ? `Filter off — Deck ${sideLabel} returns to full range\nShift-click = 4-bar sweep`
+            : `Filter on — HPF Deck ${sideLabel} (cuts lows)\nShift-click = 4-bar sweep`
         }
         aria-pressed={filterActive}
         aria-label={`HPF Deck ${sideLabel}`}
@@ -468,6 +548,52 @@ function DeckHeader({
         }`}
       >
         HPF
+      </button>
+      <button
+        type="button"
+        onClick={onToggleReverb}
+        disabled={!reverbAvailable}
+        title={
+          !reverbAvailable
+            ? "No 'Reverb' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
+            : reverbActive
+            ? `Reverb off — Deck ${sideLabel} dry`
+            : `Reverb throw — send Deck ${sideLabel} into the reverb tail`
+        }
+        aria-pressed={reverbActive}
+        aria-label={`Reverb throw Deck ${sideLabel}`}
+        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+          !reverbAvailable
+            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
+            : reverbActive
+            ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
+            : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
+        }`}
+      >
+        REV
+      </button>
+      <button
+        type="button"
+        onClick={onToggleDelay}
+        disabled={!delayAvailable}
+        title={
+          !delayAvailable
+            ? "No 'Delay' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
+            : delayActive
+            ? `Delay off — Deck ${sideLabel} dry`
+            : `Delay throw — echo Deck ${sideLabel} into the next bars`
+        }
+        aria-pressed={delayActive}
+        aria-label={`Delay throw Deck ${sideLabel}`}
+        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+          !delayAvailable
+            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
+            : delayActive
+            ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
+            : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
+        }`}
+      >
+        DLY
       </button>
       {anchorCell ? (
         <>

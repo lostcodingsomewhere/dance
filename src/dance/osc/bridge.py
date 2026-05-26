@@ -134,11 +134,20 @@ class AbletonBridge:
         self._fx_return_idx: dict[str, int] = {}
         self._fx_scene_idx: dict[str, int] = {}
         self._fx_track_for_scene: dict[str, int] = {}
-        # Per-deck filter on/off state. Cheap UI mirror so the toggle
-        # button can read "is this deck currently filtered?" without
-        # round-tripping. Authoritative state is Live's actual send
-        # levels, but those are buffered by AbletonOSC and can lag.
+        # Per-deck FX on/off state. Cheap UI mirror so toggle buttons can
+        # render their active state without round-tripping every render.
+        # Authoritative state is Live's actual send levels, but those are
+        # buffered by AbletonOSC and can lag.
         self._filter_active: dict[str, bool] = {"a": False, "b": False}
+        self._reverb_active: dict[str, bool] = {"a": False, "b": False}
+        self._delay_active: dict[str, bool] = {"a": False, "b": False}
+
+        # In-flight ramp timers per (side, fx_name) — populated by
+        # ``ramp_fx_send`` (Phase 3 continuous sweep). Keyed by tuple so
+        # the same side can have a filter ramp and a reverb ramp running
+        # in parallel. Cancelled when a new ramp on the same key starts
+        # or when a toggle preempts it.
+        self._fx_ramp_timers: dict[tuple[str, str], list[threading.Timer]] = {}
 
         # (scene_index, kind) -> dance Track id. One entry per loaded cell in
         # Live's session view. Cells in a single row can come from different
@@ -965,52 +974,88 @@ class AbletonBridge:
                 return s
         return None
 
-    def toggle_filter(self, side: str) -> dict[str, Any]:
-        """Toggle the parallel filter send for a deck side.
-
-        ON  → all 5 deck tracks on this side (4 stems + mix) send 100%
-              to the Filter return. Filter is HPF (cuts lows) — that
-              side audibly thins out.
-        OFF → sends back to 0%; dry signal returns.
-
-        Requires a "Filter" return track in the .als template (Live-
-        author step). Without it, no-op with a warning.
-
-        Returns ``{"ok": bool, "side": str, "active": bool}``.
+    def _send_index_for_fx(self, return_name: str) -> int | None:
+        """Resolve which Live Send slot index corresponds to an FX return
+        track. Live's send indices are positional (Send 0 = first return,
+        Send 1 = second, ...), so we sort the discovered FX returns by
+        track index and use that order.
         """
-        if side not in ("a", "b"):
-            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
-        if "filter" not in self._fx_return_idx:
-            # Try once to discover — user may have just added the return.
-            self.discover_fx_tracks(timeout=0.3)
-        if "filter" not in self._fx_return_idx:
-            return {
-                "ok": False,
-                "warning": "No 'Filter' return track in Live. "
-                "Author one per docs/proposals/fx-phase-1-runbook.md.",
-            }
-        if self._deck_columns is None:
-            return {"ok": False, "warning": "no deck columns staged yet"}
-        # Compute the Send index for this Filter return. Live's send
-        # index counts return tracks in order (Send 0 = Return A,
-        # Send 1 = Return B, ...). We approximate via track-index
-        # ordering relative to the first return.
+        key = return_name.lower()
+        if key not in self._fx_return_idx:
+            return None
         return_indices = sorted(self._fx_return_idx.values())
-        if not return_indices:
-            return {"ok": False, "warning": "no FX returns"}
-        send_index = return_indices.index(self._fx_return_idx["filter"])
-        # Flip state.
-        now_active = not self._filter_active[side]
-        level = 1.0 if now_active else 0.0
+        try:
+            return return_indices.index(self._fx_return_idx[key])
+        except ValueError:  # pragma: no cover
+            return None
+
+    def _set_deck_send(self, side: str, send_index: int, level: float) -> int:
+        """Write a send level to every track on a deck side (4 stems + mix).
+        Returns count of tracks affected. Best-effort on OSC failures."""
+        if self._deck_columns is None:
+            return 0
+        affected = 0
         for kind, idx in self._deck_columns.items():
             if not kind.endswith(f"_{side}"):
                 continue
             try:
                 self.client.set_track_send(idx, send_index, level)
+                affected += 1
             except OSError:  # pragma: no cover - best-effort
                 pass
-        self._filter_active[side] = now_active
-        return {"ok": True, "side": side, "active": now_active}
+        return affected
+
+    def _toggle_fx_send(
+        self, side: str, return_name: str, state_key: str
+    ) -> dict[str, Any]:
+        """Generic per-deck FX send toggle, shared by Filter, Reverb, and
+        Delay. ``state_key`` indexes into the dict that tracks ON/OFF UI
+        state per FX type per side (e.g. ``_filter_active``).
+        """
+        if side not in ("a", "b"):
+            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
+        if return_name.lower() not in self._fx_return_idx:
+            self.discover_fx_tracks(timeout=0.3)
+        send_index = self._send_index_for_fx(return_name)
+        if send_index is None:
+            return {
+                "ok": False,
+                "warning": f"No {return_name!r} return track in Live. "
+                "Author one per docs/proposals/fx-phase-1-runbook.md.",
+            }
+        state_dict = getattr(self, state_key)
+        now_active = not state_dict[side]
+        level = 1.0 if now_active else 0.0
+        # Cancel any in-flight ramp on this side — toggles win over sweeps.
+        self._cancel_filter_sweep(side, return_name)
+        affected = self._set_deck_send(side, send_index, level)
+        state_dict[side] = now_active
+        return {
+            "ok": True,
+            "side": side,
+            "fx": return_name.lower(),
+            "active": now_active,
+            "tracks_affected": affected,
+        }
+
+    def toggle_filter(self, side: str) -> dict[str, Any]:
+        """Toggle the parallel filter send for a deck side. ON = all 5
+        deck tracks send 100% to the Filter return (HPF in the template).
+        OFF = sends back to 0. See ``_toggle_fx_send`` for the shared
+        implementation."""
+        return self._toggle_fx_send(side, "Filter", "_filter_active")
+
+    def toggle_reverb(self, side: str) -> dict[str, Any]:
+        """Toggle the parallel Reverb send for a deck side. Use for
+        vocal throws + tail effects during transitions. Requires a
+        'Reverb' return track in the .als."""
+        return self._toggle_fx_send(side, "Reverb", "_reverb_active")
+
+    def toggle_delay(self, side: str) -> dict[str, Any]:
+        """Toggle the parallel Delay send for a deck side. Use for
+        echo-throws on the last beat before a transition. Requires a
+        'Delay' return track in the .als."""
+        return self._toggle_fx_send(side, "Delay", "_delay_active")
 
     def fire_fx(self, name: str) -> dict[str, Any]:
         """Fire a named one-shot FX clip (e.g. ``riser``). Quantized to
@@ -1038,9 +1083,160 @@ class AbletonBridge:
         return {"ok": True, "name": key, "track": track_idx, "scene": scene_idx}
 
     def filter_state(self) -> dict[str, bool]:
-        """Snapshot of which decks currently have filter sends engaged.
-        UI uses this to render the HPF button as toggled-on."""
+        """Snapshot of which decks currently have filter sends engaged."""
         return dict(self._filter_active)
+
+    def fx_state(self) -> dict[str, Any]:
+        """Combined snapshot of all FX toggle states + discovered tracks.
+        Used by the UI to render every FX button's active state and to
+        know which FX are even available (return tracks present in the
+        .als)."""
+        return {
+            "filter": dict(self._filter_active),
+            "reverb": dict(self._reverb_active),
+            "delay": dict(self._delay_active),
+            "returns": dict(self._fx_return_idx),
+            "scenes": dict(self._fx_scene_idx),
+        }
+
+    # ------------------------------------------------------------------
+    # Phase 3 — continuous FX sweep (timer-driven send ramp)
+    # ------------------------------------------------------------------
+
+    def _cancel_filter_sweep(self, side: str, return_name: str) -> None:
+        """Cancel any in-flight ramp for (side, return_name). Called when
+        a binary toggle preempts a running sweep, or when a new sweep
+        starts on the same side+fx combo."""
+        key = (side, return_name.lower())
+        timers = self._fx_ramp_timers.pop(key, [])
+        for t in timers:
+            try:
+                t.cancel()
+            except Exception:  # pragma: no cover - timer is best-effort
+                pass
+
+    def ramp_fx_send(
+        self,
+        side: str,
+        return_name: str,
+        target_level: float,
+        duration_bars: float,
+    ) -> dict[str, Any]:
+        """Smoothly ramp a deck's send level to a target over duration_bars.
+
+        Uses threading.Timer to fire interpolated set_track_send updates
+        at ~25 fps. Cancellable: a new ramp on the same (side, fx)
+        replaces the in-flight one; binary toggles via ``toggle_*``
+        cancel any ramp on that combo.
+
+        ``duration_bars`` is interpreted at the current master tempo
+        (4 beats per bar at the current BPM). Defaults gracefully when
+        tempo isn't known.
+
+        Returns ``{"ok": bool, "side": str, "fx": str, "target": float,
+        "duration_sec": float, "steps": int}``.
+        """
+        if side not in ("a", "b"):
+            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
+        if not 0.0 <= target_level <= 1.0:
+            return {"ok": False, "warning": "target_level must be in [0, 1]"}
+        if return_name.lower() not in self._fx_return_idx:
+            self.discover_fx_tracks(timeout=0.3)
+        send_index = self._send_index_for_fx(return_name)
+        if send_index is None:
+            return {
+                "ok": False,
+                "warning": f"No {return_name!r} return track in Live.",
+            }
+        # Compute interpolation grid.
+        bpm = self.state.tempo or 120.0
+        seconds_per_bar = (60.0 / bpm) * 4.0
+        duration_sec = max(0.0, duration_bars * seconds_per_bar)
+        if duration_sec <= 0.0:
+            # No-duration ramp = snap. Use the toggle path semantics.
+            self._set_deck_send(side, send_index, target_level)
+            self._sync_state_after_ramp(side, return_name, target_level)
+            return {
+                "ok": True,
+                "side": side,
+                "fx": return_name.lower(),
+                "target": target_level,
+                "duration_sec": 0.0,
+                "steps": 1,
+            }
+        # ~25 fps update rate, capped to a reasonable step count.
+        steps = max(4, min(120, int(round(duration_sec * 25))))
+        interval = duration_sec / steps
+        # Treat current "active" boolean as the starting level — we don't
+        # query Live for the actual current send level (slow + lossy).
+        # If reality diverges (user nudged a send knob mid-sweep) the
+        # ramp lands at target anyway.
+        state_dict = self._state_dict_for(return_name)
+        start_level = 1.0 if state_dict and state_dict[side] else 0.0
+        delta = target_level - start_level
+        self._cancel_filter_sweep(side, return_name)
+        timers: list[threading.Timer] = []
+        for i in range(1, steps + 1):
+            t = i / steps
+            # Ease-out (cubic) for filter sweeps — feels musical, accel
+            # then slows. For reverb / delay throws the ear doesn't
+            # notice the curve so this works there too.
+            eased = 1.0 - (1.0 - t) ** 3
+            level = start_level + delta * eased
+            is_final_step = i == steps
+            timer = threading.Timer(
+                i * interval,
+                self._apply_ramp_step,
+                args=(side, return_name, send_index, level, is_final_step, target_level),
+            )
+            timer.daemon = True
+            timers.append(timer)
+        self._fx_ramp_timers[(side, return_name.lower())] = timers
+        for t in timers:
+            t.start()
+        return {
+            "ok": True,
+            "side": side,
+            "fx": return_name.lower(),
+            "target": target_level,
+            "duration_sec": duration_sec,
+            "steps": steps,
+        }
+
+    def _apply_ramp_step(
+        self,
+        side: str,
+        return_name: str,
+        send_index: int,
+        level: float,
+        is_final: bool,
+        final_target: float,
+    ) -> None:
+        """Single tick of a ramp — set the send on every deck-side track."""
+        self._set_deck_send(side, send_index, level)
+        if is_final:
+            # Snap to exact target on final step + update UI state mirror.
+            self._set_deck_send(side, send_index, final_target)
+            self._sync_state_after_ramp(side, return_name, final_target)
+            # Clear our timer list for this combo so a fresh ramp starts clean.
+            self._fx_ramp_timers.pop((side, return_name.lower()), None)
+
+    def _state_dict_for(self, return_name: str) -> dict[str, bool] | None:
+        """Return the per-side ON/OFF mirror dict for a given FX name."""
+        return {
+            "filter": self._filter_active,
+            "reverb": self._reverb_active,
+            "delay": self._delay_active,
+        }.get(return_name.lower())
+
+    def _sync_state_after_ramp(
+        self, side: str, return_name: str, target_level: float
+    ) -> None:
+        """Update the UI state mirror to match where a ramp landed.
+        Threshold at 0.5: above = "active", below = "inactive"."""
+        state_dict = self._state_dict_for(return_name)
+        if state_dict is not None:
+            state_dict[side] = target_level > 0.5
 
     def _pick_side(self, *, scene_index: int) -> str:
         """For a row, return which side ('a' or 'b') to load into.

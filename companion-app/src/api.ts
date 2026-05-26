@@ -490,10 +490,29 @@ export function abletonStopDeck(
   return request(`/ableton/transport/stop-deck/${side}`, { method: "POST" });
 }
 
-export function abletonFxFilter(
+/** Per-side FX toggle: filter / reverb / delay. Each is a parallel send
+ * to the matching return track in Live. Toggling ON ramps the send to
+ * 100% (instant), OFF returns to 0. Cancels any in-flight sweep on the
+ * same (side, fx) combo. */
+export function abletonFxToggle(
+  fx: "filter" | "reverb" | "delay",
   side: "a" | "b",
 ): Promise<{ ok: boolean; side: string; active: boolean; warning?: string }> {
-  return request(`/ableton/fx/filter/${side}`, { method: "POST" });
+  return request(`/ableton/fx/${fx}/${side}`, { method: "POST" });
+}
+
+/** Smooth FX send ramp over ``bars`` bars (Phase 3 continuous sweep).
+ * direction="auto" toggles based on current state. */
+export function abletonFxSweep(
+  fx: "filter" | "reverb" | "delay",
+  side: "a" | "b",
+  opts: { bars?: number; direction?: "in" | "out" | "auto" } = {},
+): Promise<{ ok: boolean; side: string; fx: string; target: number; duration_sec: number; steps: number; warning?: string }> {
+  const params = new URLSearchParams();
+  if (opts.bars != null) params.set("bars", String(opts.bars));
+  if (opts.direction) params.set("direction", opts.direction);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return request(`/ableton/fx/${fx}/${side}/sweep${qs}`, { method: "POST" });
 }
 
 export function abletonFxFire(
@@ -504,6 +523,8 @@ export function abletonFxFire(
 
 export interface FxState {
   filter: Record<"a" | "b", boolean>;
+  reverb: Record<"a" | "b", boolean>;
+  delay: Record<"a" | "b", boolean>;
   discovered: {
     returns: Record<string, number>;
     scenes: Record<string, number>;
@@ -512,6 +533,11 @@ export interface FxState {
 
 export function abletonFxState(): Promise<FxState> {
   return request("/ableton/fx/state");
+}
+
+/** Back-compat alias for the older filter-only call. */
+export function abletonFxFilter(side: "a" | "b") {
+  return abletonFxToggle("filter", side);
 }
 
 export function abletonSetTempo(bpm: number): Promise<void> {

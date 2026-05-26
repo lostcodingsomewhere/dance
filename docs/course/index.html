@@ -1296,6 +1296,81 @@ Bar +1:  Click HPF off on Deck A (it's silent now anyway, just housekeeping).</d
         </div>
       `},
 
+      { id:"6.5", title:"FX Phase 2/3 — Throws + Sweeps", duration:"12 min", tag:"hands-on", html:`
+        <h1>FX Phase 2/3 — Reverb / Delay Throws + Filter Sweeps</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 6.5</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>HPF + Riser is the everyday rotation. Reverb throws, delay throws, and analog-style filter sweeps are the <em>accents</em> — sparingly used moves that make a transition memorable. Once you've internalized Phase 1, layering these in is the difference between "I can DJ" and "I have a voice."</p></div>
+
+        <h2>Reverb Throw — The Drama</h2>
+        <p>A reverb throw takes the tail of the outgoing deck and stretches it into ambient texture. Hit at the right moment — last word of a vocal, last hit of a fill — it sounds intentional and confident.</p>
+
+        <h3>Setup</h3>
+        <p>Add a return track to the <code>.als</code> template named exactly <code>Reverb</code>. Drop a Reverb device with Hall or Plate preset, decay ~6s, dry/wet 100%. Re-extract the template. Full steps in <code>docs/proposals/fx-phase-1-runbook.md</code> (Phase 2 section). Click ↻ RESYNC.</p>
+
+        <h3>Gesture</h3>
+        <div class="step-block">
+          <div class="step-title">A Vocal Throw</div>
+          <ol>
+            <li>Deck A is playing. Find a moment where a vocal line is about to end — usually around bar 8 of a phrase.</li>
+            <li>2 beats before the vocal ends, click <strong>REV</strong> on Deck A. The button turns cyan. Deck A now sends 100% to Reverb.</li>
+            <li>The vocal finishes — but instead of just ending, the reverb tail continues for ~6 seconds. It sounds like the vocal is dissolving.</li>
+            <li>Within the tail's duration, fire Deck B and crossfade. The reverb covers the cut.</li>
+            <li>Click REV off when the tail decays naturally.</li>
+          </ol>
+          <div class="note">Reverb throws sound best on transient, mid-high material — vocals, leads, fills. Throwing the bass into reverb sounds muddy. Use it on the parts the audience is paying attention to.</div>
+        </div>
+
+        <h2>Delay Throw — The Echo Out</h2>
+        <p>Same idea as reverb but with tempo-synced echoes instead of a smooth tail. Feels more rhythmic, more "in the pocket."</p>
+
+        <h3>Setup</h3>
+        <p>Return track named <code>Delay</code>. Ping Pong Delay device, sync on, time 1/4, feedback 45%, dry/wet 100%.</p>
+
+        <h3>Gesture</h3>
+        <p>Click <strong>DLY</strong> at the last beat of a phrase. The last beat repeats 4-5 times into ambient space, decaying. Crossfade during the echoes. Click DLY off after the echoes die.</p>
+
+        <h2>Continuous Filter Sweep — The Analog Build</h2>
+        <p>Phase 1's HPF button snaps the filter on/off. Phase 3 adds a smooth ramp — the kind of slow filter open/close you hear at the start of a build-up on every house record made since 1995.</p>
+
+        <h3>Gesture (no Live setup needed)</h3>
+        <p><strong>Shift-click HPF</strong> instead of plain click. The send level ramps over 4 bars instead of snapping. The bridge fires ~25 interpolated updates per second with an ease-out curve — feels analog.</p>
+        <ul>
+          <li>Shift-click HPF on Deck A while it's playing → filter ramps from off (full range) to on (HPF cut) over 4 bars. Sounds like the lows are slowly getting sucked out.</li>
+          <li>Shift-click HPF again on Deck A → ramps back from on → off over 4 bars.</li>
+        </ul>
+        <p>Plain click still snap-toggles for fast moves. You get both gestures on the same button.</p>
+
+        <h2>The Triple-Stack Pro Transition</h2>
+        <p>All three Phase 1/2/3 FX combined into one transition:</p>
+        <div class="diagram">Bar -16: Shift-click HPF on Deck A (slow 4-bar sweep starts)
+Bar -12: HPF sweep peaks. Deck A is bass-free.
+Bar -8:  Fire Deck B's anchor scene.
+Bar -4:  Click ▲ Riser. Build starts on next bar.
+Bar -2:  Click REV on Deck A. Vocals + leads start washing.
+Bar  0:  Riser peaks. Slam crossfader to B. Drop lands.
+Bar +2:  Click REV off (Deck A is silent now anyway).
+Bar +4:  Shift-click HPF off on Deck A (slow 4-bar sweep back).</diagram>
+        <p>That's a fully-realized 16-bar transition. The audience hears: gradual bass thinning → build → impact + tail → clean drop. Everything ladders up to the moment.</p>
+
+        <h2>The Restraint Rule</h2>
+        <p>Pro DJs use these FX <strong>2-3 times per hour</strong>, not every transition. Overused FX become wallpaper — the audience tunes them out. Save the heavy FX for moments where the energy warrants it: drops you've built toward, key changes, a transition between dancefloor sections. Most transitions should just use HPF + crossfader.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>Reverb + Delay returns are authored in your <code>.als</code> and REV/DLY buttons are active</li>
+            <li>You've thrown a vocal into reverb at the end of a phrase and felt the cover-the-cut effect</li>
+            <li>You can hear the difference between snap HPF (plain click) and sweep HPF (shift-click)</li>
+            <li>You've done one triple-stack transition (sweep + riser + reverb) on a moment that warranted it</li>
+            <li>You can articulate when NOT to use FX — overuse = wallpaper, sparingly = signature</li>
+          </ul>
+        </div>
+      `},
+
     ]
   },
 

@@ -119,10 +119,44 @@ Go back to Live and try again. Nothing irreversible.
 
 ---
 
-## What's next (Phase 2 / 3 — not in this runbook)
+## Phase 2 — Reverb throw + Delay throw
 
-- **Phase 2 — Reverb throw + Delay throw**: same pattern, two more return tracks (`Reverb`, `Delay`). Their device chains are documented in `docs/proposals/hardware-and-live-controls.md`. The bridge discovery code already looks for these names; once you add them and resync, the corresponding throw buttons enable.
-- **Phase 3 — Macro-controlled filter sweep**: instead of binary on/off filter, ramp the macro 0→1 over 4 bars for an analog-style sweep. Requires Auto Filter macro mapping (Step 1.5 above) + a tiny bridge LFO. ~30 LOC. Defer until Phase 1 proves out.
+Same pattern as Filter. Two more return tracks:
+
+### Reverb return
+
+1. Right-click → Create Return Track. Rename to **`Reverb`** (exact, case-sensitive).
+2. Drag a **Reverb** device onto its chain.
+3. Preset: **Hall** or **Plate**. Decay: **6 s**. Predelay: **40 ms**. Dry/Wet: **100%** (the per-deck send controls how much hits it).
+4. Crossfade group: None.
+
+### Delay return
+
+1. Create Return Track. Rename to **`Delay`** (exact).
+2. Drag a **Ping Pong Delay** onto its chain (or Filter Delay — your taste).
+3. Sync: **on**. Time: **1/4 note**. Feedback: **45%**. Dry/Wet: **100%**.
+4. Crossfade group: None.
+
+**Verify**:
+1. ↻ RESYNC in the app.
+2. **REV** and **DLY** buttons in each deck header should enable (the rose-cyan and fuchsia squares).
+3. Click REV on Deck A → that deck audibly gains a big reverb tail. Click again → dry returns.
+4. Same for DLY → tempo-synced echoes layer in.
+
+Throw workflow: REV on, let the next phrase ring out, slam crossfader to B, REV off. The throw covers the cut.
+
+## Phase 3 — Continuous filter sweep (no extra Live setup)
+
+Already shipped. **Shift-click the HPF button** to sweep the filter 0→1 over 4 bars instead of snap-toggling. Same gesture works either direction — shift-click again to sweep back out.
+
+The bridge uses a background timer that fires ~25 interpolated send-level updates over the duration. Ease-out cubic curve (accelerates then slows) — feels musical, matches what analog filter sweeps do.
+
+You can tune the sweep duration via the OSC API directly if you want longer/shorter ramps:
+```
+curl -X POST 'http://localhost:8000/api/v1/ableton/fx/filter/a/sweep?bars=8&direction=in'
+```
+
+Default: 4 bars, direction auto (toggles based on current state).
 
 ---
 

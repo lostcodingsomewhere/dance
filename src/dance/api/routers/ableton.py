@@ -75,17 +75,61 @@ def stop_deck(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
 
 @router.post("/fx/filter/{side}")
 def fx_filter(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
-    """Toggle the parallel filter (HPF) send for Deck A or B.
+    """Toggle the parallel filter (HPF) send for Deck A or B."""
+    if side not in ("a", "b"):
+        raise HTTPException(400, f"side must be 'a' or 'b', got {side!r}")
+    return bridge.toggle_filter(side)
 
-    Requires a "Filter" return track in the .als template. Without it,
-    returns a warning telling the user to author one per the runbook.
+
+@router.post("/fx/reverb/{side}")
+def fx_reverb(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Toggle the parallel Reverb send for Deck A or B (throw effect)."""
+    if side not in ("a", "b"):
+        raise HTTPException(400, f"side must be 'a' or 'b', got {side!r}")
+    return bridge.toggle_reverb(side)
+
+
+@router.post("/fx/delay/{side}")
+def fx_delay(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Toggle the parallel Delay send for Deck A or B (echo throw)."""
+    if side not in ("a", "b"):
+        raise HTTPException(400, f"side must be 'a' or 'b', got {side!r}")
+    return bridge.toggle_delay(side)
+
+
+@router.post("/fx/{fx_name}/{side}/sweep")
+def fx_sweep(
+    fx_name: str,
+    side: str,
+    bars: float = 4.0,
+    direction: str = "auto",
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Smooth FX send ramp over ``bars`` bars (Phase 3).
+
+    ``direction`` ∈ {``in`` (ramp to 1), ``out`` (ramp to 0), ``auto``
+    (toggle based on current state)}. ``bars`` is interpreted at the
+    current master tempo.
     """
     if side not in ("a", "b"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"side must be 'a' or 'b', got {side!r}",
-        )
-    return bridge.toggle_filter(side)
+        raise HTTPException(400, f"side must be 'a' or 'b', got {side!r}")
+    if fx_name not in ("filter", "reverb", "delay"):
+        raise HTTPException(400, f"fx must be filter|reverb|delay, got {fx_name!r}")
+    state = bridge._state_dict_for(fx_name) or {}
+    if direction == "in":
+        target = 1.0
+    elif direction == "out":
+        target = 0.0
+    elif direction == "auto":
+        target = 0.0 if state.get(side, False) else 1.0
+    else:
+        raise HTTPException(400, f"direction must be in|out|auto, got {direction!r}")
+    return bridge.ramp_fx_send(
+        side=side,
+        return_name=fx_name.capitalize(),
+        target_level=target,
+        duration_bars=max(0.0, min(32.0, float(bars))),
+    )
 
 
 @router.post("/fx/{name}")
@@ -93,9 +137,11 @@ def fx_fire(name: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     """Fire a named one-shot FX clip (e.g. ``riser``). Quantized to the
     next bar by the clip's LaunchQuantisation."""
     if not name or not name.replace("_", "").isalnum():
+        raise HTTPException(400, f"FX name must be alphanumeric, got {name!r}")
+    if name in ("filter", "reverb", "delay"):
         raise HTTPException(
-            status_code=400,
-            detail=f"FX name must be alphanumeric, got {name!r}",
+            400,
+            f"{name!r} is an FX return, not a one-shot. Use /fx/{name}/{{side}}.",
         )
     return bridge.fire_fx(name)
 
@@ -103,11 +149,16 @@ def fx_fire(name: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
 @router.get("/fx/state")
 def fx_state(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     """Current FX state — used by the UI to render toggle states."""
+    state = bridge.fx_state()
+    # Shape kept compatible with the previous /fx/state response so
+    # existing UI code keeps working; expanded with reverb + delay.
     return {
-        "filter": bridge.filter_state(),
+        "filter": state["filter"],
+        "reverb": state["reverb"],
+        "delay": state["delay"],
         "discovered": {
-            "returns": dict(bridge._fx_return_idx),
-            "scenes": dict(bridge._fx_scene_idx),
+            "returns": state["returns"],
+            "scenes": state["scenes"],
         },
     }
 
