@@ -62,6 +62,32 @@ export function MasterStrip() {
     return null;
   }, [deckMap.data, state.playing_clips]);
 
+  // Per-deck BPM read off the anchored track on each side. We look at
+  // the lowest scene where at least one stem on that side has a bpm
+  // attached and use that as the deck's "currently anchored BPM". When
+  // both decks have anchors with non-trivial BPM delta, we surface it
+  // in the header as `Δ` so the DJ can sync before transitioning.
+  const deckBpms = useMemo<{ a: number | null; b: number | null }>(() => {
+    const cells = deckMap.data?.cells ?? [];
+    const find = (side: "a" | "b"): number | null => {
+      let bestScene = Infinity;
+      let bpm: number | null = null;
+      for (const c of cells) {
+        if (!c.kind.endsWith(`_${side}`)) continue;
+        if (c.bpm == null) continue;
+        if (c.scene_index < bestScene) {
+          bestScene = c.scene_index;
+          bpm = c.bpm;
+        }
+      }
+      return bpm;
+    };
+    return { a: find("a"), b: find("b") };
+  }, [deckMap.data]);
+  const bpmDelta = deckBpms.a != null && deckBpms.b != null
+    ? deckBpms.b - deckBpms.a
+    : null;
+
   const play = useMutation({ mutationFn: api.abletonPlay });
   const stop = useMutation({ mutationFn: api.abletonStop });
   const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
@@ -105,6 +131,20 @@ export function MasterStrip() {
         <span className="text-neutral-500 text-[10px] uppercase tracking-wider">
           BPM
         </span>
+        {bpmDelta != null && Math.abs(bpmDelta) > 0.5 && (
+          <span
+            className={`ml-1 text-[10px] font-mono tabular-nums rounded px-1.5 py-0.5 ${
+              Math.abs(bpmDelta) > 4
+                ? "bg-rose-500/20 text-rose-200 border border-rose-400/30"
+                : "bg-amber-500/15 text-amber-200 border border-amber-400/25"
+            }`}
+            title={`Deck A: ${deckBpms.a?.toFixed(1)} · Deck B: ${deckBpms.b?.toFixed(1)} — ${
+              Math.abs(bpmDelta) > 4 ? "wide gap, transition may sound stretched" : "close enough to ride"
+            }`}
+          >
+            Δ {bpmDelta > 0 ? "+" : ""}{bpmDelta.toFixed(1)}
+          </span>
+        )}
         {editingBpm && state.tempo != null && (
           <BpmSlider
             value={state.tempo}

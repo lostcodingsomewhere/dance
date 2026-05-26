@@ -1,4 +1,6 @@
-import { useMemo } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { useRegions } from "../hooks/useRegions";
@@ -30,6 +32,20 @@ export function TwoDeckStrip() {
   const deckMap = useDeckMap();
   const ableton = useAbletonState();
   const seek = useSeekClip();
+  // Which side (if any) is currently PFL'd to headphones. Single-side
+  // exclusive: toggling B clears A and vice versa. Local UI state — the
+  // backend has Live's actual solo state but tracking it here lets the
+  // toggles respond instantly without round-tripping.
+  const [pflSide, setPflSide] = useState<"a" | "b" | null>(null);
+  const setPfl = useMutation({
+    mutationFn: (side: "a" | "b" | "off") => api.abletonSetPfl(side),
+  });
+  function togglePfl(side: "a" | "b") {
+    const next = pflSide === side ? null : side;
+    setPflSide(next);
+    setPfl.mutate(next ?? "off");
+  }
+  const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -63,6 +79,9 @@ export function TwoDeckStrip() {
         positions={positions}
         tempo={tempo}
         beat={beat}
+        pflActive={pflSide === "a"}
+        onTogglePfl={() => togglePfl("a")}
+        onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -75,6 +94,9 @@ export function TwoDeckStrip() {
         positions={positions}
         tempo={tempo}
         beat={beat}
+        pflActive={pflSide === "b"}
+        onTogglePfl={() => togglePfl("b")}
+        onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -94,6 +116,9 @@ function DeckPanel({
   positions,
   tempo,
   beat,
+  pflActive,
+  onTogglePfl,
+  onSyncTempo,
   onSeek,
 }: {
   side: "a" | "b";
@@ -103,6 +128,9 @@ function DeckPanel({
   positions: Record<string, number>;
   tempo: number | null;
   beat: number | null;
+  pflActive: boolean;
+  onTogglePfl: () => void;
+  onSyncTempo: (bpm: number) => void;
   onSeek: (track: number, slot: number, beats: number) => void;
 }) {
   const SOURCE_ROLES = ["drums", "bass", "vocals", "other"] as const;
@@ -212,6 +240,10 @@ function DeckPanel({
         anchorCell={anchorCell}
         isPureAnchor={anchor?.isPureAnchor ?? false}
         firing={anchor?.firing ?? false}
+        pflActive={pflActive}
+        onTogglePfl={onTogglePfl}
+        projectTempo={tempo}
+        onSyncTempo={onSyncTempo}
       />
       <DeckWaveform
         side={side}
@@ -236,14 +268,29 @@ function DeckHeader({
   anchorCell,
   isPureAnchor,
   firing,
+  pflActive,
+  onTogglePfl,
+  projectTempo,
+  onSyncTempo,
 }: {
   side: "a" | "b";
   sideLabel: string;
   anchorCell: DeckCell | undefined;
   isPureAnchor: boolean;
   firing: boolean;
+  pflActive: boolean;
+  onTogglePfl: () => void;
+  projectTempo: number | null;
+  onSyncTempo: (bpm: number) => void;
 }) {
   const accentText = side === "a" ? "text-violet-200" : "text-indigo-200";
+  // Sync gesture: snap the project's master tempo to this deck's
+  // anchored track BPM. Only shows when there's a delta > 0.5 BPM.
+  const sourceBpm = anchorCell?.bpm ?? null;
+  const showSync =
+    sourceBpm != null
+    && projectTempo != null
+    && Math.abs(projectTempo - sourceBpm) > 0.5;
   return (
     <div className="flex items-baseline gap-2">
       <div className={`text-base font-bold tracking-wider ${accentText}`}>
@@ -254,6 +301,24 @@ function DeckHeader({
           ▶ live
         </span>
       )}
+      <button
+        type="button"
+        onClick={onTogglePfl}
+        title={
+          pflActive
+            ? `Stop monitoring Deck ${sideLabel} in headphones`
+            : `Monitor Deck ${sideLabel} in headphones (PFL via Live's Solo with Solo/Cue=Cue)`
+        }
+        aria-pressed={pflActive}
+        aria-label={`PFL Deck ${sideLabel}`}
+        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+          pflActive
+            ? "bg-amber-400/30 text-amber-100 border-amber-300/60"
+            : "text-neutral-500 hover:text-amber-200 border-neutral-700 hover:border-amber-400/40"
+        }`}
+      >
+        PFL
+      </button>
       {anchorCell ? (
         <>
           <div className="text-sm text-neutral-100 truncate font-medium min-w-0 flex-1">
@@ -264,15 +329,23 @@ function DeckHeader({
               {anchorCell.artist}
             </div>
           )}
-          <div className="text-[10px] font-mono tabular-nums text-neutral-500 shrink-0">
-            {anchorCell.bpm != null && (
-              <span>{anchorCell.bpm.toFixed(0)}</span>
+          <div className="text-[10px] font-mono tabular-nums text-neutral-500 shrink-0 flex items-baseline gap-1.5">
+            {sourceBpm != null && <span>{sourceBpm.toFixed(0)}</span>}
+            {showSync && (
+              <button
+                type="button"
+                onClick={() => onSyncTempo(Number(sourceBpm!.toFixed(2)))}
+                title={`Set master tempo to ${sourceBpm!.toFixed(1)} BPM (currently ${projectTempo!.toFixed(1)})`}
+                className="text-[9px] font-bold leading-none rounded px-1 py-0.5 bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 transition-colors"
+              >
+                SYNC
+              </button>
             )}
             {anchorCell.key_camelot && (
-              <span className="ml-1.5">· {anchorCell.key_camelot}</span>
+              <span>· {anchorCell.key_camelot}</span>
             )}
             {anchorCell.floor_energy != null && (
-              <span className="ml-1.5 text-neutral-600">
+              <span className="text-neutral-600">
                 · E{anchorCell.floor_energy}
               </span>
             )}

@@ -1,5 +1,6 @@
 import { BoothColumnHeaders } from "../components/BoothColumnHeaders";
 import { ColumnRecBanner } from "../components/ColumnRecBanner";
+import { Crossfader } from "../components/Crossfader";
 import { CueStrip } from "../components/CueStrip";
 import { SceneGrid } from "../components/SceneGrid";
 import { TwoDeckStrip } from "../components/TwoDeckStrip";
@@ -56,6 +57,10 @@ export function Booth() {
         {/* Two-deck Traktor-style "now playing" — replaces ComboStrip.
             One stacked-stem waveform per deck side. */}
         <TwoDeckStrip />
+        {/* Crossfader bar — mirrors APC40 hardware crossfader, also
+            drag-to-set on screen. Sits visually between the two deck
+            panels above and the per-stem grid below. */}
+        <Crossfader />
         <BoothColumnHeaders />
         <SceneGrid />
         <CueStrip />

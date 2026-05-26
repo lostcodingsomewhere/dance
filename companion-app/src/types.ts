@@ -160,6 +160,10 @@ export interface AbletonState {
   track_meters: Record<string, number>;
   /** track_index → currently-playing clip's playing_position in beats. */
   playing_positions: Record<string, number>;
+  /** Master crossfader position. -1 = full A, 0 = center, +1 = full B.
+   * Driven primarily by APC40 hardware fader; the on-screen Crossfader
+   * component mirrors this and lets the user drag it as a fallback. */
+  crossfader: number | null;
 }
 
 export const EMPTY_ABLETON_STATE: AbletonState = {
@@ -170,6 +174,7 @@ export const EMPTY_ABLETON_STATE: AbletonState = {
   track_volumes: {},
   track_meters: {},
   playing_positions: {},
+  crossfader: null,
 };
 
 export interface TrackFilters {

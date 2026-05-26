@@ -22,6 +22,7 @@ from dance.api.schemas import (
     LoadTrackResult,
     PreviewRequest,
     PreviewResult,
+    CrossfaderRequest,
     TempoRequest,
     VolumeRequest,
 )
@@ -43,6 +44,36 @@ def play(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
 def stop(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     bridge.client.stop()
     return {"ok": True}
+
+
+@router.post("/pfl/{side}")
+def set_pfl(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Route Deck A, Deck B, or neither into the headphone cue.
+
+    ``side`` ∈ {``a``, ``b``, ``off``}. Implemented via Live's per-track
+    Solo with Solo/Cue mode = Cue (set on bridge init). See
+    ``bridge.set_pfl_side`` for details.
+    """
+    if side not in ("a", "b", "off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"side must be 'a', 'b', or 'off'; got {side!r}",
+        )
+    return bridge.set_pfl_side(None if side == "off" else side)
+
+
+@router.post("/crossfader")
+def set_crossfader(
+    body: CrossfaderRequest,
+    bridge: AbletonBridge = Depends(get_bridge),
+) -> dict:
+    """Set Live's master crossfader. ``value`` in [-1, +1]: -1 = full A,
+    0 = center, +1 = full B. Mostly driven from the APC40 hardware fader;
+    we expose the setter so on-screen drag is also possible.
+    """
+    v = max(-1.0, min(1.0, float(body.value)))
+    bridge.client.set_crossfader(v)
+    return {"ok": True, "value": v}
 
 
 @router.post("/record/{state}")

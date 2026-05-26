@@ -387,6 +387,11 @@ class TempoRequest(BaseModel):
     bpm: float
 
 
+class CrossfaderRequest(BaseModel):
+    """Master crossfader position. -1 = full A, 0 = center, +1 = full B."""
+    value: float
+
+
 class FireClipRequest(BaseModel):
     track: int
     scene: int
@@ -749,6 +754,7 @@ __all__ = [
     "SessionPlayOut",
     "StemAnalysisOut",
     "StemFileOut",
+    "CrossfaderRequest",
     "TempoRequest",
     "TrackOut",
     "VolumeRequest",

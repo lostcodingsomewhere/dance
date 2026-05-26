@@ -89,6 +89,32 @@ class AbletonOSCClient:
         """
         self._send("/live/song/set/record_mode", 1 if on else 0)
 
+    # Master crossfader: -1 (full A) ... 0 (center) ... +1 (full B). Lives
+    # on Song.master_track.mixer_device.crossfader. Driven primarily by the
+    # APC40's hardware crossfader (when tracks are assigned to A/B groups
+    # via their CrossFadeAssignment); we expose the read+write so the FE
+    # can mirror the value on-screen between Deck A and Deck B.
+    def get_crossfader(self) -> None:
+        self._send("/live/song/get/crossfader")
+
+    def set_crossfader(self, value: float) -> None:
+        self._send("/live/song/set/crossfader", float(value))
+
+    def start_listen_crossfader(self) -> None:
+        self._send("/live/song/start_listen/crossfader")
+
+    def stop_listen_crossfader(self) -> None:
+        self._send("/live/song/stop_listen/crossfader")
+
+    # Solo/Cue mode: Live has a global toggle (master strip "Solo/Cue"
+    # button) that switches every track's S button between two behaviors:
+    #   0 = Solo (master mutes everything except the soloed track)
+    #   1 = Cue  (soloed track routes to the Cue output / outs 3/4 — PFL)
+    # Stem-DJing needs Cue. We set it on bridge init so the per-deck PFL
+    # buttons in the UI Just Work without the user toggling it themselves.
+    def set_solo_cue_mode(self, cue: bool) -> None:
+        self._send("/live/song/set/solo_cue_mode", 1 if cue else 0)
+
     # ------------------------------------------------------------------
     # Mixer
     # ------------------------------------------------------------------

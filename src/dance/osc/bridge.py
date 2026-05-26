@@ -46,6 +46,10 @@ class AbletonState:
     # (in _on_playing_clip); unsubscribed when it stops. Drives the
     # accurate playhead in the FE's MasterVisualizer + CueStrip.
     playing_positions: dict[int, float] = field(default_factory=dict)
+    # Master crossfader position. Live's range is -1 (full A) to +1 (full B),
+    # with 0 = center. We subscribe on bridge init and push updates to the FE
+    # so the on-screen crossfader bar follows the APC40 hardware fader live.
+    crossfader: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +60,7 @@ class AbletonState:
             "track_volumes": dict(self.track_volumes),
             "track_meters": dict(self.track_meters),
             "playing_positions": dict(self.playing_positions),
+            "crossfader": self.crossfader,
         }
 
 
@@ -143,6 +148,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
+        self.listener.on("/live/song/get/crossfader", self._on_crossfader)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -159,6 +165,12 @@ class AbletonBridge:
             self.client.start_listen_tempo()
             self.client.start_listen_beat()
             self.client.start_listen_is_playing()
+            self.client.start_listen_crossfader()
+            # Set Live's master Solo/Cue mode to "Cue" so per-track Solo
+            # buttons act as PFL (route to outs 3/4) instead of muting
+            # master. Stem-DJing needs PFL semantics. Idempotent — Live
+            # already in Cue mode is a no-op.
+            self.client.set_solo_cue_mode(True)
         except OSError as exc:
             # Live isn't listening; that's fine in dev/test.
             logger.info("Could not subscribe to Live (%s) — continuing without push state", exc)
@@ -317,6 +329,13 @@ class AbletonBridge:
     def _on_is_playing(self, _address: str, args: tuple[Any, ...]) -> None:
         if args:
             self.state.is_playing = bool(args[0])
+            self._broadcast()
+
+    def _on_crossfader(self, _address: str, args: tuple[Any, ...]) -> None:
+        if args:
+            # Live reports -1..+1; clamp defensively.
+            v = float(args[0])
+            self.state.crossfader = max(-1.0, min(1.0, v))
             self._broadcast()
 
     def _on_playing_clip(self, _address: str, args: tuple[Any, ...]) -> None:
@@ -772,6 +791,42 @@ class AbletonBridge:
             if all((i, k) not in self._deck_cells for k in deck_stem_kinds):
                 return i
             i += 1
+
+    def set_pfl_side(self, side: str | None) -> dict[str, Any]:
+        """Route an entire deck side (A or B) to the headphone cue bus.
+
+        Uses Live's per-track Solo with Solo/Cue mode set to ``Cue`` (we
+        flip the mode on bridge init, see ``start``). When a track is
+        soloed in Cue mode, its audio routes to the Cue output (outs
+        3/4 → headphones) AND continues to play through master — exactly
+        the PFL behavior a DJ wants.
+
+        ``side`` ∈ {``"a"``, ``"b"``, ``None``}. ``None`` clears PFL on
+        both sides (solo-off all stem decks + both mix decks).
+
+        Affects only the 8 stem decks and the 2 mix decks — leaves the
+        Cue track + any non-deck tracks untouched.
+
+        Returns ``{"ok": True, "side": side, "tracks_affected": int}``.
+        """
+        if side is not None and side not in ("a", "b"):
+            return {
+                "ok": False,
+                "warning": f"side must be 'a' or 'b' or None, got {side!r}",
+            }
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        affected = 0
+        for kind, idx in self._deck_columns.items():
+            # Soloed iff the kind is on the requested side. Mixes go
+            # along with their side's stems — full PFL of the deck.
+            should_solo = side is not None and kind.endswith(f"_{side}")
+            try:
+                self.client.set_track_solo(idx, should_solo)
+                affected += 1
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        return {"ok": True, "side": side, "tracks_affected": affected}
 
     def _pick_side(self, *, scene_index: int) -> str:
         """For a row, return which side ('a' or 'b') to load into.

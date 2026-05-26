@@ -385,10 +385,18 @@ def test_bridge_push_track_to_live_creates_tracks_in_order():
             >= 10
         )
         creates = [a for a, _ in received if a == "/live/song/create_audio_track"]
+        assert len(creates) == 10
+        # Wait for all 10 name messages — they race with create_audio_track
+        # and may not all be in the buffer when the count check passes.
+        assert _wait_for(
+            lambda: sum(
+                1 for addr, _ in received if addr == "/live/track/set/name"
+            )
+            >= 10
+        )
         names = [
             args[1] for addr, args in received if addr == "/live/track/set/name"
         ]
-        assert len(creates) == 10
         # Names include each stem role × side and both mix references.
         joined = " | ".join(names)
         assert "Drums A" in joined and "Drums B" in joined

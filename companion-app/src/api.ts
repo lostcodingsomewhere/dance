@@ -461,6 +461,19 @@ export function abletonRecord(on: boolean): Promise<{ ok: boolean; recording: bo
   );
 }
 
+export function abletonSetCrossfader(value: number): Promise<{ ok: boolean; value: number }> {
+  return request<{ ok: boolean; value: number }>("/ableton/crossfader", {
+    method: "POST",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export function abletonSetPfl(
+  side: "a" | "b" | "off",
+): Promise<{ ok: boolean; side: string | null; tracks_affected?: number }> {
+  return request("/ableton/pfl/" + side, { method: "POST" });
+}
+
 export function abletonSetTempo(bpm: number): Promise<void> {
   return request<void>("/ableton/tempo", {
     method: "POST",
