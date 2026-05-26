@@ -131,6 +131,15 @@ export function Waveform({
       : [];
 
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
+  // React-managed hover tooltip for markers. The native `title` attribute
+  // has a ~1s browser delay and renders inconsistently; this is instant
+  // and styled. Tracks the currently-hovered marker (cue tick or section
+  // band) so we can render a small floating label above the waveform.
+  const [hoverMarker, setHoverMarker] = useState<
+    | { kind: "cue"; label: string; stamp: string; x: number }
+    | { kind: "section"; label: string; x: number; w: number }
+    | null
+  >(null);
 
   function ratioFromEvent(e: React.MouseEvent<SVGSVGElement>): number {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -323,10 +332,16 @@ export function Waveform({
                 }
               : undefined
           }
+          onMouseEnter={() =>
+            setHoverMarker({ kind: "section", label: b.name, x: b.x, w: b.w })
+          }
           onMouseMove={
             onSeek ? () => setHoverRatio(b.x / 100) : undefined
           }
-          onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
+          onMouseLeave={() => {
+            setHoverMarker(null);
+            if (onSeek) setHoverRatio(null);
+          }}
           style={{
             position: "absolute",
             left: `${b.x}%`,
@@ -383,10 +398,21 @@ export function Waveform({
                 }
               : undefined
           }
+          onMouseEnter={() =>
+            setHoverMarker({
+              kind: "cue",
+              label: t.label,
+              stamp: t.stamp,
+              x: t.x,
+            })
+          }
           onMouseMove={
             onSeek ? () => setHoverRatio(t.ratio) : undefined
           }
-          onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
+          onMouseLeave={() => {
+            setHoverMarker(null);
+            if (onSeek) setHoverRatio(null);
+          }}
           style={{
             position: "absolute",
             left: `${t.x}%`,
@@ -398,10 +424,35 @@ export function Waveform({
             border: "none",
             padding: 0,
             cursor: onSeek ? "pointer" : "default",
-            zIndex: 1,
+            zIndex: 2,
           }}
         />
       ))}
+      {/* React-managed hover tooltip — instant, styled, replaces the
+          unreliable native title tooltip. Floats above the waveform
+          at the marker's x position. */}
+      {hoverMarker && (
+        <div
+          data-testid="waveform-marker-tooltip"
+          style={{
+            position: "absolute",
+            left: `${
+              hoverMarker.kind === "cue"
+                ? hoverMarker.x
+                : hoverMarker.x + hoverMarker.w / 2
+            }%`,
+            bottom: "calc(100% + 2px)",
+            transform: "translateX(-50%)",
+            zIndex: 10,
+            pointerEvents: "none",
+          }}
+          className="px-1.5 py-0.5 rounded-md bg-neutral-900/95 border border-neutral-700 text-neutral-100 text-[10px] font-mono whitespace-nowrap shadow-lg"
+        >
+          {hoverMarker.kind === "cue"
+            ? `${hoverMarker.label} · ${hoverMarker.stamp}`
+            : hoverMarker.label}
+        </div>
+      )}
     </div>
   );
 }
