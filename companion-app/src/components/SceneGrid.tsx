@@ -132,6 +132,20 @@ export function SceneGrid() {
               const shadowCell: DeckCell | undefined = showShadow
                 ? rowCells.find((c) => c != null) ?? undefined
                 : undefined;
+              // Shadow X: clear every cell in this row (4 stems + a real
+              // mix cell if one happens to be there). One click to undo
+              // the whole anchor instead of removing four cells by hand.
+              const onClearRow = showShadow
+                ? () => {
+                    for (const r of stemColumns) {
+                      const c = cellAt.get(`${sceneIdx}|${r}`);
+                      const tIdx = columns[r];
+                      if (c != null && tIdx != null) {
+                        deleteCell.mutate({ track: tIdx, slot: sceneIdx });
+                      }
+                    }
+                  }
+                : undefined;
               return (
                 <Cell
                   key={role}
@@ -150,7 +164,9 @@ export function SceneGrid() {
                       : undefined
                   }
                   onRemove={
-                    cell != null && trackIdx != null
+                    showShadow
+                      ? onClearRow
+                      : cell != null && trackIdx != null
                       ? () =>
                           deleteCell.mutate({ track: trackIdx, slot: sceneIdx })
                       : undefined
@@ -259,22 +275,40 @@ function Cell({
   if (shadow && cell) {
     return (
       <div
-        className={`rounded-md border-2 border-dashed h-14 px-2 py-1 overflow-hidden bg-neutral-800/60 border-neutral-500`}
-        title={`Inferred from stems: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}`}
-        aria-label={`${roleLabel(role)} (inferred from stems)`}
+        className="relative group"
         data-testid="scene-cell-shadow"
       >
-        <div className="text-xs truncate font-medium leading-tight text-neutral-100">
-          {cell.title ?? `Track #${cell.track_id}`}
-        </div>
-        {cell.artist && (
-          <div className="text-[10px] truncate leading-tight text-neutral-300">
-            {cell.artist}
+        <div
+          className={`rounded-md border-2 border-dashed h-14 px-2 py-1 overflow-hidden bg-neutral-800/60 border-neutral-500`}
+          title={`Inferred from stems: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}`}
+          aria-label={`${roleLabel(role)} (inferred from stems)`}
+        >
+          <div className="text-xs truncate font-medium leading-tight text-neutral-100">
+            {cell.title ?? `Track #${cell.track_id}`}
           </div>
-        )}
-        <div className="text-[9px] truncate font-mono leading-none mt-0.5 text-neutral-400 uppercase tracking-wider">
-          ◇ anchor
+          {cell.artist && (
+            <div className="text-[10px] truncate leading-tight text-neutral-300">
+              {cell.artist}
+            </div>
+          )}
+          <div className="text-[9px] truncate font-mono leading-none mt-0.5 text-neutral-400 uppercase tracking-wider">
+            ◇ anchor
+          </div>
         </div>
+        {onRemove && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            title={`Clear all stems for ${cell.title ?? `Track #${cell.track_id}`} from this scene`}
+            aria-label="Clear anchor row"
+            className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-700 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100 focus:outline-none"
+          >
+            ×
+          </button>
+        )}
       </div>
     );
   }
