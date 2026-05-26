@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import {
@@ -36,6 +38,21 @@ export function SceneGrid() {
   const stopScene = useStopScene();
   const stopCell = useStopCell();
   const deleteCell = useDeleteCell();
+  const qc = useQueryClient();
+  // Anchor-fill: load all 4 stems from a single-stem row's track into the
+  // same row. Backend already supports it — pass scene_index=this row,
+  // kinds=undefined (= full song). Lone stem gets overwritten with the
+  // same audio, the 3 missing stems join it = instant anchor.
+  const anchorFill = useMutation({
+    mutationFn: (vars: { trackId: number; sceneIdx: number }) =>
+      pushTrackToLive(vars.trackId, {
+        includeStems: true,
+        sceneIndex: vars.sceneIdx,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+    },
+  });
   const [expanded, setExpanded] = useState(false);
   // User-customizable column order — reorder via drag-and-drop on the
   // BoothColumnHeaders chips. We render cells in this order; the
@@ -95,6 +112,13 @@ export function SceneGrid() {
         const isAnchorReady =
           rowTrackIds.every((t) => t != null) &&
           new Set(rowTrackIds).size === 1;
+        // Lone-stem row: exactly one stem cell loaded. We offer a one-
+        // click anchor-fill on that cell — load the rest of the song's
+        // stems into this row. Capturing the track_id here so the
+        // per-Cell render can check "am I the lone stem?" cheaply.
+        const loadedStems = rowCells.filter((c): c is DeckCell => c != null);
+        const loneStemTrackId =
+          loadedStems.length === 1 ? loadedStems[0].track_id : null;
         const anyPlaying = Object.values(columns).some(
           (trackIdx) => playing[trackIdx] === sceneIdx,
         );
@@ -169,6 +193,18 @@ export function SceneGrid() {
                       : cell != null && trackIdx != null
                       ? () =>
                           deleteCell.mutate({ track: trackIdx, slot: sceneIdx })
+                      : undefined
+                  }
+                  onAnchorFill={
+                    cell != null &&
+                    role !== "mix" &&
+                    loneStemTrackId === cell.track_id &&
+                    !anchorFill.isPending
+                      ? () =>
+                          anchorFill.mutate({
+                            trackId: cell.track_id,
+                            sceneIdx,
+                          })
                       : undefined
                   }
                 />
@@ -253,6 +289,7 @@ function Cell({
   beatMs,
   onTap,
   onRemove,
+  onAnchorFill,
   shadow = false,
 }: {
   role: StemRole;
@@ -265,6 +302,10 @@ function Cell({
    * appears on hover. The X stops + deletes via the bridge — the slot
    * stays, ready to receive the next ``Load to Live``. */
   onRemove?: () => void;
+  /** Optional: load the rest of this track's stems into the same row,
+   * turning a lone stem into an anchor. When set, an ◇ button appears
+   * on hover (top-left, opposite the × in the top-right). */
+  onAnchorFill?: () => void;
   /** UI-only ghost render: track is *inferred* from the row's stems but
    * not actually loaded in Live. Used in the SONG column when all 4
    * stems point at the same track. No interaction — read-only label. */
@@ -390,6 +431,21 @@ function Cell({
           className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100 focus:outline-none"
         >
           ×
+        </button>
+      )}
+      {onAnchorFill && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAnchorFill();
+          }}
+          title={`Fill the rest of the stems from ${cell?.title ?? "this track"} into this scene`}
+          aria-label="Fill row with rest of stems (anchor)"
+          data-testid="cell-anchor-fill"
+          className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-sky-300 hover:border-sky-500/40 transition-opacity focus:opacity-100 focus:outline-none"
+        >
+          ◇
         </button>
       )}
     </div>
