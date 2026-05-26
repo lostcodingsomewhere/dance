@@ -469,10 +469,23 @@ class AbletonBridge:
             return recovered
         return None
 
+    # Legacy display names from the pre-deck-pair layout. Kept here so
+    # ``clean_live_decks`` can sweep stragglers after the A/B reshape —
+    # a user whose Live session still has the old 5-deck tracks needs
+    # those removed before the new 9-deck layout can be created cleanly.
+    _LEGACY_DECK_DISPLAY_NAMES: frozenset[str] = frozenset({
+        "Deck Mix",
+        "Deck Drums",
+        "Deck Bass",
+        "Deck Vocals",
+        "Deck Other",
+    })
+
     def clean_live_decks(self, timeout: float = 1.0) -> dict[str, Any]:
         """Delete every ``Deck *`` track AND the Cue track in Live (covers
-        stragglers from previous backend runs) and reset the bridge cache.
-        Returns a summary of what was removed.
+        stragglers from previous backend runs and the pre-deck-pair
+        layout) and reset the bridge cache. Returns a summary of what was
+        removed.
 
         Deletes in reverse-index order so the upstream indices don't shift
         out from under us mid-iteration.
@@ -480,7 +493,11 @@ class AbletonBridge:
         names = self.get_track_names(timeout=timeout)
         if names is None:
             return {"deleted": 0, "warning": "Live unreachable; nothing deleted."}
-        expected = set(self._DECK_DISPLAY_NAMES.values()) | {self._CUE_DISPLAY_NAME}
+        expected = (
+            set(self._DECK_DISPLAY_NAMES.values())
+            | self._LEGACY_DECK_DISPLAY_NAMES
+            | {self._CUE_DISPLAY_NAME}
+        )
         deck_indices = [i for i, n in enumerate(names) if n in expected]
         for idx in sorted(deck_indices, reverse=True):
             try:
