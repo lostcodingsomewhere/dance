@@ -943,15 +943,27 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <p>The Booth view has six sections, top to bottom:</p>
 
         <h2>1. MasterStrip (top header)</h2>
-        <p>Big BPM number on the left, transport icons (<strong>▶/⏸ ■ ⚠ ●</strong>), live key, ARC sparkline, Live heartbeat, RESYNC, search, view tabs. When both decks have anchors and disagree, a <strong>Δ BPM chip</strong> appears next to the tempo (amber for small gaps, rose for &gt;4 BPM — a hint to hit SYNC before transitioning).</p>
+        <p>Big BPM number on the left, transport icons, live key, ARC sparkline, Live heartbeat, RESYNC, search, view tabs. Transport icons in order:</p>
+        <ul>
+          <li><strong>▶ / ⏸</strong> — play / pause Live's master transport (turns green when playing)</li>
+          <li><strong>■</strong> — stop master transport (halts the master clock)</li>
+          <li><strong>⚠</strong> — <em>panic</em>: stops every firing clip across both decks but lets the transport keep running. Two-click "arm + fire" gesture so it can't be hit accidentally mid-set. Use when something's gone weird and you need silence on the next bar.</li>
+          <li><strong>●</strong> — record toggle. Click to start; the icon flips to a square with an elapsed <code>mm:ss</code> counter. Click again to stop. Captures into Live's session record (you can later render via Arrangement view — see Lesson 6.3).</li>
+        </ul>
+        <p>When both decks have anchors and disagree, a <strong>Δ BPM chip</strong> appears next to the tempo (amber for small gaps, rose for &gt;4 BPM — a hint to hit SYNC before transitioning).</p>
 
         <h2>2. The Two Decks (DECK A | DECK B)</h2>
         <p>Two big panels side by side, A on the left (violet accent), B on the right (indigo). Each shows:</p>
         <ul>
           <li>Deck identity header — <strong>DECK A</strong> or <strong>DECK B</strong>, plus the anchored track's title / artist / BPM / key / energy</li>
           <li>Per-deck transport: <strong>▶</strong> fires that deck's anchored scene, <strong>■</strong> halts every clip on that side, <strong>PFL</strong> toggle routes that deck to your headphones</li>
+          <li>Per-deck FX (covered in detail in lessons 6.4 + 6.5, enabled after the Live author step):
+            <strong>HPF</strong> = parallel high-pass filter (click = snap on/off; <em>shift-click</em> = 4-bar smooth sweep),
+            <strong>REV</strong> = reverb throw,
+            <strong>DLY</strong> = delay throw.
+            Greyed-out with a runbook tooltip when the matching return tracks aren't authored yet.</li>
           <li><strong>SYNC</strong> button when the deck's source BPM differs from master — one click snaps master tempo to match</li>
-          <li>A big stacked-stem waveform of what's anchored, with section bands + cue tick markers. Hover any marker for a tooltip; click a cue or section to seek to that point. The playhead scrolls in real time as Live plays.</li>
+          <li>A big stacked-stem waveform of what's anchored, with section bands + cue tick markers. <strong>Hover any marker</strong> for a styled tooltip popover (e.g. <em>"Cue · 1:23"</em>, <em>"Drop"</em>). <strong>Click a marker</strong> to seek straight to that point. <strong>Click anywhere else on the waveform</strong> to snap-seek to the nearest section start within tolerance (~8% of duration) — so even imprecise clicks land on a meaningful boundary. The playhead scrolls in real time as Live plays.</li>
         </ul>
 
         <h2>3. Crossfader</h2>
@@ -959,6 +971,10 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
 
         <h2>4. SceneGrid (10 columns, mirror layout)</h2>
         <p>Below the decks is the canonical 10-column scene grid. Columns read left-to-right as: <code>DRUMS | BASS | VOCALS | MELODY | SONG</code> for Deck A, then mirrored back <code>SONG | MELODY | VOCALS | BASS | DRUMS</code> for Deck B. Each row is a scene. Every cell shows a small <span class="hl">A</span> or <span class="hl">B</span> badge so you always know which deck the slot belongs to. Tap any loaded cell to fire/stop it; tap the row label on the left to fire the whole scene (anchor mode).</p>
+
+        <p><strong>Anchor-fill (◇ button).</strong> When a row has exactly one stem loaded and you want the full song, hover that cell — a small <strong>◇</strong> button appears in the top-left. One click loads the matching 3 stems of the same source track into the rest of the row. Saves you the four-trip-to-rec-banner shuffle when you fall in love with a stem and want the whole song.</p>
+
+        <p><strong>Shadow cells in the SONG column.</strong> When a row's 4 stem cells on one side share a source track but the SONG cell itself is empty, the SONG cell renders as a dashed <em>shadow</em> displaying the inferred track. Tells you "these stems belong together as a single song" without needing to click anything. Each shadow has a small × button to clear the entire side (4 stems + mix) in one gesture.</p>
 
         <h2>5. CueStrip + Rec Banners</h2>
         <p>The CueStrip shows what's currently being auditioned through your headphones (the Cue track). One-click <strong>Load to master</strong> commits it to a real deck row. Below: five rec banners, one per source role (drums / bass / vocals / melody / song). Each rec card has <strong>▶ ⤒A ⤒B</strong> buttons — preview, load to Deck A, load to Deck B. Stem cards also have a tiny <strong>↗</strong> that pins the track to the SONG rec list.</p>
