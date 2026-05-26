@@ -33,6 +33,42 @@ export function roleLabel(kind: string): string {
   return LABELS[kind] ?? kind;
 }
 
+/** Two-deck UI column order. Songs sit in the center (mix_a | mix_b
+ * adjacent) so the layout mirrors around the song spine. Drums on the
+ * outside per APC40 strip convention. See
+ * docs/proposals/two-deck-ui-rethink.md. */
+export const TWO_DECK_COLUMN_ORDER: readonly string[] = [
+  "drums_a",
+  "bass_a",
+  "vocals_a",
+  "other_a",
+  "mix_a",
+  "mix_b",
+  "other_b",
+  "vocals_b",
+  "bass_b",
+  "drums_b",
+];
+
+/** Backend deck-kind → user-facing column header label. Includes the
+ * A/B side suffix so the eye groups same-role pairs visually. */
+const DECK_LABELS: Record<string, string> = {
+  drums_a: "Drums A",
+  drums_b: "Drums B",
+  bass_a: "Bass A",
+  bass_b: "Bass B",
+  vocals_a: "Vocals A",
+  vocals_b: "Vocals B",
+  other_a: "Melody A",
+  other_b: "Melody B",
+  mix_a: "Song A",
+  mix_b: "Song B",
+};
+
+export function deckColumnLabel(deckKind: string): string {
+  return DECK_LABELS[deckKind] ?? deckKind;
+}
+
 /** Stem columns excluding the "song" anchor column — for "loadable stems"
  * iterations like banner load buttons. */
 export const STEM_ONLY_COLUMNS: readonly StemRole[] = [

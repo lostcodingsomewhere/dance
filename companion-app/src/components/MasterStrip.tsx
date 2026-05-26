@@ -47,7 +47,7 @@ export function MasterStrip() {
       "bass_a", "bass_b",
       "drums_a", "drums_b",
       "other_a", "other_b",
-      "mix",
+      "mix_a", "mix_b",
     ];
     for (const dk of orderedDeckKinds) {
       const trackIdx = columns[dk];

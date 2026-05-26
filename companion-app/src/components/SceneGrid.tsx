@@ -13,12 +13,14 @@ import {
 import { formatDuration } from "../lib/format";
 import {
   ROLE_STYLES,
-  deckKindOf,
+  TWO_DECK_COLUMN_ORDER,
+  deckColumnLabel,
   roleLabel,
+  sideOf,
+  sourceKindOf,
   type DeckSide,
   type StemRole,
 } from "../lib/roles";
-import { useAppStore } from "../store";
 import type { DeckCell } from "../types";
 
 const COLLAPSED_ROWS = 3;
@@ -60,11 +62,11 @@ export function SceneGrid() {
     },
   });
   const [expanded, setExpanded] = useState(false);
-  // User-customizable column order — reorder via drag-and-drop on the
-  // BoothColumnHeaders chips. We render cells in this order; the
-  // underlying Ableton track index stays the same (looked up via
-  // ``columns[role]``).
-  const stemColumns = useAppStore((s) => s.stemColumnOrder);
+  // Two-deck column order: 10 columns, songs in center, deck mirror
+  // around the song spine. Drag-to-reorder is removed for now (the deck
+  // semantics break if columns are reordered freely — drums_a doesn't
+  // map cleanly to the bass spot).
+  const stemColumns = TWO_DECK_COLUMN_ORDER;
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -110,53 +112,45 @@ export function SceneGrid() {
           ComboStrip + SceneGrid + the rec banner row instead of being
           repeated inside each. */}
       {rows.map((sceneIdx) => {
-        // Per-side anchor detection: a side counts as "anchor-ready" when
-        // all 4 of its source stems are loaded AND point at the same track.
-        // Each side can have its own anchor — that's the whole point of
-        // deck pairs (A holding the current song while B holds the next).
-        const sourceRoles: StemRole[] = ["drums", "bass", "vocals", "other"];
+        // Per-side anchor detection: a side is "anchor-ready" when all 4
+        // of its stems share one track. With deck pairs, each side has
+        // its own anchor — A holding the current song while B holds the
+        // next is the whole point.
         const sideAnchor = (side: DeckSide): number | null => {
-          const tids = sourceRoles.map(
-            (r) => cellAt.get(`${sceneIdx}|${deckKindOf(r, side)}`)?.track_id,
+          const tids = (["drums", "bass", "vocals", "other"] as const).map(
+            (r) => cellAt.get(`${sceneIdx}|${r}_${side}`)?.track_id,
           );
           if (tids.some((t) => t == null)) return null;
           return new Set(tids).size === 1 ? (tids[0] as number) : null;
         };
         const aAnchor = sideAnchor("a");
         const bAnchor = sideAnchor("b");
-        // Used for the SONG-column shadow + the row-clear behavior.
-        const isAnchorReady = aAnchor != null || bAnchor != null;
-        // Lone-stem detection: exactly one stem-deck cell loaded across
-        // BOTH sides of the row. We use this to offer the ◇ anchor-fill
-        // gesture (one click loads the rest of that track's stems).
+        // Stem cells across both sides — for lone-stem detection.
         const allStemCells: DeckCell[] = [];
-        for (const r of sourceRoles) {
-          for (const side of ["a", "b"] as const) {
-            const c = cellAt.get(`${sceneIdx}|${deckKindOf(r, side)}`);
-            if (c) allStemCells.push(c);
-          }
+        for (const dk of stemColumns) {
+          if (dk.startsWith("mix")) continue;
+          const c = cellAt.get(`${sceneIdx}|${dk}`);
+          if (c) allStemCells.push(c);
         }
         const loneStemTrackId =
           allStemCells.length === 1 ? allStemCells[0].track_id : null;
-        const loneStemSide: DeckSide | null =
-          allStemCells.length === 1
-            ? (allStemCells[0].kind.endsWith("_b") ? "b" : "a")
-            : null;
         const anyPlaying = Object.values(columns).some(
           (trackIdx) => playing[trackIdx] === sceneIdx,
         );
-        const mixCell = cellAt.get(`${sceneIdx}|mix`);
-        const anyLoaded = allStemCells.length > 0 || mixCell != null;
+        const mixACell = cellAt.get(`${sceneIdx}|mix_a`);
+        const mixBCell = cellAt.get(`${sceneIdx}|mix_b`);
+        const anyLoaded =
+          allStemCells.length > 0 || mixACell != null || mixBCell != null;
 
         return (
           <div
             key={sceneIdx}
-            className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1 items-stretch"
+            className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1 items-stretch"
           >
             <RowLabel
               sceneIdx={sceneIdx}
               loaded={anyLoaded}
-              anchorReady={isAnchorReady}
+              anchorReady={aAnchor != null || bAnchor != null}
               playing={anyPlaying}
               onTap={() =>
                 anyPlaying
@@ -165,99 +159,84 @@ export function SceneGrid() {
               }
               pending={fireScene.isPending || stopScene.isPending}
             />
-            {stemColumns.map((role) => {
-              // MIX is single-deck: no A/B split. SONG cell may show a
-              // shadow (anchor inferred from either side's 4 stems).
-              if (role === "mix") {
-                const showShadow = mixCell == null && isAnchorReady;
-                // Prefer the most-recently-completed anchor for the
-                // shadow display. Tie-break to A.
-                const anchorTid = aAnchor ?? bAnchor;
-                const shadowCell: DeckCell | undefined =
-                  showShadow && anchorTid != null
-                    ? allStemCells.find((c) => c.track_id === anchorTid)
-                    : undefined;
-                const onClearRow = showShadow
-                  ? () => {
-                      // Clear every cell in this row across both sides.
-                      for (const r of sourceRoles) {
-                        for (const side of ["a", "b"] as const) {
-                          const dk = deckKindOf(r, side);
-                          const c = cellAt.get(`${sceneIdx}|${dk}`);
-                          const tIdx = columns[dk];
-                          if (c != null && tIdx != null) {
-                            deleteCell.mutate({ track: tIdx, slot: sceneIdx });
-                          }
-                        }
+            {stemColumns.map((deckKind) => {
+              const role = sourceKindOf(deckKind);
+              const side = sideOf(deckKind);
+              const trackIdx = columns[deckKind];
+              const cell = cellAt.get(`${sceneIdx}|${deckKind}`);
+              const isPlaying =
+                trackIdx != null && playing[trackIdx] === sceneIdx;
+              // Mix columns: show a shadow when empty + that side's stems
+              // are anchor-ready (we can infer which track this should
+              // belong to). The clear-X on the shadow nukes the whole
+              // SIDE (4 stems + this mix cell) in one click.
+              const isMixCol = role === "mix";
+              const sideAnchorTid =
+                side === "a" ? aAnchor : side === "b" ? bAnchor : null;
+              const showShadow =
+                isMixCol && cell == null && sideAnchorTid != null;
+              const shadowCell: DeckCell | undefined = showShadow
+                ? allStemCells.find(
+                    (c) =>
+                      c.track_id === sideAnchorTid && c.kind.endsWith(`_${side}`),
+                  )
+                : undefined;
+              const onClearSide = showShadow && side != null
+                ? () => {
+                    // Nuke all 4 stems on this side + this mix cell.
+                    for (const r of ["drums", "bass", "vocals", "other"]) {
+                      const dk = `${r}_${side}`;
+                      const c = cellAt.get(`${sceneIdx}|${dk}`);
+                      const tIdx = columns[dk];
+                      if (c != null && tIdx != null) {
+                        deleteCell.mutate({ track: tIdx, slot: sceneIdx });
                       }
-                      if (mixCell != null && columns["mix"] != null) {
-                        deleteCell.mutate({
-                          track: columns["mix"],
-                          slot: sceneIdx,
-                        });
-                      }
                     }
-                  : undefined;
-                const mixTrackIdx = columns["mix"];
-                const mixPlaying =
-                  mixTrackIdx != null && playing[mixTrackIdx] === sceneIdx;
-                return (
-                  <Cell
-                    key={role}
-                    role={role as StemRole}
-                    cell={shadowCell ?? mixCell}
-                    loaded={mixCell != null}
-                    shadow={showShadow}
-                    playing={mixPlaying}
-                    beatMs={beatMs}
-                    onTap={
-                      mixCell != null && mixTrackIdx != null
-                        ? () =>
-                            mixPlaying
-                              ? stopCell.mutate({
-                                  track: mixTrackIdx,
-                                  slot: sceneIdx,
-                                })
-                              : fireCell.mutate({
-                                  track: mixTrackIdx,
-                                  slot: sceneIdx,
-                                })
-                        : undefined
+                    // Mix cell may already be empty for shadow — guard.
+                    const mixTIdx = columns[`mix_${side}`];
+                    const mixC = cellAt.get(`${sceneIdx}|mix_${side}`);
+                    if (mixC != null && mixTIdx != null) {
+                      deleteCell.mutate({ track: mixTIdx, slot: sceneIdx });
                     }
-                    onRemove={
-                      showShadow
-                        ? onClearRow
-                        : mixCell != null && mixTrackIdx != null
-                        ? () =>
-                            deleteCell.mutate({
-                              track: mixTrackIdx,
-                              slot: sceneIdx,
-                            })
-                        : undefined
-                    }
-                  />
-                );
-              }
-              // Stem column: render A/B half-cells stacked vertically.
-              return (
-                <SplitCell
-                  key={role}
-                  role={role as StemRole}
-                  sceneIdx={sceneIdx}
-                  beatMs={beatMs}
-                  cellAt={cellAt}
-                  columns={columns}
-                  playing={playing}
-                  loneStemTrackId={loneStemTrackId}
-                  loneStemSide={loneStemSide}
-                  anchorFillPending={anchorFill.isPending}
-                  onFireCell={(track, slot) => fireCell.mutate({ track, slot })}
-                  onStopCell={(track, slot) => stopCell.mutate({ track, slot })}
-                  onDeleteCell={(track, slot) =>
-                    deleteCell.mutate({ track, slot })
                   }
-                  onAnchorFill={(trackId) =>
-                    anchorFill.mutate({ trackId, sceneIdx })
+                : undefined;
+              return (
+                <Cell
+                  key={deckKind}
+                  role={role}
+                  deckKind={deckKind}
+                  cell={shadowCell ?? cell}
+                  loaded={cell != null}
+                  shadow={showShadow}
+                  playing={isPlaying}
+                  beatMs={beatMs}
+                  onTap={
+                    cell != null && trackIdx != null
+                      ? () =>
+                          isPlaying
+                            ? stopCell.mutate({ track: trackIdx, slot: sceneIdx })
+                            : fireCell.mutate({ track: trackIdx, slot: sceneIdx })
+                      : undefined
+                  }
+                  onRemove={
+                    showShadow
+                      ? onClearSide
+                      : cell != null && trackIdx != null
+                      ? () =>
+                          deleteCell.mutate({ track: trackIdx, slot: sceneIdx })
+                      : undefined
+                  }
+                  onAnchorFill={
+                    cell != null
+                    && !isMixCol
+                    && loneStemTrackId === cell.track_id
+                    && !anchorFill.isPending
+                      ? () =>
+                          anchorFill.mutate({
+                            trackId: cell.track_id,
+                            sceneIdx,
+                          })
+                      : undefined
                   }
                 />
               );
@@ -283,200 +262,6 @@ export function SceneGrid() {
           {expanded
             ? "▴ show fewer"
             : `▾ show all ${EXPANDED_ROWS} rows`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** A/B stacked half-cells for one stem role's column. Layout follows
- * Option C from docs/proposals/stem-deck-pair.md: same horizontal real
- * estate as a single cell, but split horizontally into a top half (A)
- * and a bottom half (B). Each half is independently fireable, stoppable,
- * and removable. Anchor-fill (◇) only appears on the single lone-stem
- * half-cell when the rest of the row is empty.
- */
-function SplitCell({
-  role,
-  sceneIdx,
-  beatMs,
-  cellAt,
-  columns,
-  playing,
-  loneStemTrackId,
-  loneStemSide,
-  anchorFillPending,
-  onFireCell,
-  onStopCell,
-  onDeleteCell,
-  onAnchorFill,
-}: {
-  role: StemRole;
-  sceneIdx: number;
-  beatMs: number;
-  cellAt: Map<string, DeckCell>;
-  columns: Record<string, number>;
-  playing: Record<number, number>;
-  loneStemTrackId: number | null;
-  loneStemSide: DeckSide | null;
-  anchorFillPending: boolean;
-  onFireCell: (track: number, slot: number) => void;
-  onStopCell: (track: number, slot: number) => void;
-  onDeleteCell: (track: number, slot: number) => void;
-  onAnchorFill: (trackId: number) => void;
-}) {
-  const sides: DeckSide[] = ["a", "b"];
-  return (
-    <div className="flex flex-col gap-0.5 h-14">
-      {sides.map((side) => {
-        const deckKind = deckKindOf(role, side);
-        const trackIdx = columns[deckKind];
-        const cell = cellAt.get(`${sceneIdx}|${deckKind}`);
-        const isPlaying =
-          trackIdx != null && playing[trackIdx] === sceneIdx;
-        const isLoneStem =
-          cell != null
-          && loneStemTrackId === cell.track_id
-          && loneStemSide === side;
-        return (
-          <HalfCell
-            key={side}
-            role={role}
-            side={side}
-            cell={cell}
-            loaded={cell != null}
-            playing={isPlaying}
-            beatMs={beatMs}
-            onTap={
-              cell != null && trackIdx != null
-                ? () =>
-                    isPlaying
-                      ? onStopCell(trackIdx, sceneIdx)
-                      : onFireCell(trackIdx, sceneIdx)
-                : undefined
-            }
-            onRemove={
-              cell != null && trackIdx != null
-                ? () => onDeleteCell(trackIdx, sceneIdx)
-                : undefined
-            }
-            onAnchorFill={
-              isLoneStem && cell != null && !anchorFillPending
-                ? () => onAnchorFill(cell.track_id)
-                : undefined
-            }
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-/** Half-height cell variant for the A/B split layout. Same affordances
- * as Cell (tap to fire/stop, × to remove, ◇ for anchor-fill), just at
- * h-7 instead of h-14 and with a tiny A/B side badge in the corner.
- */
-function HalfCell({
-  role,
-  side,
-  cell,
-  loaded,
-  playing,
-  beatMs,
-  onTap,
-  onRemove,
-  onAnchorFill,
-}: {
-  role: StemRole;
-  side: DeckSide;
-  cell: DeckCell | undefined;
-  loaded: boolean;
-  playing: boolean;
-  beatMs: number;
-  onTap: (() => void) | undefined;
-  onRemove?: () => void;
-  onAnchorFill?: () => void;
-}) {
-  const styles = ROLE_STYLES[role];
-  const badge = side.toUpperCase();
-  if (!loaded) {
-    return (
-      <div
-        className={`rounded border h-[1.625rem] ${styles.border} ${styles.bg} opacity-40 px-1.5 py-0.5 text-[9px] font-mono text-neutral-600 flex items-center`}
-        aria-label={`${roleLabel(role)} ${badge} (empty)`}
-      >
-        <span className="opacity-60">{badge}</span>
-      </div>
-    );
-  }
-  return (
-    <div className="relative group">
-      <button
-        type="button"
-        onClick={onTap}
-        disabled={!onTap}
-        title={
-          playing
-            ? `Stop ${roleLabel(role).toLowerCase()} ${badge} (${cell?.title ?? "loaded"})`
-            : cell
-            ? `${roleLabel(role)} ${badge}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
-            : `${roleLabel(role)} ${badge} (loaded)`
-        }
-        className={`w-full rounded border h-[1.625rem] px-1.5 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none flex items-center gap-1.5 ${
-          playing
-            ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_12px_rgba(16,185,129,0.4)] hover:bg-emerald-500/35"
-            : `${styles.border} ${styles.bg} hover:bg-neutral-900/60 hover:border-neutral-700`
-        }`}
-        style={
-          playing
-            ? {
-                animation: `dance-beat-pulse ${beatMs}ms ease-in-out infinite`,
-              }
-            : undefined
-        }
-      >
-        <span
-          className={`shrink-0 text-[9px] font-mono ${playing ? "text-emerald-100/80" : "text-neutral-500"}`}
-        >
-          {badge}
-        </span>
-        {cell && (
-          <span
-            className={`truncate text-[11px] font-medium leading-none ${
-              playing ? "text-emerald-50" : "text-neutral-100"
-            }`}
-          >
-            {cell.title ?? `Track #${cell.track_id}`}
-          </span>
-        )}
-      </button>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          title={`Remove ${roleLabel(role).toLowerCase()} ${badge} from this scene`}
-          aria-label={`Remove ${roleLabel(role)} ${badge} clip from scene`}
-          className="absolute top-0 right-0 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100 focus:outline-none"
-        >
-          ×
-        </button>
-      )}
-      {onAnchorFill && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAnchorFill();
-          }}
-          title={`Fill the rest of ${cell?.title ?? "this track"}'s stems into side ${badge}`}
-          aria-label="Fill row with rest of stems (anchor)"
-          data-testid="cell-anchor-fill"
-          className="absolute top-0 left-0 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-sky-300 hover:border-sky-500/40 transition-opacity focus:opacity-100 focus:outline-none"
-        >
-          ◇
         </button>
       )}
     </div>
@@ -529,6 +314,7 @@ function RowLabel({
 
 function Cell({
   role,
+  deckKind,
   cell,
   loaded,
   playing,
@@ -539,6 +325,9 @@ function Cell({
   shadow = false,
 }: {
   role: StemRole;
+  /** Backend deck-channel id (drums_a, drums_b, ..., mix_a, mix_b). Used
+   * to render the A/B side badge inside the cell. */
+  deckKind: string;
   cell: DeckCell | undefined;
   loaded: boolean;
   playing: boolean;
@@ -553,11 +342,13 @@ function Cell({
    * on hover (top-left, opposite the × in the top-right). */
   onAnchorFill?: () => void;
   /** UI-only ghost render: track is *inferred* from the row's stems but
-   * not actually loaded in Live. Used in the SONG column when all 4
-   * stems point at the same track. No interaction — read-only label. */
+   * not actually loaded in Live. Used in a SONG cell when its side's
+   * 4 stems all point at the same track. No interaction — read-only. */
   shadow?: boolean;
 }) {
   const styles = ROLE_STYLES[role];
+  const sideBadge = sideOf(deckKind);
+  const badgeText = sideBadge?.toUpperCase() ?? "";
 
   if (shadow && cell) {
     return (
@@ -603,9 +394,15 @@ function Cell({
   if (!loaded) {
     return (
       <div
-        className={`rounded-md border h-14 ${styles.border} ${styles.bg} opacity-50`}
-        aria-label={`${roleLabel(role)} (empty)`}
-      />
+        className={`relative rounded-md border h-14 ${styles.border} ${styles.bg} opacity-50`}
+        aria-label={`${deckColumnLabel(deckKind)} (empty)`}
+      >
+        {badgeText && (
+          <span className="absolute bottom-0.5 right-1 text-[8px] font-mono text-neutral-600 opacity-70">
+            {badgeText}
+          </span>
+        )}
+      </div>
     );
   }
 
@@ -620,10 +417,10 @@ function Cell({
         disabled={!onTap}
         title={
           playing
-            ? `Stop ${roleLabel(role).toLowerCase()} (${cell?.title ?? "loaded"})`
+            ? `Stop ${deckColumnLabel(deckKind).toLowerCase()} (${cell?.title ?? "loaded"})`
             : cell
-            ? `${roleLabel(role)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
-            : `${roleLabel(role)} (loaded)`
+            ? `${deckColumnLabel(deckKind)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
+            : `${deckColumnLabel(deckKind)} (loaded)`
         }
         className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
           playing
@@ -665,6 +462,15 @@ function Cell({
           </>
         )}
       </button>
+      {badgeText && (
+        <span
+          className={`pointer-events-none absolute bottom-0.5 right-1 text-[8px] font-mono leading-none ${
+            playing ? "text-emerald-200/60" : "text-neutral-500"
+          }`}
+        >
+          {badgeText}
+        </span>
+      )}
       {onRemove && (
         <button
           type="button"

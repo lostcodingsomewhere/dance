@@ -60,17 +60,12 @@ export function ComboStrip() {
   const cards = useMemo(() => {
     if (!columns) return null;
     return stemColumns.map((role) => {
-      if (role === "mix") {
-        const trackIdx = columns["mix"];
-        const sceneIdx = trackIdx != null ? playing[trackIdx] : undefined;
-        const cell =
-          sceneIdx != null ? cellAt.get(`${sceneIdx}|mix`) : undefined;
-        const livePosBeats =
-          trackIdx != null ? positions[String(trackIdx)] : undefined;
-        return { role: role as StemRole, sceneIdx, cell, trackIdx, livePosBeats };
-      }
-      const aIdx = columns[`${role}_a`];
-      const bIdx = columns[`${role}_b`];
+      // mix has its own A/B pair (mix_a, mix_b) in the 10-deck layout.
+      // Pick the playing side, prefer A on ties.
+      const aKey = role === "mix" ? "mix_a" : `${role}_a`;
+      const bKey = role === "mix" ? "mix_b" : `${role}_b`;
+      const aIdx = columns[aKey];
+      const bIdx = columns[bKey];
       const aPlayingScene = aIdx != null ? playing[aIdx] : undefined;
       const bPlayingScene = bIdx != null ? playing[bIdx] : undefined;
       const chosenSide: "a" | "b" =
@@ -80,7 +75,7 @@ export function ComboStrip() {
         chosenSide === "a" ? aPlayingScene : bPlayingScene;
       const cell =
         sceneIdx != null && trackIdx != null
-          ? cellAt.get(`${sceneIdx}|${role}_${chosenSide}`)
+          ? cellAt.get(`${sceneIdx}|${chosenSide === "a" ? aKey : bKey}`)
           : undefined;
       const livePosBeats =
         trackIdx != null ? positions[String(trackIdx)] : undefined;
@@ -98,12 +93,12 @@ export function ComboStrip() {
 
   return (
     <div className="flex flex-col gap-1" data-testid="combo-strip">
-      <div className="grid grid-cols-[2.5rem_repeat(5,minmax(0,1fr))] gap-1">
-        {/* Empty leading cell — matches SceneGrid's row-label column so
-            the 5 stem cards line up vertically with the 5 stem cols in
-            the grid above. Header text + anchor hint stripped per the
-            unified-column-color redesign: the colored column headers
-            up top now carry the section's identity. */}
+      {/* 10-column grid + row-label spacer to match BoothColumnHeaders +
+          SceneGrid. Each ComboCard spans 2 columns (one source role's
+          A/B pair) so the role cards still line up over their grouped
+          A/B columns below. Will be replaced by a dedicated two-deck
+          waveform strip in a follow-up. */}
+      <div className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1">
         <div aria-hidden="true" />
         {cards?.map((c) => (
           <ComboCard
@@ -114,6 +109,7 @@ export function ComboStrip() {
             livePosBeats={c.livePosBeats}
             tempo={tempo}
             beat={beat}
+            colSpan2
             onSeek={(beats) => {
               if (c.trackIdx == null || c.cell == null) return;
               seek.mutate({
@@ -137,6 +133,7 @@ function ComboCard({
   tempo,
   beat,
   onSeek,
+  colSpan2 = false,
 }: {
   role: StemRole;
   cell: DeckCell | undefined;
@@ -145,8 +142,12 @@ function ComboCard({
   tempo: number | null;
   beat: number | null;
   onSeek: (beats: number) => void;
+  /** Span 2 grid columns instead of 1 — used by the two-deck layout
+   * so each role's card sits above its A/B column pair. */
+  colSpan2?: boolean;
 }) {
   const styles = ROLE_STYLES[role];
+  const colSpanClass = colSpan2 ? "col-span-2" : "";
   // Stem waveform when this cell has a stem (drums/bass/vocals/other);
   // fall back to the full-track waveform for the mix/song column. Both
   // hooks no-op via ``enabled`` when their id is null/undefined, so it's
@@ -212,7 +213,7 @@ function ComboCard({
   if (!cell) {
     return (
       <div
-        className={`rounded-md border px-2 py-2 h-24 flex items-center justify-center ${styles.border} ${styles.bg}`}
+        className={`rounded-md border px-2 py-2 h-24 flex items-center justify-center ${colSpanClass} ${styles.border} ${styles.bg}`}
         aria-label={`${roleLabel(role)} (silent)`}
       >
         <div className="text-[11px] text-neutral-700 italic">silent</div>
@@ -221,7 +222,7 @@ function ComboCard({
   }
   return (
     <div
-      className={`rounded-md border px-2 py-2 h-24 flex flex-col ${styles.border} ${styles.bg}`}
+      className={`rounded-md border px-2 py-2 h-24 flex flex-col ${colSpanClass} ${styles.border} ${styles.bg}`}
     >
       <div className="flex items-baseline gap-1.5">
         <div className="text-xs text-neutral-100 truncate font-medium leading-tight flex-1">
