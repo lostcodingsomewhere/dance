@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dance · DJ Course</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────────── */
+    #sidebar {
+      width: 272px;
+      min-width: 272px;
+      background: #111;
+      border-right: 1px solid #1e1e1e;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 20px 16px 14px;
+      border-bottom: 1px solid #1e1e1e;
+      flex-shrink: 0;
+    }
+    .sidebar-header h1 { font-size: 15px; color: #fff; letter-spacing: 0.04em; font-weight: 700; }
+    .sidebar-header .sub { font-size: 11px; color: #444; margin-top: 3px; }
+
+    .progress-wrap { margin-top: 12px; }
+    .progress-bar { height: 2px; background: #222; border-radius: 2px; }
+    .progress-fill { height: 100%; background: #00b894; border-radius: 2px; transition: width 0.4s; }
+    .progress-label { font-size: 10px; color: #444; margin-top: 5px; }
+
+    .sidebar-nav { overflow-y: auto; flex: 1; padding-bottom: 20px; }
+
+    .course-group { border-bottom: 1px solid #191919; }
+    .course-label {
+      padding: 10px 16px 6px;
+      font-size: 10px;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+    .course-label:hover { color: #666; }
+    .course-label.has-current { color: #00b894; }
+    .course-label .arrow { font-size: 8px; transition: transform 0.2s; }
+    .course-label.collapsed .arrow { transform: rotate(-90deg); }
+
+    .lesson-list { }
+    .lesson-list.hidden { display: none; }
+
+    .lesson-row {
+      padding: 7px 16px 7px 24px;
+      font-size: 13px;
+      color: #555;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      position: relative;
+      transition: background 0.1s;
+    }
+    .lesson-row:hover { background: #181818; color: #999; }
+    .lesson-row.current { color: #e8e8e8; background: #162220; }
+    .lesson-row.current::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 2px;
+      background: #00b894;
+    }
+    .lesson-row.done { color: #383838; }
+
+    .row-check { font-size: 10px; width: 14px; flex-shrink: 0; color: #383838; }
+    .lesson-row.done .row-check { color: #00b894; }
+    .lesson-row.current .row-check { color: #555; }
+    .row-num { font-size: 10px; color: #333; flex-shrink: 0; width: 26px; }
+    .lesson-row.current .row-num { color: #00b894; }
+    .row-title { line-height: 1.3; }
+
+    /* ── Main ────────────────────────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    #content-wrap { flex: 1; overflow-y: auto; overflow-x: auto; }
+
+    #content {
+      padding: 48px 48px 60px;
+      max-width: 740px;
+    }
+
+    /* ── Nav footer ──────────────────────────────────────────────── */
+    #nav-footer {
+      border-top: 1px solid #191919;
+      padding: 14px 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .nav-btn {
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid #2a2a2a;
+      background: transparent;
+      color: #666;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .nav-btn:hover:not(:disabled) { border-color: #444; color: #ccc; }
+    .nav-btn:disabled { opacity: 0.2; cursor: not-allowed; }
+
+    .complete-btn {
+      padding: 9px 22px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+      background: #00b894;
+      color: #000;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .complete-btn:hover { background: #00d4aa; }
+    .complete-btn.already-done {
+      background: transparent;
+      border: 1px solid #00b89466;
+      color: #00b894;
+    }
+    .complete-btn.already-done:hover { background: #00b89415; }
+
+    /* ── Content typography ──────────────────────────────────────── */
+    #content h1 { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 6px; line-height: 1.2; }
+
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+    }
+    .meta-item { font-size: 12px; color: #444; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .tag-concept { background: #1e1e35; color: #8888dd; }
+    .tag-hands-on { background: #1a2e20; color: #00b894; }
+    .tag-big-moment { background: #2e1a1a; color: #ee7777; }
+
+    .expert-take {
+      border-left: 2px solid #00b894;
+      padding: 11px 16px;
+      background: #0e1e1a;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 28px;
+    }
+    .expert-take p { color: #6ec4ad; font-style: italic; font-size: 14px; line-height: 1.6; margin: 0; }
+
+    #content h2 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #444;
+      font-weight: 700;
+      margin: 32px 0 12px;
+    }
+
+    #content p { font-size: 15px; line-height: 1.75; color: #999; margin-bottom: 14px; }
+    #content p strong { color: #ddd; }
+    #content ul, #content ol { margin: 0 0 14px 18px; }
+    #content li { font-size: 15px; line-height: 1.7; color: #999; margin-bottom: 8px; }
+    #content li strong { color: #ddd; }
+
+    .step-block {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin: 20px 0;
+    }
+    .step-block > .step-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #00b894;
+      margin-bottom: 14px;
+    }
+    .step-block ol { margin-left: 18px; }
+    .step-block li { color: #ccc; font-size: 14px; margin-bottom: 10px; line-height: 1.6; }
+    .step-block li strong { color: #fff; }
+
+    .note {
+      background: #1a1a10;
+      border: 1px solid #333310;
+      border-radius: 5px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #999970;
+      margin: 6px 0 10px 18px;
+      line-height: 1.5;
+    }
+
+    .win-block {
+      background: #0e1e1a;
+      border: 1px solid #00b89433;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 28px 0 0;
+    }
+    .win-block .win-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #00b894;
+      margin-bottom: 10px;
+    }
+    .win-block ul { margin-left: 16px; }
+    .win-block li { color: #6ec4ad; font-size: 14px; margin-bottom: 6px; }
+
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: #1a1a1a;
+      border: 1px solid #252525;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #e0c080;
+    }
+
+    pre {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 16px;
+      overflow-x: auto;
+      margin: 16px 0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #bbb;
+    }
+
+    .diagram {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #666;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .diagram .hl { color: #00b894; }
+
+    .callout {
+      background: #181818;
+      border-radius: 6px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: #888;
+      line-height: 1.6;
+    }
+    .callout strong { color: #ccc; }
+  </style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="sidebar-header">
+    <h1>Dance · DJ Course</h1>
+    <div class="sub">Your complete learning path</div>
+    <div class="progress-wrap">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="progress-label" id="progress-label">0 of 0 lessons complete</div>
+    </div>
+  </div>
+  <nav class="sidebar-nav" id="sidebar-nav"></nav>
+</aside>
+
+<main id="main">
+  <div id="content-wrap"><div id="content"></div></div>
+  <footer id="nav-footer">
+    <button class="nav-btn" id="prev-btn" onclick="go(-1)">← Previous</button>
+    <button class="complete-btn" id="complete-btn" onclick="markDone()">Done → Next</button>
+    <button class="nav-btn" id="next-btn" onclick="go(1)">Next →</button>
+  </footer>
+</main>
+
+<script>
+// ─────────────────────────────────────────────
+//  COURSE CONTENT
+// ─────────────────────────────────────────────
+
+const COURSES = [
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 1 · What a DJ Does",
+    lessons: [
+
+      { id:"1.1", title:"The Job + Flow State", duration:"10 min", tag:"concept", html:`
+        <h1>The Job + Flow State</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 1.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Your actual job isn't playing songs. It's moving a room of people through time. Get this right and everything else follows from it.</p></div>
+
+        <h2>The Whole Job in One Sentence</h2>
+        <p><strong>Move a group of people through time using music.</strong></p>
+        <p>Not "play good songs." Not "have good taste." <em>Move people.</em> The crowd is your feedback signal. Are people dancing? Good. Are they turning to talk to their friend, checking their phone, or drifting toward the exit? You've lost them. Read it, adjust. That's DJing.</p>
+
+        <h2>The Goal: Flow State</h2>
+        <p>Elite DJs describe being "in the zone" — a state where decisions feel effortless, time blurs, and you know what to play before you consciously think it. Psychologists call this <strong>flow state</strong>.</p>
+        <p>Here's the secret: when you're in flow, the crowd gets into flow too. It's contagious. The music stops being something they're listening to and becomes something they're <em>inside</em>. That's the goal. Everything in this course — the technique, the tools, the gear — exists to help you reach that state reliably.</p>
+        <p>Flow state requires two things: <strong>challenge matched to skill</strong> (not too easy, not too hard), and <strong>feedback loops</strong> (you can feel whether things are working). Your system is designed to give you both.</p>
+
+        <h2>A Set Has a Shape</h2>
+        <p>A great set is a story arc. People arrive uncertain. Energy builds. It peaks. It breathes. Then it releases again. A skilled DJ <em>designs</em> that arc on purpose — this calm section now because the last 10 minutes were intense; this drop here because anticipation has been building for 32 bars. None of it is random. It's craft.</p>
+
+        <h2>The Three Forces</h2>
+        <p><strong>Rhythm</strong> — Do the beats line up? Two tracks at different tempos sound broken. Ableton handles this for you: every stem is locked to a single clock.</p>
+        <p><strong>Harmony</strong> — Do the keys fit? Wrong-key combinations clash even with people who can't name why. It just feels <em>off</em>. The companion app shows you harmonic compatibility before you fire anything.</p>
+        <p><strong>Energy</strong> — Does the transition feel guided? Going from a quiet breakdown to a massive drop with no warning is a shock, not a mix. Energy should feel like you're taking the crowd somewhere, not surprising them.</p>
+
+        <h2>Do It Now</h2>
+        <div class="step-block">
+          <div class="step-title">Listen Like a DJ (8 minutes)</div>
+          <ol>
+            <li>Open YouTube. Search <strong>"Boiler Room"</strong> or any DJ mix you like. Any genre. Hit play.</li>
+            <li>Don't focus on the individual songs. Focus on the <strong>shape</strong> of the whole set. Ask:
+              <ul>
+                <li>When does the energy feel like it's building?</li>
+                <li>When does it peak (a big drop, a massive moment)?</li>
+                <li>When does it breathe (a quieter section, a breakdown)?</li>
+                <li>When does a transition feel smooth? When does one feel rushed or jarring?</li>
+              </ul>
+            </li>
+            <li>Listen for 8 minutes. You'll start hearing the arc. It's always there — you just weren't listening for it before.</li>
+            <li>Notice how the DJ uses that arc to <em>hold your attention</em>. They're not just playing songs you like. They're managing your emotional state.</li>
+          </ol>
+        </div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can feel energy rise and fall in a mix — not just hear the individual songs</li>
+            <li>You can identify at least one moment where a transition landed smoothly and one where something felt off</li>
+            <li>You understand that flow state is the actual target — not perfection, not impressive technique</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"1.2", title:"Phrases — Feel the Grid", duration:"8 min", tag:"hands-on", html:`
+        <h1>Phrases — Feel the Grid</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 1.2</span>
+          <span class="meta-item">~8 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>This is the #1 skill nobody teaches beginners first. Everything in DJing — transitions, drops, stem swaps — happens on phrase boundaries. If you can hear phrases, you can mix. If you can't, no amount of technique saves you.</p></div>
+
+        <h2>Music Has a Grid (Even When You Can't See It)</h2>
+        <p>Electronic music is built in blocks of time. The smallest unit is a <strong>beat</strong>. Four beats make a <strong>bar</strong>. Eight bars make a <strong>phrase</strong>. Phrases are the natural breathing points — the moments where something changes or could change.</p>
+
+        <div class="diagram">1 beat  = one kick drum hit (roughly)
+4 beats = 1 bar
+8 bars  = 1 phrase  ← this is your unit of work
+2-4 phrases = 1 section (intro / verse / chorus / breakdown / drop)</div>
+
+        <p>Every transition you make as a DJ should happen at a phrase boundary — not in the middle of a phrase. A swap in the middle of a phrase sounds clumsy even to non-musicians. Land it at bar 1 of a new phrase and it sounds intentional even if it isn't perfect.</p>
+
+        <h2>How to Hear a Phrase</h2>
+        <p>Most electronic music has 8-bar phrases. Here's how to feel them:</p>
+        <ol>
+          <li><strong>Count the beats:</strong> "1, 2, 3, 4 / 1, 2, 3, 4 / ..." — the kick drum usually lands on beat 1.</li>
+          <li><strong>Count the bars:</strong> "bar 1 / bar 2 / bar 3..." — you'll feel the 4-bar halfway point.</li>
+          <li><strong>At bar 8, something happens:</strong> a filter opens, a vocal enters, a hi-hat pattern changes. That's the phrase seam.</li>
+        </ol>
+        <p>You don't need to count precisely every time. After a few sessions you internalize the grid and it becomes a feeling — like knowing when a sentence is about to end before it does. But counting is how you build that instinct.</p>
+
+        <h2>Do It Now</h2>
+        <div class="step-block">
+          <div class="step-title">Count Phrases Out Loud (10 minutes)</div>
+          <ol>
+            <li>Put on any electronic track you know well. Headphones or speakers.</li>
+            <li>Find the kick drum. Nod your head to it. That's your beat.</li>
+            <li>Count <strong>out loud</strong>: "1, 2, 3, 4, 1, 2, 3, 4..." — keep going. Don't stop. Each "1" is a new bar.</li>
+            <li>After you can count bars without losing track, start counting bars: "bar 1, bar 2, bar 3, bar 4, bar 5, bar 6, bar 7, bar 8..." — feel the weight of bar 8 arriving.</li>
+            <li>Notice: something in the music almost always shifts at bar 8 (or bar 4 in some tracks). A cymbal crash. A vocal hit. A filter swoosh. That's the phrase seam.</li>
+            <li>Do this with 3 different tracks. House, techno, whatever. They all use the same grid.</li>
+          </ol>
+          <div class="note">Tip: clapping or tapping your leg on beat 1 of every bar makes it much easier to feel when you've drifted off the count.</div>
+        </div>
+
+        <h2>Why This Changes Everything</h2>
+        <p>Once you can hear phrases, you have a <strong>superpower</strong>: you know exactly where every transition window is before it arrives. 8 bars from now, there's a seam. You prepare your stem swap, your filter move, your volume fade — and land it exactly there. The crowd doesn't know you planned it. It feels inevitable.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can count beats → bars → phrases in any electronic track without losing your place</li>
+            <li>You can <em>feel</em> a phrase boundary arriving about 4 bars before it hits</li>
+            <li>You can identify the moment when "something changes" and name it as a phrase seam</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"1.3", title:"Song Structure — What You're Working With", duration:"10 min", tag:"concept", html:`
+        <h1>Song Structure — What You're Working With</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 1.3</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>A DJ doesn't use a whole track. You use maybe 40% of it — the parts that work in a mix. Knowing what those parts are and where they live is the difference between looking prepared and looking lost.</p></div>
+
+        <h2>Electronic Track Anatomy</h2>
+        <p>Most electronic tracks follow a predictable shape. Producers build it this way on purpose — it makes DJing the track easier:</p>
+
+        <div class="diagram">INTRO      ─── 8–32 bars, sparse, no vocal, no melody
+                     Perfect for blending in over an outgoing track
+
+BUILDUP    ─── 8–16 bars, energy rises, tension
+                     Filter opens, reverb builds, hi-hats accelerate
+
+DROP       ─── 8–32 bars, maximum energy, full arrangement
+                     This is the payoff
+
+BREAKDOWN  ─── 8–16 bars, energy releases, often stripped back
+                     Emotional, breathing room, sets up the next build
+
+BUILD 2    ─── same pattern, may be higher intensity
+DROP 2     ───
+
+OUTRO      ─── 8–32 bars, sparse again
+                     Where you blend the next track in</div>
+
+        <h2>The DJ's Territory</h2>
+        <p>The intro and outro are your mixing zones — where the track is sparse enough that you can blend another track in without chaos. The drop is where the track pays off — you don't want to be swapping stems during a drop (usually). The breakdown is where you set up the next moment.</p>
+        <p>Most DJs enter tracks at their intro, exit tracks at their outro, and let drops play largely intact. With stems, you have more options — you can extend intros, cut them short, isolate the drop's drums while removing the synth, etc. — but knowing standard structure gives you the default playbook.</p>
+
+        <h2>Cue Points — Your Bookmarks</h2>
+        <p>The Dance pipeline automatically detects regions in every track: where the intro ends, where the drop is, where the outro starts. These become <strong>cue points</strong> visible in the companion app. You don't have to memorize every track — the system has already mapped them.</p>
+        <p>But knowing the structure conceptually means you can <em>hear</em> when a track is approaching its outro, and start your next transition before you need the cue points to tell you.</p>
+
+        <h2>Do It Now</h2>
+        <div class="step-block">
+          <div class="step-title">Map a Track (10 minutes)</div>
+          <ol>
+            <li>Pick one track from your library. Open it in any player (Finder, Apple Music, whatever).</li>
+            <li>Listen through the whole thing. As you listen, write down timestamps for:
+              <ul>
+                <li>When the intro ends (energy starts to rise or melody enters)</li>
+                <li>Where the first drop hits (maximum energy arrives)</li>
+                <li>Where the breakdown is (energy releases)</li>
+                <li>Where the outro starts (track starts thinning out)</li>
+              </ul>
+            </li>
+            <li>You now know exactly where you'd blend in (over the intro) and blend out (over the outro). You've just mapped your first track as a DJ.</li>
+          </ol>
+        </div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can identify intro / buildup / drop / breakdown / outro by ear in any electronic track</li>
+            <li>You know which sections are "mixing zones" vs. which ones you protect</li>
+            <li>You understand why the Dance system auto-detects regions — it's mapping this same structure automatically for every track</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 2 · Your Unfair Advantage",
+    lessons: [
+
+      { id:"2.1", title:"Stems — The Superpower", duration:"10 min", tag:"concept", html:`
+        <h1>Stems — The Superpower</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 2.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Traditional DJs blend two full songs. You're going to assemble a song in real time from pieces of different songs. That's a fundamentally different art form — and it unlocks moves that would be impossible otherwise.</p></div>
+
+        <h2>What Traditional DJs Do</h2>
+        <p>A standard DJ has two decks playing two complete tracks. You fade from one to the other. Swaps happen every 3–5 minutes. The core skill: know your library, read the room, time your transitions, match keys and tempo. This is a real skill. It's also limited: you get the whole song or nothing.</p>
+
+        <h2>What Stems Actually Are</h2>
+        <p>An AI model called <strong>Demucs</strong> (developed by Meta Research) listened to every track in your library and separated it into 4 isolated audio layers:</p>
+        <ul>
+          <li><strong>Drums</strong> — kick drum, snare, hi-hats, percussion</li>
+          <li><strong>Bass</strong> — bassline, sub-bass, all the low end</li>
+          <li><strong>Vocals</strong> — lead voice, harmonies, any sung content</li>
+          <li><strong>Other</strong> — synths, guitar, keys, pads — everything else</li>
+        </ul>
+        <p>These 4 stems, plus the original full mix (called <strong>Mix</strong>), give you 5 columns per track. In Ableton, each column is one audio track. Each row is one source song. You fire cells independently — any stem from any source, at any time, in sync.</p>
+
+        <h2>What This Unlocks</h2>
+        <p>Instead of swapping whole songs every 3–5 minutes, you swap layers every 30–90 seconds. Example transition:</p>
+
+        <div class="diagram"><span class="hl">Track A</span> drums + bass + vocals playing...
+
+→ Fire <span class="hl">Track B</span> drums (both drum stems playing simultaneously)
+→ They're tempo-synced — they lock perfectly
+→ After 8 bars: cut Track A drums
+→ Now only Track B drums play — the groove has shifted subtly
+→ Swap the bass: fire Track B bass, cut Track A bass
+→ You're now mostly on Track B — but maybe keep Track A vocals...
+→ Fade them out over 4 bars
+
+Total transition: ~45 seconds
+It felt like a build, not a cut.</div>
+
+        <p>Swaps happen every <strong>30–90 seconds</strong>. The cognitive load per decision is lower (you're choosing one stem, not a whole track) but the cadence is higher. It's more like live performance than playlist management.</p>
+
+        <h2>What Only You Can Do</h2>
+        <p>Most DJs don't work with stems because generating quality stems requires significant compute and storage (your pipeline ran Demucs on every track — it took hours). Your system did that work upfront. During performance you get the superpower for free.</p>
+        <p>Moves that are impossible for standard DJs but trivial for you: remove the vocal from any track in real time, layer the drums from one track over the bassline from another, keep a vocal loop going while the entire groove underneath changes, extend a breakdown by just bringing back one stem at a time.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can describe what Demucs does and why it runs ahead of time</li>
+            <li>You understand that each column = one stem role, each row = one source track</li>
+            <li>You can name at least 2 moves that stems enable that a standard DJ setup cannot do</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"2.2", title:"Your Rig — Everything Connected", duration:"12 min", tag:"hands-on", html:`
+        <h1>Your Rig — Everything Connected</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 2.2</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Three pieces of gear, one brain (the app), one source of truth (the database). Understand how they connect and nothing will feel mysterious.</p></div>
+
+        <h2>The Hardware</h2>
+        <p><strong>Focusrite Scarlett 4i4</strong> — your audio interface. The Mac sends audio here via USB. The 4i4 has 4 outputs: outs 1/2 go to your Edifier speakers (master mix). Outs 3/4 go to your Bose headphones (cue bus — what you're auditioning before it hits the speakers). This is how pros preview tracks without the crowd hearing them.</p>
+        <p><strong>Akai APC40 mk2</strong> — your controller. Connected via USB. Ableton sees it automatically as a control surface. The main pad grid is 5 columns × 8 rows — that's your stem grid. 8 faders control volume. 16 knobs do EQ.</p>
+        <p><strong>MacBook Pro M2 Pro</strong> — runs everything. Ableton Live 12.4 + the Dance backend + the companion app. All three running simultaneously.</p>
+
+        <h2>The Software Stack</h2>
+        <div class="diagram">Companion App (browser, port 5173)
+    ↕  WebSocket + REST
+FastAPI backend (port 8000)
+    ↕  SQLite database
+    ↕  OSC/UDP
+Ableton Live
+    ↕  USB
+APC40 mk2</div>
+
+        <p><strong>Ableton Live</strong> — the actual audio engine. Plays your stems in sync, handles BPM, processes EQ and effects. APC40 controls it directly via MIDI.</p>
+        <p><strong>FastAPI backend</strong> — serves the companion app, bridges between the app and Live via OSC messages. Reads track data from the SQLite database.</p>
+        <p><strong>Companion app</strong> — your DJ brain. Shows what's playing, what to play next (AI recommendations), harmonic compatibility, energy arc, cue preview. Lives in a browser tab.</p>
+
+        <h2>How Audio Flows</h2>
+        <div class="diagram">Ableton plays stems
+    → Scarlett 4i4 (USB)
+        → Outs 1/2 → Edifiers (crowd hears this)
+        → Outs 3/4 → Bose headphones (you hear this — preview only)</div>
+
+        <p>When you <strong>solo a track in Ableton</strong> (cue mode), that track's audio routes to outs 3/4 — your headphones only. The master mix on outs 1/2 keeps playing unchanged. This is how you listen ahead without disrupting the room.</p>
+
+        <h2>Do It Now — Full Connection Check</h2>
+        <div class="step-block">
+          <div class="step-title">Confirm Everything Is Wired</div>
+          <ol>
+            <li><strong>Hardware:</strong> Plug Scarlett 4i4 via USB-C. Plug APC40 via USB-C. Edifiers into Scarlett outs 1/2 (TRS, back panel). Bose into front headphone jack (mirror of outs 3/4 via Focusrite Control app).</li>
+            <li><strong>Ableton audio settings:</strong> Preferences → Audio → Driver: CoreAudio → Output: Scarlett 4i4 USB. Output Config: enable channels 1/2 and 3/4. Mixer → Master Audio To: 1/2. Cue Out: 3/4.</li>
+            <li><strong>APC40:</strong> Ableton Preferences → Link/Tempo/MIDI → Control Surface: APC40 mkII, Input: APC40 mkII, Output: APC40 mkII.</li>
+            <li><strong>Start the backend:</strong> In a terminal: <code>source .venv/bin/activate</code> then <code>uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000</code></li>
+            <li><strong>Start the companion app:</strong> In another terminal: <code>cd companion-app && npm run dev</code> → open <code>http://localhost:5173</code></li>
+            <li><strong>Open a .als file:</strong> Navigate to <code>~/Music/Dance/Sets/</code> and open any .als. Ableton loads 5 stem tracks per source track.</li>
+          </ol>
+          <div class="note">If no .als files exist yet, run: <code>dance export-als --all</code> after the pipeline has processed at least one track to completion.</div>
+        </div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>Ableton opens without audio errors (audio device shows Scarlett 4i4)</li>
+            <li>APC40 lights up (Ableton sees it as a control surface)</li>
+            <li>The companion app loads at localhost:5173 and shows tracks</li>
+            <li>You can hear audio through the Edifiers when Ableton plays</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 3 · The Four Moves",
+    lessons: [
+
+      { id:"3.1", title:"Move 1 — The Fade", duration:"8 min", tag:"concept", html:`
+        <h1>Move 1 — The Fade</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 3.1</span>
+          <span class="meta-item">~8 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Every DJ technique is a variation on volume over time. Master the fade and you have the foundation for everything else.</p></div>
+
+        <h2>What It Is</h2>
+        <p>A <strong>fade</strong> is a smooth volume reduction or increase over time. Track A fades out while Track B fades in. At the midpoint, both are playing at partial volume — that's the mix zone. Before and after, only one track is dominant.</p>
+        <p>The simplest fades take 4–8 bars. A faster fade (2 bars) feels abrupt. A longer fade (16+ bars) can feel slow and indecisive. 4–8 bars is the sweet spot for most transitions.</p>
+
+        <h2>On Your APC40</h2>
+        <p>The 8 faders on the APC40 map to 8 tracks in Ableton. In a stem setup, your 5 columns (drums, bass, vocals, other, mix) are on faders 1–5. Pulling fader 1 down = reducing drum volume. Pulling multiple faders down together = fading out a whole track.</p>
+        <p>Practice moving faders smoothly. Jerky fader moves are audible. A slow, even pull sounds intentional. The physical gesture matters.</p>
+
+        <h2>The Crossfade</h2>
+        <p>The classic move: fade one track out while fading another in simultaneously. One hand on each fader. Left hand pulls down, right hand pulls up. They mirror each other.</p>
+        <p>With stems, you can crossfade individual layers — fade out just the drums from Track A while fading in drums from Track B. Everything else stays the same. This is surgical crossfading and it's one of your signature moves.</p>
+
+        <h2>When to Use It</h2>
+        <p>The fade works well when tracks have a <strong>similar energy level</strong>. Fading between two high-energy drops feels like motion. Fading from a low-energy breakdown into a high-energy drop is jarring — the energy gap is too big for a smooth fade to bridge.</p>
+
+        <div class="callout"><strong>Rule of thumb:</strong> fades work best when the energy of Track A and Track B are within one "step" of each other. Use a drop or a cut for bigger energy jumps.</div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can describe a fade and know which faders to move on the APC40</li>
+            <li>You understand that stem crossfading = fading one layer at a time, not both full tracks</li>
+            <li>You know when a fade is the right tool vs. when the energy gap is too big</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"3.2", title:"Move 2 — The Bass Swap", duration:"10 min", tag:"concept", html:`
+        <h1>Move 2 — The Bass Swap</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 3.2</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>The bass swap is the most important technique in electronic music DJing. Learn it, practice it, trust it. It keeps the groove locked while the identity of the track changes underneath the crowd's feet.</p></div>
+
+        <h2>Why Bass Is Special</h2>
+        <p>In electronic music, the <strong>low end carries the groove</strong>. The kick and the bass together are the engine the crowd moves to. If two basslines play simultaneously, they clash — even if they're in the same key, two bass frequencies fight each other and create a muddy, thick, unpleasant sound.</p>
+        <p>This is why you almost never run two bass stems at the same time. One must be out before the other comes in.</p>
+
+        <h2>The Classic Bass Swap</h2>
+        <p>The technique is simple: as you transition between Track A and Track B, you <strong>swap the bass stem clean</strong> — cut one, fire the other, ideally on a phrase boundary.</p>
+
+        <div class="diagram">Track A: [drums ✓] [bass ✓] [vocals ✓]
+Track B: [drums  ] [bass  ] [vocals  ]
+
+Step 1: Fire Track B drums → now both drum stems play (layered groove)
+Step 2: Wait 4-8 bars — feels like it's building
+Step 3: On bar 1 of new phrase:
+  → Cut Track A bass
+  → Fire Track B bass    ← this is the "swap" moment
+Step 4: Cut Track A drums (or fade them)
+Step 5: Now fully on Track B</div>
+
+        <p>The moment the bass swaps is the moment the track identity changes. The crowd feels it as a drop or a shift, even if you did it gently. It's the hinge of the transition.</p>
+
+        <h2>EQ Bass Swap (Advanced Variation)</h2>
+        <p>Instead of a hard cut, use EQ: roll off the low frequencies on Track A's bass while rolling them on for Track B's bass. This is called an <strong>EQ crossfade on the bass</strong>. It's smoother but requires more precision — you need two hands on two different EQ knobs simultaneously.</p>
+        <p>Start with the hard cut method. Once you're comfortable, explore the EQ version.</p>
+
+        <h2>The Rule</h2>
+        <p>One bassline at a time. Every time. This is not a guideline — it's a hard constraint. Breaking it sounds bad 95% of the time. When in doubt, fade the bass out before bringing the new one in.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can explain why two bass stems playing simultaneously usually sounds bad</li>
+            <li>You can describe the sequence: fire B drums → wait → swap bass → cut A drums</li>
+            <li>You know the rule: one bassline at a time</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"3.3", title:"Move 3 — The Filter Sweep", duration:"8 min", tag:"concept", html:`
+        <h1>Move 3 — The Filter Sweep</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 3.3</span>
+          <span class="meta-item">~8 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>A filter sweep turns any transition into something that feels intentional. It's the DJ's version of a camera cut with a lens flare — it tells the audience: something is about to happen.</p></div>
+
+        <h2>What a Filter Does</h2>
+        <p>A <strong>high-pass filter (HPF)</strong> removes low frequencies, leaving only the highs. Turn it up and your track sounds thin and distant — like it's playing through a phone speaker. Turn it back down and the bass slams back in.</p>
+        <p>A <strong>low-pass filter (LPF)</strong> removes high frequencies, leaving only the lows. Your track sounds muffled, like it's behind a wall.</p>
+        <p>Both create tension. Bringing them back releases the tension. Tension + release = energy management.</p>
+
+        <h2>The Sweep in Practice</h2>
+        <p>The classic use: you're about to transition. With 8 bars to go on Track A, start slowly applying a high-pass filter. The track starts thinning. The crowd senses something coming. At bar 1 of the new phrase: drop the filter and fire Track B's drop. The contrast between thin → full is what makes the drop feel massive.</p>
+        <p>You can also use a filter on an incoming track — bring Track B in with a filter (it sounds tentative, exploratory), then sweep the filter out to reveal the full sound (this is the moment of commitment).</p>
+
+        <h2>On Your Rig</h2>
+        <p>In Ableton, add an <strong>Auto Filter</strong> or <strong>EQ Eight</strong> device to any stem channel. Map its frequency cutoff to a knob on the APC40. Now you have a physical sweep. One hand on the knob, the other on a fader or firing pads.</p>
+        <p>Even without a mapped knob, you can draw filter automation in Ableton's clip envelopes — but the physical knob is what makes it feel live.</p>
+
+        <h2>When to Use It</h2>
+        <p>Sweeps work best as <strong>transition glue</strong>. If a transition feels like two things happening without a reason, add a filter sweep over the handoff and suddenly it sounds purposeful. It's a frame, not the picture.</p>
+
+        <div class="callout"><strong>Overdose warning:</strong> Filter sweeps on every transition get predictable fast. Use them sparingly — every 3rd or 4th transition is plenty. If the crowd can anticipate your move, it loses impact.</div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can explain what HPF and LPF do to a signal</li>
+            <li>You understand tension → release as an energy tool, not just a sound effect</li>
+            <li>You know filter sweeps should be used sparingly — not as a habit</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"3.4", title:"Move 4 — The Stem Crossfade", duration:"10 min", tag:"big-moment", html:`
+        <h1>Move 4 — The Stem Crossfade</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 3.4</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-big-moment">Your Signature Move</span>
+        </div>
+        <div class="expert-take"><p>This is the move that makes people ask "how did they do that?" It's only possible because of your stem setup — no standard DJ can do this. Use it wisely and it becomes your fingerprint.</p></div>
+
+        <h2>What Makes It Different</h2>
+        <p>A standard crossfade moves all the elements of two tracks simultaneously. A stem crossfade moves one layer at a time — gradually replacing a song element by element. The result sounds like the music is <em>morphing</em>, not transitioning.</p>
+
+        <h2>The Full Stem Crossfade</h2>
+        <div class="diagram">Start: Track A playing (drums + bass + vocals + other)
+
+Bar 1-8:   Add Track B drums alongside Track A drums
+Bar 9-16:  Cut Track A drums
+           Swap bass (Track A out → Track B in — that one-bassline rule)
+Bar 17-24: Fade in Track B vocals, fade out Track A vocals
+Bar 25-32: Fade in Track B other, fade out Track A other
+
+End: Track B playing (drums + bass + vocals + other)
+
+Total: ~2 minutes for a full stem-by-stem crossfade</div>
+
+        <p>You don't have to do all 4 layers every time. Even just doing drums + bass (the most common version) is a stem crossfade. The key is that you're building a new track layer by layer rather than swapping everything at once.</p>
+
+        <h2>The Partial Version (Most Common)</h2>
+        <p>In practice, you'll often keep one element from Track A and cross everything else over to Track B. Example: keep Track A's vocals running while Track B's full groove plays underneath. This creates a "mashup" moment — two tracks coexisting at the stem level. It's beautiful when it works harmonically.</p>
+        <p>This is also how you can <strong>extend a vocal</strong>: Track A's song is "done" but the crowd loves the vocal — so you keep just that stem running while you bring an entirely new groove underneath from Track B. Nobody knows you kept a cheat going.</p>
+
+        <h2>Rules for Stem Crossfades</h2>
+        <ol>
+          <li><strong>Always swap bass clean.</strong> No two basses at once.</li>
+          <li><strong>Harmonic compatibility matters more here.</strong> If Track A and B are in conflicting keys, layering their vocals sounds dissonant. Check the companion app's key suggestions before attempting a vocal layer.</li>
+          <li><strong>Don't rush it.</strong> 8-bar chunks per layer swap. Faster feels sloppy.</li>
+          <li><strong>Trust the silence.</strong> After you cut a stem, wait. Let the remaining stems breathe before adding the next one from Track B.</li>
+        </ol>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can sequence a full 4-layer stem crossfade from memory (drums → bass swap → vocals → other)</li>
+            <li>You know when to use the partial version (keeping one element) vs. full crossfade</li>
+            <li>You understand why harmonic compatibility is especially important for vocal layering</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 4 · First Sounds",
+    lessons: [
+
+      { id:"4.1", title:"Make Sound", duration:"10 min", tag:"hands-on", html:`
+        <h1>Make Sound</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 4.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Before anything else: get sound out of the speakers. Everything complicated comes later. Right now, fire a clip and hear it. That's lesson one.</p></div>
+
+        <h2>Open Your First .als</h2>
+        <p>Navigate to <code>~/Music/Dance/Sets/</code>. Open any .als file. Ableton launches with 5 tracks already set up — one per stem role (drums, bass, vocals, other, mix). Each track may have multiple clips in its clip slots (one per source song that was in that set).</p>
+        <p>This is the <strong>Session View</strong>. It's a grid of loops. Unlike Arrangement View (the linear timeline), Session View lets you fire any clip at any time. This is your performance surface.</p>
+
+        <h2>Fire Your First Clip</h2>
+        <div class="step-block">
+          <div class="step-title">Make Sound Now</div>
+          <ol>
+            <li>In Ableton's Session View, find the first row of clips (row 1 across all 5 tracks).</li>
+            <li>Click the <strong>launch button</strong> (the triangle/play icon) on the clip in the Drums column (leftmost column).</li>
+            <li>You should hear the drum stem playing. If not, check: is the master volume up? Is the Scarlett selected as output device in Ableton?</li>
+            <li>Now click the Bass clip in the same row. Both drums and bass should be playing together.</li>
+            <li>Press the <strong>Stop All Clips</strong> button (the square at the bottom of each track's clip slots, or the "Stop" button in the transport bar).</li>
+          </ol>
+          <div class="note">All clips in the same row belong to the same source track. Firing row 1 drums + row 1 bass = that source track's drums + bass playing together in sync.</div>
+        </div>
+
+        <h2>The APC40 Grid</h2>
+        <p>The APC40's 5×8 pad grid mirrors Ableton's clip slots. Column 1 = Track 1 (drums). Column 2 = Track 2 (bass). Each row = one scene (one source song). Press a pad = fire that clip. Press a lit pad again = stop that clip. The pads glow amber when a clip is loaded, green when playing, off when empty.</p>
+        <p>Run your first few pad fires from the APC40 instead of the mouse. Press row 1, column 1 (drums). Then row 1, column 2 (bass). Feel the physical grid — this is your instrument.</p>
+
+        <h2>Set Your Tempo</h2>
+        <p>Look at the top of the Ableton window. You'll see a tempo field (e.g., 128.00 BPM). Your .als file was generated with the detected BPM from your first track. All clips in the project are warped to this tempo. If you fire a clip from a different source track, it still plays in time — Ableton stretches it to match.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can fire and stop clips from both the mouse and the APC40</li>
+            <li>You hear audio through the Edifiers when clips are playing</li>
+            <li>You can see the tempo in Ableton and understand all clips sync to it</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"4.2", title:"Ride the Faders + First Bass Swap", duration:"15 min", tag:"hands-on", html:`
+        <h1>Ride the Faders + First Bass Swap</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 4.2</span>
+          <span class="meta-item">~15 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>The faders are your primary instrument. Get comfortable with them before you worry about anything else. And do your first bass swap today — it's simpler than it sounds and it immediately makes you feel like a DJ.</p></div>
+
+        <h2>Fader Fundamentals</h2>
+        <p>The APC40's 8 channel faders control volume for 8 tracks. In your 5-column setup: fader 1 = drums, fader 2 = bass, fader 3 = vocals, fader 4 = other, fader 5 = mix. The master fader (on the right) controls overall output volume.</p>
+        <p>Move a fader slowly. Notice how small changes are — bringing drums from 100% to 80% is subtle but audible. 100% to 50% is obvious. 100% to 0% is a cut. You'll use all of these.</p>
+
+        <h2>Ride the Groove</h2>
+        <div class="step-block">
+          <div class="step-title">Fader Practice (5 minutes)</div>
+          <ol>
+            <li>Fire row 1 (all stems from source track 1): drums + bass + vocals + other all playing.</li>
+            <li>Slowly pull the <strong>vocals fader</strong> down to 0. Listen. The track becomes instrumental.</li>
+            <li>Slowly bring it back up. Listen to the vocal re-enter.</li>
+            <li>Now try the <strong>drums fader</strong>: pull it down gradually. At 0%, just bass + vocals + other. Interesting texture.</li>
+            <li>Bring drums back in. Do this a few times — feel the difference in groove presence.</li>
+            <li>Practice making moves on every 8th bar (listen for phrase boundaries). Land your fader move as a new phrase starts.</li>
+          </ol>
+        </div>
+
+        <h2>Your First Bass Swap</h2>
+        <div class="step-block">
+          <div class="step-title">Bass Swap — Step by Step</div>
+          <ol>
+            <li>Fire row 1 drums + bass. Both playing.</li>
+            <li>Fire row 2 drums (from a different source track). Now both drum stems play together — layered groove.</li>
+            <li>Listen to the interplay for 8 bars. They're in sync because Ableton stretched them to the same tempo.</li>
+            <li>At the next phrase boundary (bar 1 of a new phrase):
+              <ul>
+                <li>Lower row 1 bass fader to 0 (or press row 1 bass pad to stop it)</li>
+                <li>Immediately fire row 2 bass</li>
+              </ul>
+              That's the bass swap. The bass identity changed. It happened clean.
+            </li>
+            <li>Now cut row 1 drums (press the pad or lower the fader). You're fully on row 2.</li>
+          </ol>
+          <div class="note">The transition probably sounded rough the first time — that's normal. Do it 3 more times. By the 4th attempt it'll feel more natural. You're building muscle memory.</div>
+        </div>
+
+        <h2>The First Moment</h2>
+        <p>When the bass swaps and the groove shifts cleanly, you'll feel it — a small jolt of "I did that." That's the feedback loop that makes DJing addictive. Everything after this builds on that moment.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can isolate individual stems by pulling faders while other stems keep playing</li>
+            <li>You've done at least 3 bass swaps and can feel when one landed cleanly vs. rushed</li>
+            <li>You can land a fader move on a phrase boundary intentionally</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 5 · The Companion App",
+    lessons: [
+
+      { id:"5.1", title:"Booth Tour", duration:"10 min", tag:"hands-on", html:`
+        <h1>Booth Tour</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 5.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>The companion app is your second screen. Ableton is the engine; this is your dashboard. Everything you need to make decisions in real time lives here.</p></div>
+
+        <h2>Open the Booth View</h2>
+        <p>Open <code>http://localhost:5173</code> in a browser. Click the <strong>Booth</strong> tab in the top nav (or it opens there by default).</p>
+        <p>The Booth view has several sections. Here's what each one does:</p>
+
+        <h2>SceneGrid</h2>
+        <p>At the top of Booth is the <strong>SceneGrid</strong> — a mirror of Ableton's clip grid. You can see which clips are playing (glowing green), which are loaded (amber), and which are empty. You can tap cells in the grid to fire clips directly from the app — same as pressing the APC40 pads. Use this when you want to fire a specific stem without reaching for the controller.</p>
+
+        <h2>MasterVisualizer (Stacked Stem Waveforms)</h2>
+        <p>Below the grid is a row of waveform strips — one per stem role. Each strip shows the actual audio waveform of the currently-playing clip for that role, with a playhead moving in real time. You can see at a glance how dense each stem is right now and where the next phrase break is coming.</p>
+
+        <h2>ComboStrip (Rec Banners)</h2>
+        <p>Each deck column has a recommendation banner showing which tracks the AI thinks fit best in that column right now. The recs are scored based on: key compatibility with what's playing, BPM proximity, energy match, and embedding similarity. The companion app's AI has seen your whole library and runs this math continuously.</p>
+
+        <h2>CueStrip</h2>
+        <p>The CueStrip shows what's currently soloed in your headphones — what you're auditioning before committing to the master. If you solo a track in Ableton, it appears here. One-click <strong>Load to master</strong> fires all its stems into the active columns.</p>
+
+        <h2>SetRail (⌘\\ to open)</h2>
+        <p>The slide-out panel on the right. Shows your active set (planned tracklist) and tail recommendations based on what you've been playing. More on this in Lesson 5.3.</p>
+
+        <div class="step-block">
+          <div class="step-title">Explore the Booth View</div>
+          <ol>
+            <li>Open the companion app with the backend running and an .als file open in Ableton.</li>
+            <li>Play a clip in Ableton. Watch the corresponding cell in SceneGrid turn green.</li>
+            <li>Watch the waveform in MasterVisualizer animate with the playhead.</li>
+            <li>Look at the ComboStrip banners — do you recognize any of the suggested tracks?</li>
+            <li>Press ⌘\\ to open the SetRail. Close it again with ⌘\\.</li>
+          </ol>
+        </div>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can name each section of the Booth view and what it shows</li>
+            <li>You've seen the SceneGrid update live when you fire a clip in Ableton</li>
+            <li>You can open and close the SetRail with ⌘\\</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"5.2", title:"Your AI Co-Pilot — Recs + Camelot", duration:"10 min", tag:"concept", html:`
+        <h1>Your AI Co-Pilot — Recs + Camelot</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 5.2</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Most DJs spend years building the mental map of which tracks fit together. You have an AI that does it in real time. Use it as a co-pilot, not a crutch — but use it.</p></div>
+
+        <h2>How the Recommendations Work</h2>
+        <p>The Dance system built a <strong>track graph</strong> across your entire library. Every track is a node. Every compatible pair is an edge. The graph is built from four signals:</p>
+        <ul>
+          <li><strong>Harmonic compatibility</strong> — do the keys match on the Camelot wheel?</li>
+          <li><strong>Tempo proximity</strong> — are the BPMs close (within ±5%)?</li>
+          <li><strong>Embedding similarity</strong> — do the tracks <em>sound</em> similar? (CLAP AI model)</li>
+          <li><strong>Energy match</strong> — do the RMS levels and stem presence patterns align?</li>
+        </ul>
+        <p>When you fire a track, the companion app queries the graph: "given these seeds, what fits best right now?" The scored candidates appear in the ComboStrip banners and in the SetRail tail recs.</p>
+
+        <h2>The Camelot Wheel</h2>
+        <p>The Camelot wheel is a harmonic compatibility system. Every key gets a number (1–12) and a letter (A = minor, B = major). Tracks are compatible if they share the same number, or if they're adjacent on the wheel (±1).</p>
+
+        <div class="diagram">Safe moves from any Camelot position (e.g., 8A):
+  Same key:    8A → 8A  (identical key, zero clash)
+  Same number: 8A → 8B  (parallel major/minor — dramatic shift)
+  Adjacent:    8A → 7A  (down one — slightly darker)
+  Adjacent:    8A → 9A  (up one — slightly brighter)
+  Energy jump: 8A → 8B + adjacent  (intentional key lift)</div>
+
+        <p>Moving more than 1 step on the wheel is a key clash — it can sound jarring or creative depending on how you execute it. The companion app's rec banners show Camelot position for every suggested track. Check it before firing.</p>
+
+        <h2>Using ⌘K Search</h2>
+        <p>Press <strong>⌘K</strong> anywhere in the app to open the command palette. Type an artist name, track title, or vibe (e.g., "dark bass" or "uplifting vocal"). Fuzzy search + CLAP semantic search run simultaneously. Results show Camelot position and estimated BPM. Click a result to load it into a deck column.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can read a Camelot position (e.g., "8A") and know what keys are safe to mix next</li>
+            <li>You understand that the rec banners are AI-scored from 4 signals simultaneously</li>
+            <li>You've used ⌘K to search your library by vibe or title</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"5.3", title:"Plan a Set", duration:"12 min", tag:"hands-on", html:`
+        <h1>Plan a Set</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 5.3</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Planning a set is not about locking in an order and following it — it's about knowing your library well enough to navigate it live. A plan gives you confidence; confidence gives you flow state.</p></div>
+
+        <h2>What a "Set" Is in Dance</h2>
+        <p>A <strong>Set</strong> is a named, ordered list of tracks stored in the database. You can have multiple sets (different moods, different lengths, different occasions). At most one set is "active" at a time — the active set is what the companion app uses to score tail recs.</p>
+
+        <h2>Create Your First Set</h2>
+        <div class="step-block">
+          <div class="step-title">Build a 10-Track Set</div>
+          <ol>
+            <li>Open the companion app. Click <strong>Set</strong> in the top nav (or press ⌘\\ to open the SetRail from Booth).</li>
+            <li>Click <strong>Create empty set</strong>. Name it something like "Practice Set 1".</li>
+            <li>Press <strong>⌘K</strong> to open the command palette. Search for a track you know well. Click it — it's added to the set.</li>
+            <li>The SetRail now shows tail recommendations based on that first track. Look at the suggestions — are the Camelot positions compatible? Pick one and add it.</li>
+            <li>Continue building: pick from the tail recs, or search with ⌘K, until you have 10 tracks.</li>
+            <li>Look at the set arc: does energy build and breathe? Are the keys mostly compatible (within 1-2 steps on the Camelot wheel)? Rearrange by drag-and-drop if needed.</li>
+          </ol>
+          <div class="note">Don't overthink the order. 10 tracks is a rough outline, not a script. During performance you'll deviate from it — and that's correct.</div>
+        </div>
+
+        <h2>The Set as a Map, Not a Script</h2>
+        <p>Your set plan is a <strong>map of your library</strong>, not a choreography you must follow. If track 6 isn't working with the room's energy, skip to track 7, or go off-plan entirely. The plan exists so that when you need the next track, you're not searching from scratch — you've already thought about some good options.</p>
+        <p>Pro DJs often say: "I plan 40% of my set and improvise the rest." You'll find your own ratio.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've created a set with at least 10 tracks using the SetRail + ⌘K</li>
+            <li>You can read the tail recs and use them to pick the next track in a set</li>
+            <li>You understand the set is a map to navigate, not a script to follow</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 6 · Your First Mix",
+    lessons: [
+
+      { id:"6.1", title:"First Transition", duration:"15 min", tag:"hands-on", html:`
+        <h1>First Transition</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 6.1</span>
+          <span class="meta-item">~15 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Your first real transition will be rough. Do it anyway. The gap between "knowing the theory" and "having muscle memory" only closes through repetition. Rough is fine. Do it ten times.</p></div>
+
+        <h2>The Simplest Possible Transition</h2>
+        <p>Pick two tracks from your library. Load track A's drums + bass into Ableton (row 1). Load track B's drums into the same .als (row 2, if it's there, or create a new .als that includes both tracks). Let's execute a clean drums-first transition.</p>
+
+        <div class="step-block">
+          <div class="step-title">Drums-First Transition — Do It Now</div>
+          <ol>
+            <li><strong>Get on phrase:</strong> Fire Track A's drums + bass. Start counting bars. Find the next phrase boundary (bar 1 after 8 bars of counting).</li>
+            <li><strong>Fire Track B drums</strong> on that phrase boundary. Both drum stems now play together. Don't panic — this is intentional. Feel how the two grooves interact.</li>
+            <li><strong>Listen for 8 bars.</strong> Let it breathe. Don't rush the next move.</li>
+            <li><strong>Bass swap:</strong> On the next phrase boundary, cut Track A bass and fire Track B bass simultaneously. This is the identity-change moment.</li>
+            <li><strong>Cut Track A drums</strong> over the next 4 bars (fade them out slowly or cut on the phrase boundary).</li>
+            <li>You're on Track B. The transition is done.</li>
+          </ol>
+          <div class="note">The whole transition should take 16–32 bars. About 30–60 seconds at 128 BPM.</div>
+        </div>
+
+        <h2>What to Listen For</h2>
+        <p>After the transition, ask yourself:</p>
+        <ul>
+          <li>Did the bass swap happen cleanly (no double-bass)?</li>
+          <li>Did the moves land on phrase boundaries, or in the middle of phrases?</li>
+          <li>Did the energy level feel maintained, or did it dip?</li>
+          <li>Would a stranger on the dance floor notice the transition, or did it feel smooth?</li>
+        </ul>
+
+        <h2>Do It Again. And Again.</h2>
+        <p>The first time: rough. The fifth time: recognizable. The tenth time: starting to feel natural. This is how all physical skills develop. There's no shortcut — repetition is the curriculum.</p>
+        <p>After each attempt, note one thing that went wrong and one thing that felt right. Fix the wrong thing next attempt. The right things will compound.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've completed at least 5 full drums-first transitions from Track A to Track B</li>
+            <li>The bass swaps happen cleanly without double-bass on at least 3 of the 5</li>
+            <li>You can feel when a move landed on a phrase boundary vs. when you were late</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"6.2", title:"Cross-Source Combos", duration:"12 min", tag:"hands-on", html:`
+        <h1>Cross-Source Combos</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 6.2</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Once you're comfortable swapping between two tracks, the next frontier is running stems from different tracks simultaneously as a deliberate texture — not as a mistake but as a tool.</p></div>
+
+        <h2>Cross-Source = Playing Multiple Rows at Once</h2>
+        <p>Nothing in Ableton prevents you from playing clips from row 1 and row 2 simultaneously on different columns. You can have:</p>
+        <ul>
+          <li>Row 1 drums + Row 2 bass = Track A's groove with Track B's bassline</li>
+          <li>Row 1 drums + Row 1 bass + Row 2 vocals = Track A's groove with Track B's vocals laid over it</li>
+          <li>Row 2 drums + Row 3 bass = an entirely custom combo no producer ever intended</li>
+        </ul>
+        <p>Some combos sound great. Some sound awful. The ones that work tend to be: <strong>harmonically compatible + similar BPM source material + complementary energy levels</strong>.</p>
+
+        <h2>The Mashup Moment</h2>
+        <p>The most crowd-pleasing cross-source combo: keep a strong vocal running from Track A while Track B's full groove plays underneath it. Example: a popular track's hook kept playing while a harder track's drums + bass take over. The crowd recognizes the vocal but the body of the track has changed. This moment — when you can see people react to the recognizable element in a new context — is one of the highs of stem DJing.</p>
+
+        <h2>Do It Now</h2>
+        <div class="step-block">
+          <div class="step-title">Build 3 Cross-Source Combos</div>
+          <ol>
+            <li>Fire row 1 drums + row 2 bass. Listen. Does it work? Check the companion app — are these tracks Camelot-compatible?</li>
+            <li>Fire row 2 drums + row 1 bass. Swap. Different feel? Which do you prefer?</li>
+            <li>Now try: row 1 drums + row 1 bass + row 2 vocals. Keep a vocal from one track over the groove of another.</li>
+            <li>For each combo: rate it 1–5. Keep note of which combinations sounded good in your library — these become your "go-to combos."</li>
+          </ol>
+          <div class="note">Bad combos often happen for harmonic reasons — the tracks are in conflicting keys. Before blaming your taste, check the Camelot positions in the companion app.</div>
+        </div>
+
+        <h2>One Bassline Rule (Again)</h2>
+        <p>Even in cross-source combos: one bass stem at a time. Always.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've run at least 3 different cross-source combos and can describe which worked and why</li>
+            <li>You've experienced a "mashup moment" — a vocal from one track over another's groove</li>
+            <li>You've used the Camelot positions to explain why a combo sounded bad</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"6.3", title:"Record + Listen Back", duration:"10 min", tag:"big-moment", html:`
+        <h1>Record + Listen Back</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 6.3</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-big-moment">Big Moment</span>
+        </div>
+        <div class="expert-take"><p>Recording yourself is uncomfortable. Listen back anyway. Every mistake you catch on playback is a mistake you won't repeat. This is how all DJs improve — not from playing more sets, but from listening to the ones they already played.</p></div>
+
+        <h2>How to Record in Ableton</h2>
+        <div class="step-block">
+          <div class="step-title">Record Your First Mix Session</div>
+          <ol>
+            <li>In Ableton, go to <strong>Arrangement View</strong> (Tab key or View menu). You'll see your tracks with a horizontal timeline.</li>
+            <li>Click the <strong>Record</strong> button in the transport bar (circle). It will arm recording.</li>
+            <li>Switch back to <strong>Session View</strong> (Tab key). Ableton is now recording everything you fire into the Arrangement.</li>
+            <li>Do a 10-minute mix session: start from track 1, execute 2–3 transitions. Play freely.</li>
+            <li>Press Stop. Go back to Arrangement View — you'll see your session captured as clips on a timeline.</li>
+            <li>File → Export Audio/Video → render to an MP3 or WAV. Save it somewhere.</li>
+          </ol>
+          <div class="note">Even recording just 5 minutes is enough. The goal is to listen back to yourself as an audience member, not to capture a perfect set.</div>
+        </div>
+
+        <h2>How to Listen Back</h2>
+        <p>Wait a few minutes after recording. Put on headphones. Play the file from the beginning. Try to listen as someone who wasn't doing the mixing — a friend at the party.</p>
+        <p>Listen for: transitions that landed well, places where energy dropped unnecessarily, bass clashes (two basses audible at once), moments where the mix went quiet or dead for too long, and moments that felt good and intentional.</p>
+
+        <h2>The Feedback Loop That Works</h2>
+        <p>Write down 3 things: one transition that went well, one mistake to fix, one thing to try next time. That's the only debrief you need. More than three items per session is overwhelming — pick the most important one.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've recorded and listened back to at least one 5–10 minute mix session</li>
+            <li>You can identify at least one specific mistake by ear (e.g., "bass swap was late," "that transition clashed harmonically")</li>
+            <li>You've written down one thing to fix and one thing to repeat next session</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 7 · Playing Live",
+    lessons: [
+
+      { id:"7.1", title:"Cue Preview in Headphones", duration:"10 min", tag:"hands-on", html:`
+        <h1>Cue Preview in Headphones</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 7.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>The ability to hear a track in your headphones before the room hears it is one of the most powerful tools in DJing. It's the difference between making decisions under pressure and making decisions with information.</p></div>
+
+        <h2>How Cue Works on Your Rig</h2>
+        <p>Your Scarlett 4i4 has two independent stereo outputs: outs 1/2 go to the Edifiers (master — what the room hears). Outs 3/4 go to your Bose headphones (cue bus — what only you hear).</p>
+        <p>In Ableton, each track has a <strong>Solo/Cue</strong> button (headphone icon). When Ableton's mixer is in <strong>Cue mode</strong> (the Solo button shows "C" instead of "S"), pressing solo on any track routes that track's audio to outs 3/4 only — your headphones. The master mix on outs 1/2 continues playing unchanged.</p>
+
+        <h2>Set Up Cue Mode</h2>
+        <div class="step-block">
+          <div class="step-title">Configure and Test Cue</div>
+          <ol>
+            <li>In Ableton: <strong>Preferences → Audio → Output Config</strong> — confirm channels 1/2 and 3/4 are enabled.</li>
+            <li>Set <strong>Master → Audio To: Out 1/2</strong> and <strong>Cue Out: Out 3/4</strong>.</li>
+            <li>In the Ableton mixer, find the Solo button (on any track). Click it once. If the meter labels turn orange with an "S", it's in Solo mode. Click the "S" label to toggle to Cue mode (it becomes "C"). In Cue mode, soloing routes to headphones instead of muting other tracks.</li>
+            <li>Start playing track A's stems through the master. Put your headphones on.</li>
+            <li>Solo track B's drums (press the headphone/solo icon on that track). You should hear track B's drums in your headphones, while track A's full mix keeps playing through the speakers.</li>
+            <li>This is cue preview — hearing what's next before committing it.</li>
+          </ol>
+        </div>
+
+        <h2>The Workflow</h2>
+        <p>In a real set: you're playing track A for the room. In your headphones, you're listening to track B's intro — making sure the tempo feels right (it does — Ableton synced it), listening to the key (does it clash? check Camelot on the app), previewing the energy level. Once you're confident B is the right call, you un-solo it and start the transition.</p>
+        <p>This is the "preview before committing" workflow. It removes the guessing from transitions.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've confirmed Ableton is in Cue mode (not Solo mode)</li>
+            <li>You can hear a soloed track in headphones while the master keeps playing through speakers</li>
+            <li>You've auditioned a "next track" in headphones and made a go/no-go decision before committing</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"7.2", title:"The Three Clocks", duration:"10 min", tag:"concept", html:`
+        <h1>The Three Clocks</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 7.2</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>A DJ manages three time horizons simultaneously. Miss any one of them and something goes wrong — either the current moment sounds bad, the next moment isn't ready, or the set ends in the wrong place.</p></div>
+
+        <h2>Clock 1 — NOW (0–8 bars)</h2>
+        <p>This is what's playing right now. Your job: make it sound good. Are the faders balanced? Is the energy where it should be? Is a stem starting to feel repetitive? Do a micro-adjustment. This clock runs every bar.</p>
+
+        <h2>Clock 2 — NEXT SWAP (5–60 seconds)</h2>
+        <p>This is your upcoming transition. You should always know what track is coming next before you need it. Preview it in your headphones. Check its Camelot position in the app. Know which stems you'll fire first. By the time a transition starts, it should already be decided — you're just executing a plan you made 30 seconds ago.</p>
+
+        <h2>Clock 3 — SET ARC (10–60 minutes)</h2>
+        <p>This is the big picture: where is this set going? Are you building toward a peak? Are you past the peak and needing to bring energy down? How much time is left in the night? The arc clock runs on the scale of minutes, but you check it every few transitions.</p>
+
+        <div class="diagram">CLOCK 1 — NOW           ← running right now, every bar
+  "Does this sound good?"
+
+CLOCK 2 — NEXT SWAP     ← 30 seconds ahead
+  "What track comes next? Is it cued up?"
+
+CLOCK 3 — SET ARC       ← 30 minutes view
+  "Where am I in the set arc? Building? Peaked? Cooling?"</div>
+
+        <h2>Managing Three Clocks Simultaneously</h2>
+        <p>This is the hardest part of DJing and also the thing that creates flow state. When you're managing all three clocks smoothly, your attention cycles through them automatically: NOW → NEXT SWAP → ARC → NOW → NEXT SWAP → ARC. It's a rhythm within the music.</p>
+        <p>Beginners usually collapse to Clock 1 only (just keeping the current thing sounding okay). Clock 2 awareness comes with practice. Clock 3 is what separates DJs who play 60-minute sets from DJs who play 20-minute sets that were supposed to be 60 minutes.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can name the three clocks and their time horizons</li>
+            <li>During a practice session, you consciously check all three — current sound, next track ready, set arc position</li>
+            <li>You notice the moment when you "forget" Clock 2 (you reach a transition and haven't decided the next track yet)</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"7.3", title:"Energy Arc", duration:"12 min", tag:"concept", html:`
+        <h1>Energy Arc</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 7.3</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>The energy arc is the shape of your set over time. Knowing how to design it separates DJs who can play one good transition from DJs who can control a room for 90 minutes.</p></div>
+
+        <h2>Why Arc Matters</h2>
+        <p>A set that's high energy all the way through is exhausting. A set that peaks too early and then fades is disappointing. A set with no arc at all is just a playlist. The arc is what makes a set feel like an <em>experience</em>.</p>
+        <p>Different contexts require different arcs. An opening DJ set should start low and build slowly. A closing set needs a clear peak followed by a comedown. A peak-hour set might spike high and stay there, with micro-drops for breathing room. Know the context before you play.</p>
+
+        <h2>A Standard 60-Minute Arc</h2>
+        <div class="diagram">0–10 min:   INTRO — lower energy, crowd arriving, establishing the vibe
+                Tracks: smoother, more stripped back, let the room find its feet
+
+10–30 min:  BUILD — energy climbing, tempo can increase, more layers
+                Transitions become tighter, combos more adventurous
+
+30–45 min:  PEAK — maximum energy, your best drops, the moment
+                Everything you've been building toward
+
+45–55 min:  SUSTAIN — hold the peak with variation, crowd is deep in it
+                Slight energy dips recover faster here (crowd is warmed up)
+
+55–60 min:  RELEASE — let go, bring energy down gracefully
+                Signals the experience is completing, not just stopping</div>
+
+        <h2>Tools for Arc Control</h2>
+        <p>Energy is controlled by: <strong>tempo</strong> (higher BPM = more energy), <strong>stem density</strong> (more stems playing = fuller, more intense), <strong>spectral content</strong> (bass-heavy = physical/lower, lots of high-end = bright/energetic), and <strong>vocal presence</strong> (vocals engage the crowd emotionally — use them strategically at peak moments).</p>
+        <p>You have all of these controls via your faders. Bringing the bass fader up 6dB at the right moment is an energy spike. Removing the vocal stem is an energy micro-dip. These are your tools.</p>
+
+        <h2>The AI Arc in Your App</h2>
+        <p>The companion app's tail recs are scored against your current set's trailing arc — if you've been playing high-energy tracks, it recommends similarly high-energy options. If you've been building from chill, it suggests the next step up. You can use this to navigate the arc algorithmically. Or override it when you feel the room needs something different. The AI is a co-pilot, not the captain.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can sketch a 60-minute arc (intro / build / peak / sustain / release) on a napkin</li>
+            <li>You understand which stem moves increase energy (add bass, add density) vs. decrease it (remove stems, filter)</li>
+            <li>You know that the tail recs in the app are scored against your arc — and that you can override them</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 8 · The Do Less Rule",
+    lessons: [
+
+      { id:"8.1", title:"Let It Breathe", duration:"8 min", tag:"concept", html:`
+        <h1>Let It Breathe</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 8.1</span>
+          <span class="meta-item">~8 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>The biggest mistake stem DJs make is over-manipulation. You have 5 faders, a filter, and 8 rows of pads — it's tempting to touch all of them constantly. Don't. The music does most of the work. Your job is to get out of its way.</p></div>
+
+        <h2>Why Stems Tempt Over-Manipulation</h2>
+        <p>You have more control than any standard DJ setup. More control creates more temptation. Beginners often feel like they should be doing something every few bars — swapping a stem, moving a fader, applying a filter. The result: the mix sounds restless, chaotic, like nothing is allowed to settle.</p>
+        <p>A crowd can't feel the groove if the groove keeps changing before they've locked into it. <strong>Let a combination breathe for 8–16 bars before you change anything.</strong></p>
+
+        <h2>The Rule</h2>
+        <p>After any stem swap or fader move: <strong>wait at least one full phrase (8 bars) before making the next move</strong>. Put your hands in your lap. Trust the music. Listen to how the room responds.</p>
+        <p>Most of the time, you'll find the music sounds great without any intervention for longer than you expected. The impulse to "do something" is anxiety, not artistry.</p>
+
+        <h2>Less Is More — The Confidence Signal</h2>
+        <p>When you see a confident DJ stand still, arms crossed, for a full minute while the track plays, they're not being lazy — they're communicating: <em>I know this is exactly right, and I don't need to touch anything.</em> The crowd reads stillness as confidence. Frantic hands signal uncertainty, even if the mix sounds fine.</p>
+        <p>The physical calm of a good DJ is part of the performance.</p>
+
+        <h2>When to Break the Rule</h2>
+        <p>The Do Less Rule doesn't mean "never move." It means: move with intention, then wait for the move to land. Breaking the rule is allowed when:</p>
+        <ul>
+          <li>Something has clearly gone wrong and needs immediate fixing</li>
+          <li>You're deliberately layering multiple moves as a planned sequence (e.g., the 4-step stem crossfade)</li>
+          <li>The energy in the room demands a faster response than 8 bars</li>
+        </ul>
+        <p>Even then: make the move, then wait. Don't make another move to "fix" the first one while it's still landing.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can sit on a combination for a full 16 bars without touching anything — and enjoy it</li>
+            <li>You recognize the anxiety-driven impulse to "do something" vs. the intentional decision to make a move</li>
+            <li>Your transitions feel more deliberate and less frantic than when you first started</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+  // ══════════════════════════════════════════
+  {
+    title: "Part 9 · Your Factory",
+    lessons: [
+
+      { id:"9.1", title:"Getting New Tracks", duration:"10 min", tag:"concept", html:`
+        <h1>Getting New Tracks</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 9.1</span>
+          <span class="meta-item">~10 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Your library is the foundation of everything. A great library makes great sets easy. A weak library makes great sets impossible, no matter how good your technique is.</p></div>
+
+        <h2>The Only Source That Actually Works</h2>
+        <p>You've already discovered (via painful experience) that Spotify's API restrictions, YouTube's anti-bot systems, and spotDL's rate-limiting make streaming-to-file pipelines unreliable. The one path that reliably works:</p>
+        <p><strong>Buy tracks on Beatport.</strong> 320 kbps MP3 or AIFF. ~$2–3 per track. Instant download. No API nonsense. Drop the file in <code>~/Music/Dance/library/</code>, run <code>dance process</code>, done. Stems generated in ~5 minutes per track on your M2 Pro.</p>
+
+        <h2>Building a Library You Can Mix</h2>
+        <p>The common beginner mistake: buying too many tracks across too many genres. A library of 500 tracks across 10 genres is harder to mix than a library of 100 tracks within 2 genres. Within-genre compatibility (key, tempo, energy) is much higher — the AI recommendations are stronger, the harmonic matches are more reliable, and you know your library better.</p>
+        <p>Start tight. Your current ~66 tracks is a good seed. Expand within 2 genres you know and love before branching out. Add 5–10 tracks per session, not 50. Give each new track time to find its place in your mental map.</p>
+
+        <h2>Where to Discover Tracks</h2>
+        <ul>
+          <li><strong>Beatport charts</strong> — top 10 in your genre this week. High-quality curation, DJ-focused.</li>
+          <li><strong>SoundCloud (free):</strong> many producers upload full tracks. Download if the option is available.</li>
+          <li><strong>Bandcamp:</strong> independent artists, often FLAC/WAV quality, fair pricing.</li>
+          <li><strong>Radio shows / mixes:</strong> Boiler Room, Resident Advisor, NTS. Shazam anything you want. Then buy on Beatport.</li>
+          <li><strong>Your own production (future):</strong> if you produce, your originals become part of the library. The pipeline handles them identically.</li>
+        </ul>
+
+        <h2>The Crate Dig Habit</h2>
+        <p>Professional DJs "dig" for tracks constantly — it's not a monthly chore, it's a weekly practice. 30 minutes per week on Beatport's new releases in your genre. Buy 2–3 tracks max. Process them. Add them to a "new material" practice set. Play with them for a week before deciding if they stay. This is the habit that keeps a library alive.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've bought at least 3 tracks on Beatport and added them to your library</li>
+            <li>You understand why depth in 1–2 genres beats breadth across 10</li>
+            <li>You have a weekly "crate dig" habit (even 20 minutes counts)</li>
+          </ul>
+        </div>
+      `},
+
+      { id:"9.2", title:"What the Pipeline Does", duration:"12 min", tag:"concept", html:`
+        <h1>What the Pipeline Does</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 9.2</span>
+          <span class="meta-item">~12 min</span>
+          <span class="tag tag-concept">Concept</span>
+        </div>
+        <div class="expert-take"><p>Understanding what the pipeline does gives you two things: the ability to diagnose when something is wrong, and the ability to trust the data it produces. Both matter at 2am when something isn't working.</p></div>
+
+        <h2>The Pipeline is a State Machine</h2>
+        <p>Every track in the database has a <strong>state</strong>. The pipeline advances tracks through states in sequence. You can see states in the companion app's Pipeline view, or via <code>dance status</code> in the terminal.</p>
+
+        <div class="diagram">pending
+  → analyzed       (BPM, key, RMS detected on full mix)
+  → separated      (Demucs ran: 4 stems extracted)
+  → stems_analyzed (BPM, RMS, key detected per stem)
+  → regions_detected (cues, loops, drops, outros mapped)
+  → complete       (CLAP embeddings computed, track edges built)
+
+error             (something failed — see the Pipeline view for why)</div>
+
+        <h2>What Each Stage Produces</h2>
+        <p><strong>analyze:</strong> BPM, musical key, RMS levels, beat grid. This is the first data the companion app uses.</p>
+        <p><strong>separate:</strong> The Demucs separation — 4 stems as audio files. Takes 1–3 minutes per track on M2 Pro. This is the slowest stage.</p>
+        <p><strong>analyze_stems:</strong> Same analysis as above, but run on each stem individually. Bass key, drum presence, vocal RMS.</p>
+        <p><strong>detect_regions:</strong> Finds intro, outro, drop, breakdown, cue points by analyzing energy + spectral patterns. This is what populates your cue markers.</p>
+        <p><strong>embed:</strong> CLAP model computes a vector embedding of the full mix + each stem. These vectors power the semantic "sounds similar" recommendations.</p>
+        <p>After all tracks reach <strong>complete</strong>: run <code>dance build-graph</code> to recompute the recommendation graph. Then run <code>dance export-als --all</code> to generate fresh .als files for Ableton.</p>
+
+        <h2>The Full Workflow (After Adding New Tracks)</h2>
+        <div class="step-block">
+          <div class="step-title">New Track Workflow</div>
+          <ol>
+            <li>Drop audio files into <code>~/Music/Dance/library/</code></li>
+            <li><code>dance process</code> — runs all pipeline stages until every track is complete</li>
+            <li><code>dance tag</code> — CLAP zero-shot tagging (~50ms/track, fast)</li>
+            <li><code>dance build-graph</code> — rebuilds the recommendation graph</li>
+            <li><code>dance export-als --all</code> — generates new .als files</li>
+            <li>Open new .als in Ableton (or reload current session if already open)</li>
+          </ol>
+        </div>
+
+        <h2>When Something Is in "error" State</h2>
+        <p>Open the companion app → Pipeline view. Filter for "error" tracks. Click any error track to see the error message. Common causes: audio file is corrupt or in an unsupported format; Demucs ran out of memory (try <code>dance process --skip-stems</code> to see if other stages work); key detection failed on an unusual track. Most errors are fixable by checking the file and retrying.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You can list the 5 pipeline stages and describe what each one produces</li>
+            <li>You know the full post-ingest workflow: process → tag → build-graph → export-als</li>
+            <li>You know how to find and diagnose error-state tracks in the Pipeline view</li>
+          </ul>
+        </div>
+      `},
+
+    ]
+  },
+
+];
+
+// ─────────────────────────────────────────────
+//  APP STATE
+// ─────────────────────────────────────────────
+
+const ALL_LESSONS = COURSES.flatMap(c => c.lessons);
+const TOTAL = ALL_LESSONS.length;
+
+let currentIdx = 0;
+let completed = new Set(JSON.parse(localStorage.getItem('dance_course_v1') || '[]'));
+
+function save() {
+  localStorage.setItem('dance_course_v1', JSON.stringify([...completed]));
+}
+
+// ─────────────────────────────────────────────
+//  SIDEBAR
+// ─────────────────────────────────────────────
+
+function renderSidebar() {
+  const nav = document.getElementById('sidebar-nav');
+  let html = '';
+  COURSES.forEach((course, ci) => {
+    const hasCurrent = course.lessons.some((_, li) => {
+      const absIdx = ALL_LESSONS.findIndex(l => l.id === course.lessons[li].id);
+      return absIdx === currentIdx;
+    });
+    html += `<div class="course-group">
+      <div class="course-label ${hasCurrent ? 'has-current' : ''}" onclick="toggleCourse(${ci})">
+        <span>${course.title}</span>
+        <span class="arrow" id="arrow-${ci}">▼</span>
+      </div>
+      <div class="lesson-list" id="course-${ci}">`;
+    course.lessons.forEach(lesson => {
+      const absIdx = ALL_LESSONS.findIndex(l => l.id === lesson.id);
+      const isCurrent = absIdx === currentIdx;
+      const isDone = completed.has(lesson.id);
+      html += `<div class="lesson-row ${isCurrent ? 'current' : ''} ${isDone && !isCurrent ? 'done' : ''}" onclick="jumpTo(${absIdx})">
+        <span class="row-check">${isDone ? '✓' : '○'}</span>
+        <span class="row-num">${lesson.id}</span>
+        <span class="row-title">${lesson.title}</span>
+      </div>`;
+    });
+    html += `</div></div>`;
+  });
+  nav.innerHTML = html;
+
+  // Auto-open course containing current lesson
+  COURSES.forEach((course, ci) => {
+    const hasCurrent = course.lessons.some(l => ALL_LESSONS.findIndex(x => x.id === l.id) === currentIdx);
+    const list = document.getElementById(`course-${ci}`);
+    if (hasCurrent || ci === 0) {
+      list.classList.remove('hidden');
+      document.getElementById(`arrow-${ci}`).style.transform = '';
+    } else {
+      list.classList.add('hidden');
+      document.getElementById(`arrow-${ci}`).style.transform = 'rotate(-90deg)';
+    }
+  });
+
+  // Update progress
+  const pct = Math.round((completed.size / TOTAL) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-label').textContent = `${completed.size} of ${TOTAL} lessons complete`;
+}
+
+function toggleCourse(ci) {
+  const list = document.getElementById(`course-${ci}`);
+  const arrow = document.getElementById(`arrow-${ci}`);
+  if (list.classList.contains('hidden')) {
+    list.classList.remove('hidden');
+    arrow.style.transform = '';
+  } else {
+    list.classList.add('hidden');
+    arrow.style.transform = 'rotate(-90deg)';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  CONTENT
+// ─────────────────────────────────────────────
+
+function renderContent() {
+  const lesson = ALL_LESSONS[currentIdx];
+  document.getElementById('content').innerHTML = lesson.html;
+  document.getElementById('content-wrap').scrollTop = 0;
+
+  const isDone = completed.has(lesson.id);
+  const btn = document.getElementById('complete-btn');
+  const isLast = currentIdx === TOTAL - 1;
+
+  if (isDone) {
+    btn.textContent = isLast ? '✓ Complete' : '✓ Done';
+    btn.classList.add('already-done');
+  } else {
+    btn.textContent = isLast ? 'Mark Complete' : 'Done → Next';
+    btn.classList.remove('already-done');
+  }
+
+  document.getElementById('prev-btn').disabled = currentIdx === 0;
+  document.getElementById('next-btn').disabled = currentIdx === TOTAL - 1;
+
+  document.title = `${lesson.id} · ${lesson.title} — Dance Course`;
+}
+
+// ─────────────────────────────────────────────
+//  NAVIGATION
+// ─────────────────────────────────────────────
+
+function go(dir) {
+  const next = currentIdx + dir;
+  if (next < 0 || next >= TOTAL) return;
+  currentIdx = next;
+  renderSidebar();
+  renderContent();
+}
+
+function jumpTo(idx) {
+  currentIdx = idx;
+  renderSidebar();
+  renderContent();
+}
+
+function markDone() {
+  const lesson = ALL_LESSONS[currentIdx];
+  const wasDone = completed.has(lesson.id);
+  if (!wasDone) {
+    completed.add(lesson.id);
+    save();
+  }
+  if (currentIdx < TOTAL - 1) {
+    currentIdx++;
+  }
+  renderSidebar();
+  renderContent();
+}
+
+// ─────────────────────────────────────────────
+//  INIT
+// ─────────────────────────────────────────────
+
+function findStart() {
+  for (let i = 0; i < ALL_LESSONS.length; i++) {
+    if (!completed.has(ALL_LESSONS[i].id)) return i;
+  }
+  return 0;
+}
+
+currentIdx = findStart();
+renderSidebar();
+renderContent();
+</script>
+</body>
+</html>

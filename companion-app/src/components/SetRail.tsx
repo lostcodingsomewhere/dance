@@ -546,11 +546,12 @@ function SetTrackRow({
       ref={setNodeRef}
       style={sortableStyle}
       {...attributes}
-      className={`group relative rounded-md border transition-colors ${
+      {...listeners}
+      className={`group relative rounded-md border transition-colors touch-none ${
         isCurrentPlay
           ? "border-emerald-500/60 bg-emerald-500/10 hover:bg-emerald-500/15"
           : "border-neutral-800 bg-neutral-900/60 hover:bg-neutral-900"
-      } ${isDragging ? "opacity-40 z-30" : ""}`}
+      } ${isDragging ? "opacity-40 z-30" : "cursor-grab active:cursor-grabbing"}`}
     >
       {isCurrentPlay && (
         <span
@@ -560,15 +561,15 @@ function SetTrackRow({
           ●
         </span>
       )}
-      {/* Drag handle — only THIS element receives the drag listeners
-          (via {...listeners}). Clicks on the rest of the row still do
-          soft-pin / Cue / etc. The handle is wider + brighter now so
-          users can find it; tooltip explains the gesture. */}
+      {/* Drag affordance — the whole <li> is the drag source now (via
+          {...listeners} above), so the user can grab anywhere on the
+          row. This little ⋮⋮ is just a *visual* hint that the row is
+          draggable. dnd-kit's PointerSensor activates after 8px of
+          movement, so quick clicks on the row body still soft-pin and
+          interior buttons (Cue, force-load, etc.) still fire normally. */}
       <div
-        {...listeners}
-        title="Drag to reorder"
-        aria-label="drag handle"
-        className="absolute left-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 z-10 select-none touch-none"
+        aria-hidden="true"
+        className="absolute left-0 top-0 bottom-0 w-4 flex items-center justify-center text-neutral-600 group-hover:text-neutral-300 select-none pointer-events-none"
       >
         ⋮⋮
       </div>

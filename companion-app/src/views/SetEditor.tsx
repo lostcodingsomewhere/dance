@@ -235,17 +235,17 @@ function EditableTrackRow({
       ref={setNodeRef}
       style={sortableStyle}
       {...attributes}
-      className={`relative rounded-md border border-neutral-800 bg-neutral-900/40 ${
-        isDragging ? "opacity-40 z-30" : ""
+      {...listeners}
+      className={`group relative rounded-md border border-neutral-800 bg-neutral-900/40 touch-none ${
+        isDragging ? "opacity-40 z-30" : "cursor-grab active:cursor-grabbing"
       }`}
     >
       <div className="flex items-center gap-2 px-2 py-1.5">
-        {/* Drag handle — only this element gets the drag listeners. */}
+        {/* Drag affordance — the whole <li> is the drag source (via
+            {...listeners} above). This is just a visual hint. */}
         <div
-          {...listeners}
-          title="Drag to reorder"
-          aria-label="drag handle"
-          className="w-4 self-stretch flex items-center justify-center cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 select-none touch-none"
+          aria-hidden="true"
+          className="w-4 self-stretch flex items-center justify-center text-neutral-600 group-hover:text-neutral-300 select-none pointer-events-none"
         >
           ⋮⋮
         </div>
