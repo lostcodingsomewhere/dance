@@ -220,11 +220,14 @@ class AbletonBridge:
             data = json.loads(raw)
             cols = data.get("deck_columns")
             if isinstance(cols, dict):
-                self._deck_columns = {str(k): int(v) for k, v in cols.items()}
+                self._deck_columns = {
+                    self._migrate_deck_kind(str(k)): int(v) for k, v in cols.items()
+                }
             cells = data.get("deck_cells", [])
             if isinstance(cells, list):
                 self._deck_cells = {
-                    (int(s), str(k)): int(tid) for s, k, tid in cells
+                    (int(s), self._migrate_deck_kind(str(k))): int(tid)
+                    for s, k, tid in cells
                 }
             cue = data.get("cue_track_idx")
             if isinstance(cue, int):
@@ -234,8 +237,26 @@ class AbletonBridge:
                 len(self._deck_columns or {}),
                 len(self._deck_cells),
             )
+            # Forward-migrate any pre-A/B state so the next persist writes
+            # in the new shape and we never re-process this.
+            if any(k in {"drums", "bass", "vocals", "other"}
+                   for _, k in self._deck_cells):
+                self._persist_state()  # pragma: no cover - migration edge
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             logger.warning("Could not parse persisted bridge state: %s", exc)
+
+    @staticmethod
+    def _migrate_deck_kind(kind: str) -> str:
+        """Forward-migrate pre-A/B deck-kind names.
+
+        Old persistence had un-sided kinds: ``drums``, ``bass``, etc. New
+        layout splits each into A/B. We default to A for migration — the A
+        side is the conventional "primary" deck. ``mix`` is unchanged
+        (still a single track).
+        """
+        if kind in {"drums", "bass", "vocals", "other"}:
+            return f"{kind}_a"
+        return kind
 
     def stop(self) -> None:
         self.listener.stop()
@@ -461,22 +482,47 @@ class AbletonBridge:
     # ------------------------------------------------------------------
 
     # Live's track-color palette indexes — picked to keep stems visually
-    # distinct. These are RGB ints, not the 0-69 clip-color-index range.
+    # distinct. A-side is the bright color, B-side a darker variant of the
+    # same hue so the eye groups them as "the same role." MIX stays orange.
+    # These are RGB ints, not the 0-69 clip-color-index range.
     _STEM_TRACK_COLORS: dict[str, int] = {
-        "mix":    0xFFA500,  # orange — the full mix
-        "drums":  0xFF3030,  # red
-        "bass":   0x9050FF,  # purple
-        "vocals": 0x30B0FF,  # blue
-        "other":  0x60D060,  # green
+        "drums_a":  0xFF3030,  # red
+        "drums_b":  0xA01818,  # dark red
+        "bass_a":   0x9050FF,  # purple
+        "bass_b":   0x583090,  # dark purple
+        "vocals_a": 0x30B0FF,  # blue
+        "vocals_b": 0x186080,  # dark blue
+        "other_a":  0x60D060,  # green
+        "other_b":  0x357835,  # dark green
+        "mix":      0xFFA500,  # orange — the full mix (reference)
     }
-    # Order matters — defines column layout in Live.
-    _DECK_KINDS: tuple[str, ...] = ("mix", "drums", "bass", "vocals", "other")
+    # Order matters — defines column layout in Live. The 8 stem decks come
+    # FIRST so APC40's default 8-strip view maps to them one-to-one (one
+    # hardware fader per stem deck). MIX lives at index 8, reachable via
+    # APC40 bank-shift; the Cue track (created later) sits at index 9, off
+    # the default visible strips entirely. See
+    # docs/proposals/stem-deck-pair.md.
+    _DECK_KINDS: tuple[str, ...] = (
+        "drums_a", "drums_b",
+        "bass_a", "bass_b",
+        "vocals_a", "vocals_b",
+        "other_a", "other_b",
+        "mix",
+    )
+    # Source stem kinds — what Demucs emits, what the pipeline operates on,
+    # what callers pass to push_track_to_live. The bridge maps each to its
+    # A or B deck side at load time based on row availability.
+    _SOURCE_STEM_KINDS: tuple[str, ...] = ("drums", "bass", "vocals", "other")
     _DECK_DISPLAY_NAMES: dict[str, str] = {
-        "mix":    "Deck Mix",
-        "drums":  "Deck Drums",
-        "bass":   "Deck Bass",
-        "vocals": "Deck Vocals",
-        "other":  "Deck Other",
+        "drums_a":  "Deck Drums A",
+        "drums_b":  "Deck Drums B",
+        "bass_a":   "Deck Bass A",
+        "bass_b":   "Deck Bass B",
+        "vocals_a": "Deck Vocals A",
+        "vocals_b": "Deck Vocals B",
+        "other_a":  "Deck Other A",
+        "other_b":  "Deck Other B",
+        "mix":      "Deck Mix",
     }
 
     # Dedicated Cue track — output routed to outs 3/4 (the Scarlett 4i4's
@@ -648,7 +694,7 @@ class AbletonBridge:
 
     def stop_scene(self, scene_index: int) -> dict[str, Any]:
         """Stop every deck-column cell on a scene. Live has no 'stop scene'
-        primitive, so we iterate the 5 deck-column tracks and stop_clip on
+        primitive, so we iterate all deck-column tracks and stop_clip on
         each at the given scene index. Idempotent on cells that aren't
         playing (no-op at the OSC layer)."""
         if self._deck_columns is None:
@@ -661,21 +707,42 @@ class AbletonBridge:
         return {"ok": True, "scene_index": scene_index}
 
     def next_free_row(self) -> int:
-        """Lowest scene index where ALL stem kinds are empty.
+        """Lowest scene index where ALL 8 stem deck channels are empty.
 
-        Used as the default load slot for whole-song (anchor) loads so that a
-        fresh row is reserved for the 4-stem combo. Excludes the ``mix`` kind
-        from the emptiness check: full-song loads populate mix alongside the
-        stems (so checking stems alone is equivalent), and single-stem loads
-        leave mix empty by design (so including it would conflate "no anchor
-        yet" with "this row is free").
+        Used as the default load slot for whole-song (anchor) loads so that
+        a fresh row is reserved. Excludes ``mix`` from the emptiness check:
+        full-song loads populate mix alongside the stems (so checking stems
+        is equivalent), and single-stem loads leave mix empty by design.
+        Checks both A and B sides — a row counts as occupied if EITHER side
+        has any stem in it.
         """
-        kinds = ("drums", "bass", "vocals", "other")
+        deck_stem_kinds = tuple(
+            f"{src}_{side}" for src in self._SOURCE_STEM_KINDS for side in ("a", "b")
+        )
         i = 0
         while True:
-            if all((i, k) not in self._deck_cells for k in kinds):
+            if all((i, k) not in self._deck_cells for k in deck_stem_kinds):
                 return i
             i += 1
+
+    def _pick_side(self, *, scene_index: int) -> str:
+        """For a row, return which side ('a' or 'b') to load into.
+
+        Prefers the side with fewer stem cells already filled at this scene.
+        Tie → 'a' (matches DJ convention — A-side is the "current" deck).
+        Used by ``push_track_to_live`` to keep all stems of one load on the
+        same side, so anchor-detection (4-of-4 same track in a row) stays
+        meaningful per side.
+        """
+        a_count = sum(
+            1 for src in self._SOURCE_STEM_KINDS
+            if (scene_index, f"{src}_a") in self._deck_cells
+        )
+        b_count = sum(
+            1 for src in self._SOURCE_STEM_KINDS
+            if (scene_index, f"{src}_b") in self._deck_cells
+        )
+        return "a" if a_count <= b_count else "b"
 
     def push_track_to_live(
         self,
@@ -749,12 +816,25 @@ class AbletonBridge:
             if full_song:
                 scene_index = self.next_free_row()
             elif valid_kinds:
-                # Single-stem load — drop into the lowest slot in this kind's
-                # column. When multiple kinds were requested we use the
-                # first kind's column to anchor the slot choice.
-                scene_index = self.next_free_slot(valid_kinds[0])
+                # Single-stem load — find the lowest scene where EITHER side
+                # (A or B) of this source kind is free. We let the side
+                # picker below decide which side actually gets it; here we
+                # just need a row with capacity.
+                first_src = valid_kinds[0]
+                i = 0
+                while (
+                    (i, f"{first_src}_a") in self._deck_cells
+                    and (i, f"{first_src}_b") in self._deck_cells
+                ):
+                    i += 1
+                scene_index = i
             else:
                 scene_index = 0
+
+        # Pick the side (A or B) for this load. All stems of one
+        # push_track_to_live call go to the SAME side so anchor-detection
+        # stays meaningful per side. _pick_side prefers the less-full side.
+        side = self._pick_side(scene_index=scene_index)
 
         # Validate sources for this load.
         title = (track.title or track.file_name or f"Track {track.id}").strip()
@@ -769,11 +849,12 @@ class AbletonBridge:
                 warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
 
         # Auto-load each requested stem into the matching deck column on the
-        # chosen scene. The mix cell is also populated on full-song loads —
-        # the file goes in muted (the mix *track* is muted at creation, see
+        # chosen scene. Source kinds (drums/bass/vocals/other) map to deck
+        # kinds with the side suffix (drums_a or drums_b) decided above.
+        # The mix cell is also populated on full-song loads — the file goes
+        # in muted (the mix *track* is muted at creation, see
         # _create_deck_columns) so it doesn't double the summed stems, but
-        # the DJ can unmute it to A/B against the original or fall back to
-        # it if a stem is glitchy/missing.
+        # the DJ can unmute it to A/B against the original.
         stems_loaded = 0
         for kind in valid_kinds:
             stem = stems_by_kind.get(kind)
@@ -782,20 +863,23 @@ class AbletonBridge:
             stem_path = Path(stem.path)
             if not stem_path.exists():
                 continue
-            t_idx = deck_columns[kind]
+            deck_kind = f"{kind}_{side}"
+            t_idx = deck_columns[deck_kind]
             try:
                 self.client.create_audio_clip(t_idx, scene_index, str(stem_path))
-                self.client.set_clip_name(t_idx, scene_index, f"{title} ({kind})")
-                self._deck_cells[(scene_index, kind)] = track.id
+                self.client.set_clip_name(
+                    t_idx, scene_index, f"{title} ({kind} {side.upper()})"
+                )
+                self._deck_cells[(scene_index, deck_kind)] = track.id
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
-                warnings.append(f"OSC send for {kind} failed: {exc}")
+                warnings.append(f"OSC send for {deck_kind} failed: {exc}")
 
-        # Whole-song loads also drop the original mix file into the SONG
-        # cell. Without this, the SceneGrid renders the SONG cell as empty
-        # after a load — looks broken, doesn't match the offline .als writer
-        # which has done the same thing for offline-generated sets all along
-        # (see als/writer.py — `muted=(entry.kind == "mix")`).
+        # Whole-song loads also drop the original mix file into the (single,
+        # un-sided) MIX cell. Without this, the SceneGrid renders the SONG
+        # cell as empty after a load — looks broken, doesn't match the
+        # offline .als writer which has done the same thing for offline-
+        # generated sets all along (see als/writer.py).
         if full_song and track.file_path:
             mix_path = Path(track.file_path)
             if mix_path.exists():
@@ -829,7 +913,7 @@ class AbletonBridge:
         }
 
     def _create_deck_columns(self, *, start_index: int) -> dict[str, int]:
-        """Append 5 named, colored deck tracks to Live and return their indices.
+        """Append 9 named, colored deck tracks to Live and return their indices.
 
         Indices are *predicted* (created via fire-and-forget OSC). The caller
         is responsible for using them in subsequent OSC calls in the same

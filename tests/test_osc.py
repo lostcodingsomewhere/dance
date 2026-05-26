@@ -331,7 +331,9 @@ def _stub_track(id: int = 1, title: str = "My Song", file_path: str = "/tmp/miss
 
 
 def test_bridge_push_track_to_live_creates_tracks_in_order():
-    """Five OSC create_audio_track calls (mix + 4 stems), with names + colors."""
+    """Nine OSC create_audio_track calls — 8 stem decks (A/B × 4 roles) +
+    mix, in deck-pair order (stems first, mix last so APC40's default
+    8-strip view maps 1:1 to the stem decks)."""
     listen_port = _free_port()
     send_port = _free_port()
 
@@ -359,40 +361,46 @@ def test_bridge_push_track_to_live_creates_tracks_in_order():
         ]
         result = bridge.push_track_to_live(track, stems, include_stems=True)
 
-        # Indices should be the next 5 slots (10..14), one per logical track.
+        # Indices should be the next 9 slots (10..18) in deck-pair order:
+        # 8 stem decks first (A/B per role), MIX last so it sits beyond
+        # APC40's default 8-strip view.
         assert result["scene_index"] == 0
-        assert result["track_indices"]["mix"] == 10
-        assert result["track_indices"]["drums"] == 11
-        assert result["track_indices"]["bass"] == 12
-        assert result["track_indices"]["vocals"] == 13
-        assert result["track_indices"]["other"] == 14
+        assert result["track_indices"]["drums_a"] == 10
+        assert result["track_indices"]["drums_b"] == 11
+        assert result["track_indices"]["bass_a"] == 12
+        assert result["track_indices"]["bass_b"] == 13
+        assert result["track_indices"]["vocals_a"] == 14
+        assert result["track_indices"]["vocals_b"] == 15
+        assert result["track_indices"]["other_a"] == 16
+        assert result["track_indices"]["other_b"] == 17
+        assert result["track_indices"]["mix"] == 18
 
-        # We expect 5 create_audio_track messages.
+        # We expect 9 create_audio_track messages.
         assert _wait_for(
             lambda: sum(
                 1 for a, _ in received if a == "/live/song/create_audio_track"
             )
-            >= 5
+            >= 9
         )
         creates = [a for a, _ in received if a == "/live/song/create_audio_track"]
         names = [
             args[1] for addr, args in received if addr == "/live/track/set/name"
         ]
-        assert len(creates) == 5
-        # Names include the mix and each stem kind.
+        assert len(creates) == 9
+        # Names include each stem role × side and the mix.
         joined = " | ".join(names)
+        assert "Drums A" in joined and "Drums B" in joined
+        assert "Bass A" in joined and "Bass B" in joined
+        assert "Vocals A" in joined and "Vocals B" in joined
+        assert "Other A" in joined and "Other B" in joined
         assert "Mix" in joined
-        assert "Drums" in joined
-        assert "Bass" in joined
-        assert "Vocals" in joined
-        assert "Other" in joined
         # Mix track is muted on creation (reference / parachute, not
-        # double-summed audio).
+        # double-summed audio). MIX is now at idx 18 (8 stem decks
+        # precede it).
         mutes = [
             args for addr, args in received if addr == "/live/track/set/mute"
         ]
-        # The mix is the FIRST deck column at idx 10; expect (10, 1).
-        assert (10, 1) in mutes
+        assert (18, 1) in mutes
     finally:
         bridge.stop()
         fake_live_listener.stop()
@@ -429,13 +437,13 @@ def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
         stems = [_stub_stem("drums", str(drums_path))]
         bridge.push_track_to_live(track, stems, include_stems=True)
 
-        # Mix track is column 0 (idx 10); the create_audio_clip for it
-        # should reference the source mix file. Re-scan ``received`` each
-        # poll so we see messages that arrive after the assert is set up.
+        # Mix track is the LAST deck (idx 10 + 8 = 18); the create_audio_clip
+        # for it should reference the source mix file. Re-scan ``received``
+        # each poll so we see messages that arrive after the assert is set up.
         def saw_mix_clip() -> bool:
             return any(
                 addr == "/live/clip_slot/create_audio_clip"
-                and args[0] == 10
+                and args[0] == 18
                 and args[2] == str(mix_path)
                 for addr, args in received
             )
@@ -443,6 +451,9 @@ def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
         # _deck_cells records the mix cell so the API reports it as loaded.
         assert (0, "mix") in bridge._deck_cells
         assert bridge._deck_cells[(0, "mix")] == 7
+        # Drums landed on the A side (empty row → _pick_side picks 'a').
+        assert (0, "drums_a") in bridge._deck_cells
+        assert bridge._deck_cells[(0, "drums_a")] == 7
     finally:
         bridge.stop()
         fake_live_listener.stop()
@@ -477,14 +488,18 @@ def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):
         # No mix entry in deck_cells — single-stem load doesn't touch it.
         mix_cells = [k for k in bridge._deck_cells if k[1] == "mix"]
         assert mix_cells == []
+        # The drums stem landed on the A side (empty row → 'a').
+        assert (0, "drums_a") in bridge._deck_cells
+        assert (0, "drums_b") not in bridge._deck_cells
     finally:
         bridge.stop()
         fake_live_listener.stop()
 
 
 def test_bridge_push_track_to_live_include_stems_false_loads_no_cells():
-    """include_stems=False loads zero cells but still provisions the 5
-    reusable deck columns so future loads have somewhere to land."""
+    """include_stems=False loads zero cells but still provisions the 9
+    reusable deck columns (8 stem decks A/B × 4 roles + mix) so future
+    loads have somewhere to land."""
     listen_port = _free_port()
     send_port = _free_port()
     fake_live_listener = AbletonOSCListener(port=send_port)
@@ -504,9 +519,13 @@ def test_bridge_push_track_to_live_include_stems_false_loads_no_cells():
         result = bridge.push_track_to_live(
             _stub_track(), [], include_stems=False
         )
-        # All 5 deck columns get provisioned on first call.
+        # All 9 deck columns get provisioned on first call.
         assert set(result["track_indices"].keys()) == {
-            "mix", "drums", "bass", "vocals", "other"
+            "drums_a", "drums_b",
+            "bass_a", "bass_b",
+            "vocals_a", "vocals_b",
+            "other_a", "other_b",
+            "mix",
         }
         # But nothing actually loaded since kinds resolved to [].
         assert result["stems_loaded"] == 0
@@ -514,7 +533,7 @@ def test_bridge_push_track_to_live_include_stems_false_loads_no_cells():
             lambda: sum(
                 1 for a, _ in received if a == "/live/song/create_audio_track"
             )
-            == 5
+            == 9
         )
     finally:
         bridge.stop()
@@ -563,7 +582,10 @@ def test_bridge_push_track_to_live_proceeds_when_live_unreachable():
         result = bridge.push_track_to_live(
             _stub_track(), [], include_stems=False, num_tracks_timeout=0.05
         )
-        assert result["track_indices"]["mix"] == 0
+        # Live-unreachable path defaults start_index=0; mix is the LAST
+        # deck column so it lands at idx 8 (after 8 stem decks).
+        assert result["track_indices"]["drums_a"] == 0
+        assert result["track_indices"]["mix"] == 8
         assert any("num_tracks" in w for w in result["warnings"])
     finally:
         bridge.stop()
