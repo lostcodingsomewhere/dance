@@ -248,11 +248,13 @@ def test_writer_emits_root_ableton_with_known_attrs(tmp_path: Path):
         assert root.get(k) == v, f"attr {k} mismatch"
 
 
-def test_writer_emits_five_audio_tracks(tmp_path: Path):
+def test_writer_emits_nine_deck_audio_tracks(tmp_path: Path):
+    """Deck-pair layout: 8 stem decks (A/B per role) + 1 mix = 9. Always
+    emits all 9 for consistent APC40 layout; B-side gets empty clip slots."""
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    assert len(audio_tracks) == 5
+    assert len(audio_tracks) == 9
 
 
 def test_writer_emits_one_main_track_with_correct_tempo(tmp_path: Path):
@@ -269,16 +271,66 @@ def test_writer_track_color_palette(tmp_path: Path):
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # The writer orders tracks as drums/bass/vocals/other/mix (STEM_ORDER).
+    # The writer orders tracks per DECK_ORDER: 8 stem decks (A/B per
+    # role) then mix.
     names = [t.find("./Name/EffectiveName").get("Value") for t in audio_tracks]
-    assert names == ["Drums", "Bass", "Vocals", "Other", "Mix"]
+    assert names == [
+        "Drums A", "Drums B",
+        "Bass A", "Bass B",
+        "Vocals A", "Vocals B",
+        "Other A", "Other B",
+        "Mix",
+    ]
 
-    for t, expected_kind in zip(audio_tracks, ("drums", "bass", "vocals", "other", "mix")):
+    expected_kinds = (
+        "drums", "drums", "bass", "bass", "vocals", "vocals",
+        "other", "other", "mix",
+    )
+    for t, src in zip(audio_tracks, expected_kinds):
         color_idx = int(t.find("./ColorIndex").get("Value"))
-        assert color_idx == STEM_COLOR_INDEX[expected_kind], (
-            f"color for {expected_kind!r} should be {STEM_COLOR_INDEX[expected_kind]}, "
-            f"got {color_idx}"
+        assert color_idx == STEM_COLOR_INDEX[src], (
+            f"color for {src!r} should be {STEM_COLOR_INDEX[src]}, got {color_idx}"
         )
+
+
+def test_writer_crossfader_assignment_per_side(tmp_path: Path):
+    """A-side decks → 0 (A), B-side decks → 2 (B), mix → 1 (no binding)."""
+    xml = build_live_set_xml(_build_minimal_spec(tmp_path))
+    root = etree.fromstring(xml)
+    audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
+    expected = ["0", "2", "0", "2", "0", "2", "0", "2", "1"]
+    for t, want in zip(audio_tracks, expected):
+        manual = t.find("./DeviceChain/Mixer/CrossFadeState/Manual")
+        assert manual is not None, f"track {t.find('./Name/EffectiveName').get('Value')} missing crossfade"
+        assert manual.get("Value") == want, (
+            f"crossfade for {t.find('./Name/EffectiveName').get('Value')} expected {want}, "
+            f"got {manual.get('Value')}"
+        )
+
+
+def test_writer_b_side_decks_have_empty_clip_slots(tmp_path: Path):
+    """B-side decks ship with empty clip slot 0 — ready to receive an
+    incoming track's stems for transitions. Slot itself is present (a
+    real ClipSlot element); the AudioClip child is just absent."""
+    xml = build_live_set_xml(_build_minimal_spec(tmp_path))
+    root = etree.fromstring(xml)
+    audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
+    # B-side decks are indices 1, 3, 5, 7 in DECK_ORDER.
+    for i in (1, 3, 5, 7):
+        t = audio_tracks[i]
+        clip = t.find(
+            "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
+        )
+        name = t.find("./Name/EffectiveName").get("Value")
+        assert clip is None, f"B-side deck {name} unexpectedly has a clip"
+    # A-side decks DO have a clip in slot 0.
+    for i in (0, 2, 4, 6, 8):  # 8 is mix, also gets a clip
+        t = audio_tracks[i]
+        clip = t.find(
+            "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
+        )
+        name = t.find("./Name/EffectiveName").get("Value")
+        assert clip is not None, f"A-side deck {name} missing clip"
 
 
 def test_writer_emits_one_locator_per_entry(tmp_path: Path):
@@ -306,10 +358,10 @@ def test_writer_clip_references_actual_file_path(tmp_path: Path):
     xml = build_live_set_xml(spec)
     root = etree.fromstring(xml)
 
-    # First AudioTrack is drums (per STEM_ORDER). Its SampleRef's FileRef
-    # Path should equal the resolved drums.wav we wrote above.
-    drums = root.find("./LiveSet/Tracks/AudioTrack")
-    path_node = drums.find(
+    # First AudioTrack is drums_a (per DECK_ORDER). Its SampleRef's
+    # FileRef Path should equal the resolved drums.wav we wrote above.
+    drums_a = root.find("./LiveSet/Tracks/AudioTrack")
+    path_node = drums_a.find(
         "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
     )
     assert path_node is not None
@@ -329,11 +381,13 @@ def test_writer_rejects_empty_stems(tmp_path: Path):
 
 
 def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
-    """The mix track's clip should be muted so playback uses the stems."""
+    """The mix track's clip should be muted so playback uses the stems.
+    A-side stem clips should not be disabled. B-side decks have no
+    clip at all (see test_writer_b_side_decks_have_empty_clip_slots)."""
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # Mix is last per STEM_ORDER.
+    # Mix is last per DECK_ORDER.
     mix = audio_tracks[-1]
     disabled = mix.find(
         "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
@@ -341,9 +395,9 @@ def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
     assert disabled is not None
     assert disabled.get("Value") == "true"
 
-    # The other stems should NOT be disabled.
-    for t in audio_tracks[:-1]:
-        d = t.find(
+    # A-side stem decks (0, 2, 4, 6) should NOT be disabled.
+    for i in (0, 2, 4, 6):
+        d = audio_tracks[i].find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
         )
         assert d.get("Value") == "false"
@@ -383,9 +437,9 @@ def test_generator_structure_matches_spec(
     out = AlsGenerator(session, als_settings).write(track)
     root = etree.fromstring(gzip.decompress(out.read_bytes()))
 
-    # 5 AudioTrack
+    # 9 AudioTrack (8 stem decks A/B per role + mix)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    assert len(audio_tracks) == 5
+    assert len(audio_tracks) == 9
 
     # 1 MainTrack with tempo == 128.0
     tempo = root.find("./LiveSet/MainTrack/DeviceChain/Mixer/Tempo/Manual")
@@ -409,14 +463,15 @@ def test_generator_stem_to_track_mapping(
     by_name = {
         t.find("./Name/EffectiveName").get("Value"): t for t in audio_tracks
     }
+    # A-side decks carry the audio; B-side decks ship empty for transitions.
     for kind in ("drums", "bass", "vocals", "other"):
-        track_el = by_name[kind.capitalize()]
+        track_el = by_name[f"{kind.capitalize()} A"]
         path_el = track_el.find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
         )
         assert path_el is not None
         assert path_el.get("Value") == str(stem_paths[kind].resolve()), (
-            f"track {kind} should reference {stem_paths[kind]}"
+            f"track {kind}_a should reference {stem_paths[kind]}"
         )
 
     # And mix references the original file.
@@ -459,10 +514,11 @@ def test_generator_track_colors(als_settings, session, complete_track_with_stems
         )
         for t in root.findall("./LiveSet/Tracks/AudioTrack")
     }
-    assert by_name["Drums"] == STEM_COLOR_INDEX["drums"]
-    assert by_name["Bass"] == STEM_COLOR_INDEX["bass"]
-    assert by_name["Vocals"] == STEM_COLOR_INDEX["vocals"]
-    assert by_name["Other"] == STEM_COLOR_INDEX["other"]
+    # A-side and B-side decks share the source-stem color (different sides
+    # of the same role group visually).
+    for src in ("drums", "bass", "vocals", "other"):
+        assert by_name[f"{src.capitalize()} A"] == STEM_COLOR_INDEX[src]
+        assert by_name[f"{src.capitalize()} B"] == STEM_COLOR_INDEX[src]
     assert by_name["Mix"] == STEM_COLOR_INDEX["mix"]
 
 
@@ -526,7 +582,10 @@ def test_generator_404s_when_no_stems(als_settings, session, make_track):
 def test_generator_handles_missing_stem_kinds_gracefully(
     als_settings, session, make_track, tmp_path
 ):
-    """Only 2 of 4 stems should still yield a Set with 3 AudioTracks (2 stems + mix)."""
+    """Only 2 of 4 stems still yields the full 9-track deck-pair layout —
+    every deck slot present for a consistent APC40 mapping. Missing-stem
+    A-side decks ship with empty clip slot 0 (waiting for the user to
+    drop a stem in by hand or via a load gesture)."""
     full_mix = tmp_path / "library" / "x.wav"
     full_mix.parent.mkdir(parents=True, exist_ok=True)
     full_mix.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
@@ -549,4 +608,23 @@ def test_generator_handles_missing_stem_kinds_gracefully(
     root = etree.fromstring(gzip.decompress(out.read_bytes()))
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
     names = sorted(t.find("./Name/EffectiveName").get("Value") for t in audio_tracks)
-    assert names == ["Drums", "Mix", "Vocals"]
+    # All 9 deck tracks always present, even when source stems are missing.
+    assert names == [
+        "Bass A", "Bass B",
+        "Drums A", "Drums B",
+        "Mix",
+        "Other A", "Other B",
+        "Vocals A", "Vocals B",
+    ]
+    # Drums and vocals A-side decks have a clip; bass and other A-side
+    # decks ship empty (no stem provided).
+    by_name = {
+        t.find("./Name/EffectiveName").get("Value"): t for t in audio_tracks
+    }
+    clip_path = (
+        "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
+    )
+    assert by_name["Drums A"].find(clip_path) is not None
+    assert by_name["Vocals A"].find(clip_path) is not None
+    assert by_name["Bass A"].find(clip_path) is None
+    assert by_name["Other A"].find(clip_path) is None

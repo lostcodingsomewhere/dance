@@ -64,6 +64,10 @@ ABLETON_ROOT_ATTRS = {
 # Verified by opening a generated .als in Live:
 #   0=pink/salmon  1=orange-red  2=brown  4=lime  10=light-blue
 #   13=white-ish   25=magenta   39=light-purple   64=dark-blue
+#
+# Indexed by SOURCE stem kind. A and B deck channels share the same
+# color so the eye groups them as "the same role" — tracks already
+# distinguish A/B by name + crossfader assignment.
 STEM_COLOR_INDEX: dict[str, int] = {
     "drums": 1,    # orange-red — strongest warm hue we observed
     "bass": 2,     # brown/mustard
@@ -73,8 +77,64 @@ STEM_COLOR_INDEX: dict[str, int] = {
 }
 
 
-# Canonical track order — drums/bass/vocals/other/mix.
-STEM_ORDER: tuple[str, ...] = ("drums", "bass", "vocals", "other", "mix")
+# Canonical track order — 8 stem decks (A/B per role) then mix. MIX
+# lives last so APC40's default 8-strip view maps 1:1 to the stem decks.
+# Mirror of dance.osc.bridge.AbletonBridge._DECK_KINDS — kept in sync by
+# hand; the bridge tests catch drift on the runtime side.
+DECK_ORDER: tuple[str, ...] = (
+    "drums_a", "drums_b",
+    "bass_a", "bass_b",
+    "vocals_a", "vocals_b",
+    "other_a", "other_b",
+    "mix",
+)
+
+# Back-compat alias — old callers (and docs) referenced STEM_ORDER.
+# Points at the new 9-entry shape; consumers that need the pre-pair
+# source kinds should use SOURCE_STEM_KINDS instead.
+STEM_ORDER = DECK_ORDER
+SOURCE_STEM_KINDS: tuple[str, ...] = ("drums", "bass", "vocals", "other")
+
+
+# Crossfader assignment per deck side. Live's CrossFadeState/Manual:
+# 0 = A (left), 1 = None (always audible), 2 = B (right). A-side decks
+# get A, B-side decks get B, mix gets None so it's audible regardless
+# of crossfader position when the user chooses to unmute it.
+_CROSSFADE_A = "0"
+_CROSSFADE_NONE = "1"
+_CROSSFADE_B = "2"
+
+
+def _source_kind_of(deck_kind: str) -> str:
+    """drums_a → drums; mix → mix."""
+    if deck_kind.endswith(("_a", "_b")):
+        return deck_kind[:-2]
+    return deck_kind
+
+
+def _side_of(deck_kind: str) -> str | None:
+    """drums_a → 'a'; mix → None."""
+    if deck_kind.endswith("_a"):
+        return "a"
+    if deck_kind.endswith("_b"):
+        return "b"
+    return None
+
+
+def _crossfade_value_for(deck_kind: str) -> str:
+    side = _side_of(deck_kind)
+    if side == "a":
+        return _CROSSFADE_A
+    if side == "b":
+        return _CROSSFADE_B
+    return _CROSSFADE_NONE
+
+
+def _display_for(deck_kind: str) -> str:
+    """Title-case display name: 'drums_a' → 'Drums A', 'mix' → 'Mix'."""
+    side = _side_of(deck_kind)
+    src = _source_kind_of(deck_kind).title()
+    return f"{src} {side.upper()}" if side else src
 
 
 # Starting ID for our injected AudioTracks. Template uses 8 and 14; we go
@@ -245,7 +305,14 @@ def _set_tempo(liveset: etree._Element, bpm: float) -> None:
 def _replace_tracks(
     liveset: etree._Element, stems: Sequence[StemEntry], bpm: float
 ) -> None:
-    """Remove default Midi/Audio tracks, insert one AudioTrack per stem."""
+    """Remove default Midi/Audio tracks, insert 9 deck-pair AudioTracks
+    (drums_a/b, bass_a/b, vocals_a/b, other_a/b, mix).
+
+    Always emits all 9 deck tracks for consistent layout. The offline
+    path is a single-song snapshot so only A-side + mix get audio; B-side
+    tracks ship with empty clip slots ready to accept an incoming track's
+    stems for transitions.
+    """
     tracks_el = liveset.find("Tracks")
     if tracks_el is None:
         raise RuntimeError("template missing <Tracks>")
@@ -270,19 +337,24 @@ def _replace_tracks(
             insert_idx = i
             break
 
-    by_kind = {s.kind: s for s in stems}
-    ordered: list[StemEntry] = [by_kind[k] for k in STEM_ORDER if k in by_kind]
-    seen = {s.kind for s in ordered}
-    for s in stems:
-        if s.kind not in seen:
-            ordered.append(s)
-            seen.add(s.kind)
+    by_source = {s.kind: s for s in stems}
 
     next_pointee_id = _POINTEE_ID_START
-    for i, stem in enumerate(ordered):
+    for i, deck_kind in enumerate(DECK_ORDER):
         clone = deepcopy(template_at)
         next_pointee_id = _renumber_pointees(clone, next_pointee_id)
-        _populate_audio_track(clone, track_id=_FIRST_TRACK_ID + i, entry=stem, bpm=bpm)
+        # Audio routing: A-side decks + mix get the source file. B-side
+        # decks stay empty (ready for an incoming track's stems).
+        side = _side_of(deck_kind)
+        source = _source_kind_of(deck_kind)
+        stem_for_clip = by_source.get(source) if side != "b" else None
+        _populate_audio_track(
+            clone,
+            track_id=_FIRST_TRACK_ID + i,
+            deck_kind=deck_kind,
+            entry=stem_for_clip,
+            bpm=bpm,
+        )
         tracks_el.insert(insert_idx + i, clone)
 
     # Tell Live our highest Pointee Id so its allocator picks a value
@@ -310,21 +382,31 @@ def _renumber_pointees(subtree: etree._Element, start_id: int) -> int:
 
 
 def _populate_audio_track(
-    at: etree._Element, *, track_id: int, entry: StemEntry, bpm: float
+    at: etree._Element,
+    *,
+    track_id: int,
+    deck_kind: str,
+    entry: StemEntry | None,
+    bpm: float,
 ) -> None:
-    """Fill in a cloned AudioTrack with our stem's name, color, and clip."""
+    """Fill in a cloned AudioTrack: name + color from ``deck_kind`` (so
+    every deck slot gets the right identity even when empty), crossfader
+    assignment per side, and a clip in slot 0 iff ``entry`` is set.
+    """
     at.set("Id", str(track_id))
 
+    display = _display_for(deck_kind)
     name = at.find("Name")
     if name is not None:
         eff = name.find("EffectiveName")
         if eff is not None:
-            eff.set("Value", entry.display_name())
+            eff.set("Value", display)
         usr = name.find("UserName")
         if usr is not None:
-            usr.set("Value", entry.display_name())
+            usr.set("Value", display)
 
-    color_idx = STEM_COLOR_INDEX.get(entry.kind, 0)
+    source = _source_kind_of(deck_kind)
+    color_idx = STEM_COLOR_INDEX.get(source, 0)
     color = at.find("Color")
     if color is not None:
         color.set("Value", str(color_idx))
@@ -334,6 +416,12 @@ def _populate_audio_track(
     if ci is None:
         ci = etree.SubElement(at, "ColorIndex")
     ci.set("Value", str(color_idx))
+
+    # Crossfader assignment: A → 0, B → 2, mix → 1 (no binding). Modifies
+    # the template's existing CrossFadeState/Manual leaf, doesn't create.
+    cf_manual = at.find("DeviceChain/Mixer/CrossFadeState/Manual")
+    if cf_manual is not None:
+        cf_manual.set("Value", _crossfade_value_for(deck_kind))
 
     csl = at.find("DeviceChain/MainSequencer/ClipSlotList")
     if csl is None or len(csl) == 0:
@@ -347,8 +435,13 @@ def _populate_audio_track(
         value = etree.SubElement(inner, "Value")
     for child in list(value):
         value.remove(child)
+    # No entry → empty slot (B-side decks, or A-side decks for a song
+    # that's missing this stem). The slot is still a real ClipSlot
+    # element, just with no AudioClip inside — ready to receive a drop.
+    if entry is None:
+        return
     _build_audio_clip(
-        value, clip_id=track_id, entry=entry, bpm=bpm, muted=(entry.kind == "mix")
+        value, clip_id=track_id, entry=entry, bpm=bpm, muted=(deck_kind == "mix")
     )
 
 
