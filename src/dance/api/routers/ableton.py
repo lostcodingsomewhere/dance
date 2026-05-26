@@ -73,6 +73,45 @@ def stop_deck(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return bridge.stop_deck(side)
 
 
+@router.post("/fx/filter/{side}")
+def fx_filter(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Toggle the parallel filter (HPF) send for Deck A or B.
+
+    Requires a "Filter" return track in the .als template. Without it,
+    returns a warning telling the user to author one per the runbook.
+    """
+    if side not in ("a", "b"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"side must be 'a' or 'b', got {side!r}",
+        )
+    return bridge.toggle_filter(side)
+
+
+@router.post("/fx/{name}")
+def fx_fire(name: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Fire a named one-shot FX clip (e.g. ``riser``). Quantized to the
+    next bar by the clip's LaunchQuantisation."""
+    if not name or not name.replace("_", "").isalnum():
+        raise HTTPException(
+            status_code=400,
+            detail=f"FX name must be alphanumeric, got {name!r}",
+        )
+    return bridge.fire_fx(name)
+
+
+@router.get("/fx/state")
+def fx_state(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
+    """Current FX state — used by the UI to render toggle states."""
+    return {
+        "filter": bridge.filter_state(),
+        "discovered": {
+            "returns": dict(bridge._fx_return_idx),
+            "scenes": dict(bridge._fx_scene_idx),
+        },
+    }
+
+
 @router.post("/pfl/{side}")
 def set_pfl(side: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     """Route Deck A, Deck B, or neither into the headphone cue.

@@ -1218,6 +1218,84 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         </div>
       `},
 
+      { id:"6.4", title:"FX — Filter Sweeps + Risers", duration:"15 min", tag:"hands-on", html:`
+        <h1>FX — Filter Sweeps + Risers</h1>
+        <div class="meta">
+          <span class="meta-item">Lesson 6.4</span>
+          <span class="meta-item">~15 min</span>
+          <span class="tag tag-hands-on">Hands-On</span>
+        </div>
+        <div class="expert-take"><p>Two FX moves cover 90% of pro transitions: an HPF (high-pass filter) to thin out the outgoing deck, and a riser to hype the drop on the incoming deck. Add them and your transitions go from "competent" to "this DJ has been doing this for years."</p></div>
+
+        <h2>Why These Two FX</h2>
+        <p>Watch any pro DJ for an hour and count their effects. You'll see filter sweeps and risers every transition. Reverb throws, delay throws, beat repeaters — those are accents (occasional, attention-grabbing). The HPF + riser combo is the workhorse — used routinely to make every blend land cleanly.</p>
+        <ul>
+          <li><strong>HPF (high-pass filter)</strong> — cuts the lows on the outgoing deck. Without it, the bass clash between Deck A and Deck B as you crossfade sounds muddy and disorganized. HPF removes that muddy overlap.</li>
+          <li><strong>Riser</strong> — a 4-bar build-up sample (white noise sweep, drum roll, reverse cymbal) that plays just before the drop, telegraphing to the audience that something big is about to happen.</li>
+        </ul>
+
+        <h2>One-Time Setup (Live Author Step)</h2>
+        <p>Before the HPF and ▲ Riser buttons in the app become active, you need to add a Filter return and a Riser clip to your <code>.als</code> template. This is a 5–10 minute one-time setup in Live — follow <code>docs/proposals/fx-phase-1-runbook.md</code> in the repo for step-by-step instructions.</p>
+        <p>The short version:</p>
+        <ol>
+          <li>In Live, right-click any track header → Create Return Track. Rename to <code>Filter</code> (exact). Drop an Auto Filter on it (Hi-Pass 12 dB, ~400 Hz, resonance 0.30).</li>
+          <li>Create an Audio Track called <code>FX</code>. On a scene below your normal-set scenes, drop a riser sample. Rename the clip to <code>Riser</code>. Set Warp ON, Loop OFF, Launch Mode = Trigger, Quantization = 1 Bar.</li>
+          <li>Save the <code>.als</code>, then re-extract <code>blank_live12.xml</code> from it so future <code>dance export-als</code> calls include the new structure.</li>
+          <li>In the companion app, click <strong>↻ RESYNC</strong> in the master header.</li>
+          <li>The HPF buttons in each deck header + the ▲ Riser button between the decks should now enable.</li>
+        </ol>
+
+        <h2>Filter Sweep: The Bass-Free Transition</h2>
+        <div class="step-block">
+          <div class="step-title">HPF + Crossfade — Step by Step</div>
+          <ol>
+            <li>Load a song to Deck A (▶/⤒A on a SONG rec card). Fire it. Crossfader at A (full left).</li>
+            <li>Load a different song to Deck B (⤒B). Don't fire yet.</li>
+            <li>At a phrase boundary 16 bars before your intended transition: click <strong>HPF</strong> on Deck A. The button turns rose-pink. Live's Send-A on each of Deck A's 5 tracks jumps to 100% — all 4 stems + the mix reference are now routing through the filter.</li>
+            <li>You'll hear Deck A audibly thin out — the low end vanishes, leaving the highs (hats, vocals, leads). It's not silent, just bass-free. Perfect for blending with Deck B.</li>
+            <li>Fire Deck B's anchor scene (its ▶ button or APC40 scene-launch row).</li>
+            <li>Slide the crossfader from A to B over 8 bars. Because A has no bass, the two basses don't clash. Deck B's bass slots in cleanly underneath.</li>
+            <li>When the crossfader's at B (full right), click HPF on Deck A again to toggle off. Sends snap back to 0. Deck A is now full-range again — but it's also faded out by the crossfader, so silent on master.</li>
+          </ol>
+          <div class="note">The HPF doesn't disconnect Deck A — A is still playing, just routed through the filter parallel to its dry signal. If you want to make A fully silent before toggling HPF off, fade Deck A's faders to 0 first, or use ■ on the deck header to halt all of A's clips.</div>
+        </div>
+
+        <h2>Riser: Heralding the Drop</h2>
+        <div class="step-block">
+          <div class="step-title">Drop on Bar 1</div>
+          <ol>
+            <li>Mid-transition (HPF active on Deck A, crossfader half-way to B): identify when Deck B's anchored track is about to hit its drop. Look at the <em>section bands</em> on Deck B's waveform — the rose-red band is the Drop section.</li>
+            <li>4 bars before Deck B's drop, click <strong>▲ Riser</strong> (centered above the two decks).</li>
+            <li>The riser fires on the next bar boundary (1-Bar quantization). It builds for 4 bars. As it peaks, Deck B's drop lands.</li>
+            <li>Slam the crossfader fully to B at the bar of the drop. Audience feels: build-up → impact → energy.</li>
+          </ol>
+          <div class="note">If the riser feels too obvious, try firing it 8 bars out instead of 4 — it'll be more atmospheric build, less obvious "here comes the drop" telegraphing.</div>
+        </div>
+
+        <h2>The Combined Transition (Pro Move)</h2>
+        <p>The fully-loaded transition uses both FX together:</p>
+        <div class="diagram">Bar -16: Click HPF on Deck A. Bass starts thinning.
+Bar -8:  Fire Deck B's scene. Both decks playing, A still filtered.
+Bar -4:  Click ▲ Riser. Build starts on next bar.
+Bar  0:  Riser peaks. Slam crossfader to B. Deck B's drop lands.
+Bar +1:  Click HPF off on Deck A (it's silent now anyway, just housekeeping).</div>
+        <p>That's the canonical 16-bar transition every pro DJ does. With the buttons in our app it's three clicks plus a crossfader move — instead of the manual filter-twiddling + cue-firing of a traditional rig.</p>
+
+        <h2>When NOT to Use FX</h2>
+        <p>Risers everywhere = the audience tunes them out. Use FX selectively — 2 risers per hour is plenty. The HPF you can use on every transition (it's structural, not flashy). Save the riser for moments where the energy actually warrants a build-up.</p>
+
+        <div class="win-block">
+          <div class="win-label">You Got It When</div>
+          <ul>
+            <li>You've completed the Live author setup and both HPF + ▲ Riser buttons are active in the app</li>
+            <li>You can hear the audible difference HPF makes on a deck (less low end, full mids/highs)</li>
+            <li>You've done at least one transition using HPF on the outgoing deck</li>
+            <li>You've fired the Riser at least once and felt it land on a downbeat (1-bar quantization)</li>
+            <li>You can describe when NOT to use FX (over-use kills their impact)</li>
+          </ul>
+        </div>
+      `},
+
     ]
   },
 

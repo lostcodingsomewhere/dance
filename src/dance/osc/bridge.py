@@ -118,6 +118,28 @@ class AbletonBridge:
         # re-create the deck tracks.
         self._deck_columns: dict[str, int] | None = None
 
+        # FX state — populated by ``_discover_fx_tracks`` on first push and
+        # whenever the user re-syncs. Lazy because the FX tracks live in
+        # the .als template, not in code, and only exist after the user
+        # has authored them per docs/proposals/fx-phase-1-runbook.md.
+        #
+        # ``_fx_return_idx[name]`` → Live track index of an FX return
+        # (e.g. "Filter" → 12). Used by per-deck filter toggle to pick the
+        # right Send slot when ramping send-A levels.
+        # ``_fx_scene_idx[name]`` → scene index hosting a one-shot FX clip
+        # (e.g. "Riser" → 7). Fired by name via /transport/fx/{name}.
+        # ``_fx_track_for_scene[name]`` → which track index hosts that
+        # one-shot clip (the riser sample lives on a "FX" track or on the
+        # Riser return itself, configurable per the runbook).
+        self._fx_return_idx: dict[str, int] = {}
+        self._fx_scene_idx: dict[str, int] = {}
+        self._fx_track_for_scene: dict[str, int] = {}
+        # Per-deck filter on/off state. Cheap UI mirror so the toggle
+        # button can read "is this deck currently filtered?" without
+        # round-tripping. Authoritative state is Live's actual send
+        # levels, but those are buffered by AbletonOSC and can lag.
+        self._filter_active: dict[str, bool] = {"a": False, "b": False}
+
         # (scene_index, kind) -> dance Track id. One entry per loaded cell in
         # Live's session view. Cells in a single row can come from different
         # tracks (the live-remixing model); anchor mode is just the case
@@ -871,6 +893,154 @@ class AbletonBridge:
             except OSError:  # pragma: no cover - best-effort
                 pass
         return {"ok": True, "side": side, "tracks_affected": affected}
+
+    # ------------------------------------------------------------------
+    # FX returns — Filter (Phase 1), Riser one-shot (Phase 2).
+    # Authoring lives in the .als template (the user adds the return
+    # tracks + clip slots per docs/proposals/fx-phase-1-runbook.md);
+    # the bridge discovers them by name at runtime. Missing FX = no-op
+    # with a warning, so the rest of the rig keeps working.
+    # ------------------------------------------------------------------
+
+    # Track names the bridge looks for during _discover_fx_tracks.
+    # Returns are matched as Live tracks whose name is EXACTLY one of:
+    _FX_RETURN_NAMES: tuple[str, ...] = ("Filter", "Reverb", "Delay", "Riser")
+    # One-shot FX clip locations: clip name → expected track-name +
+    # scene-index hint. Bridge will scan track names to find the track,
+    # then look up the clip slot by clip name.
+    _FX_CLIP_NAMES: tuple[str, ...] = ("Riser",)
+
+    def discover_fx_tracks(self, *, timeout: float = 1.0) -> dict[str, Any]:
+        """Scan Live's track names + scene names to map our FX clips and
+        return tracks. Idempotent — called on bridge start and whenever
+        the user wires `/decks/resync`.
+
+        Returns ``{"returns": {...}, "scenes": {...}}`` for telemetry.
+        Tolerant of missing FX — the rig works without them; just the
+        FX buttons no-op.
+        """
+        names = self.get_track_names(timeout=timeout)
+        if names is None:
+            return {"warning": "Live unreachable; FX not discovered"}
+        # Returns: match by exact track name.
+        for i, n in enumerate(names):
+            if n in self._FX_RETURN_NAMES:
+                self._fx_return_idx[n.lower()] = i
+        # One-shot scenes: scan clip names in each FX return + a dedicated
+        # "FX" track if present. We rely on naming the clips like
+        # "Riser" / "Reverb Hit" / "Delay Throw" so the bridge knows
+        # which FX a fired scene represents.
+        for fx_name in self._FX_CLIP_NAMES:
+            # Look for a clip on the matching return track first; fall
+            # back to a generic "FX" track if the user prefers that
+            # layout.
+            for candidate_track_name in (fx_name, "FX"):
+                for i, n in enumerate(names):
+                    if n != candidate_track_name:
+                        continue
+                    slot = self._find_clip_slot(i, fx_name, timeout=timeout)
+                    if slot is not None:
+                        self._fx_scene_idx[fx_name.lower()] = slot
+                        self._fx_track_for_scene[fx_name.lower()] = i
+                        break
+                if fx_name.lower() in self._fx_scene_idx:
+                    break
+        return {
+            "returns": dict(self._fx_return_idx),
+            "scenes": dict(self._fx_scene_idx),
+        }
+
+    def _find_clip_slot(
+        self, track_idx: int, clip_name: str, *, timeout: float = 0.3
+    ) -> int | None:
+        """Walk a track's clip slots looking for a named clip. Returns
+        the scene index, or None if not found within ``max_scenes``.
+        Reuses the existing synchronous _get_clip_name helper used by
+        the resync flow."""
+        max_scenes = 16
+        target = clip_name.strip().lower()
+        for s in range(max_scenes):
+            name = self._get_clip_name(track_idx, s, timeout=timeout)
+            if name and name.strip().lower() == target:
+                return s
+        return None
+
+    def toggle_filter(self, side: str) -> dict[str, Any]:
+        """Toggle the parallel filter send for a deck side.
+
+        ON  → all 5 deck tracks on this side (4 stems + mix) send 100%
+              to the Filter return. Filter is HPF (cuts lows) — that
+              side audibly thins out.
+        OFF → sends back to 0%; dry signal returns.
+
+        Requires a "Filter" return track in the .als template (Live-
+        author step). Without it, no-op with a warning.
+
+        Returns ``{"ok": bool, "side": str, "active": bool}``.
+        """
+        if side not in ("a", "b"):
+            return {"ok": False, "warning": f"side must be 'a' or 'b', got {side!r}"}
+        if "filter" not in self._fx_return_idx:
+            # Try once to discover — user may have just added the return.
+            self.discover_fx_tracks(timeout=0.3)
+        if "filter" not in self._fx_return_idx:
+            return {
+                "ok": False,
+                "warning": "No 'Filter' return track in Live. "
+                "Author one per docs/proposals/fx-phase-1-runbook.md.",
+            }
+        if self._deck_columns is None:
+            return {"ok": False, "warning": "no deck columns staged yet"}
+        # Compute the Send index for this Filter return. Live's send
+        # index counts return tracks in order (Send 0 = Return A,
+        # Send 1 = Return B, ...). We approximate via track-index
+        # ordering relative to the first return.
+        return_indices = sorted(self._fx_return_idx.values())
+        if not return_indices:
+            return {"ok": False, "warning": "no FX returns"}
+        send_index = return_indices.index(self._fx_return_idx["filter"])
+        # Flip state.
+        now_active = not self._filter_active[side]
+        level = 1.0 if now_active else 0.0
+        for kind, idx in self._deck_columns.items():
+            if not kind.endswith(f"_{side}"):
+                continue
+            try:
+                self.client.set_track_send(idx, send_index, level)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        self._filter_active[side] = now_active
+        return {"ok": True, "side": side, "active": now_active}
+
+    def fire_fx(self, name: str) -> dict[str, Any]:
+        """Fire a named one-shot FX clip (e.g. ``riser``). Quantized to
+        the next bar by LaunchQuantisation = 1 Bar on each clip.
+
+        Requires the named FX clip to exist in the .als template —
+        usually on a return track or a dedicated "FX" track. Without
+        it, no-op with a warning.
+        """
+        key = name.strip().lower()
+        if key not in self._fx_scene_idx or key not in self._fx_track_for_scene:
+            self.discover_fx_tracks(timeout=0.3)
+        if key not in self._fx_scene_idx:
+            return {
+                "ok": False,
+                "warning": f"No FX clip named {name!r}. "
+                "Author one per docs/proposals/fx-phase-1-runbook.md.",
+            }
+        track_idx = self._fx_track_for_scene[key]
+        scene_idx = self._fx_scene_idx[key]
+        try:
+            self.client.fire_clip(track_idx, scene_idx)
+        except OSError as exc:  # pragma: no cover
+            return {"ok": False, "warning": f"OSC fire failed: {exc}"}
+        return {"ok": True, "name": key, "track": track_idx, "scene": scene_idx}
+
+    def filter_state(self) -> dict[str, bool]:
+        """Snapshot of which decks currently have filter sends engaged.
+        UI uses this to render the HPF button as toggled-on."""
+        return dict(self._filter_active)
 
     def _pick_side(self, *, scene_index: int) -> str:
         """For a row, return which side ('a' or 'b') to load into.

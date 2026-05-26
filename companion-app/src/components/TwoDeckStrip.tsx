@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
@@ -53,6 +53,27 @@ export function TwoDeckStrip() {
   const stopDeck = useMutation({
     mutationFn: (side: "a" | "b") => api.abletonStopDeck(side),
   });
+  // FX state — light read every 2s so the HPF toggle stays in sync if
+  // the user filters from elsewhere (Live, OSC). Cheap, single endpoint.
+  const fxState = useQuery({
+    queryKey: ["ableton", "fx", "state"],
+    queryFn: api.abletonFxState,
+    refetchInterval: 2000,
+  });
+  const fxFilter = useMutation({
+    mutationFn: (side: "a" | "b") => api.abletonFxFilter(side),
+    onSuccess: () => fxState.refetch(),
+  });
+  const fxFire = useMutation({
+    mutationFn: (name: string) => api.abletonFxFire(name),
+  });
+  const filterActive = fxState.data?.filter ?? { a: false, b: false };
+  const filterAvailable =
+    fxState.data?.discovered?.returns
+    && "filter" in fxState.data.discovered.returns;
+  const riserAvailable =
+    fxState.data?.discovered?.scenes
+    && "riser" in fxState.data.discovered.scenes;
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
@@ -77,7 +98,36 @@ export function TwoDeckStrip() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-2" data-testid="two-deck-strip">
+    <div className="relative" data-testid="two-deck-strip">
+      {/* One-shot FX cluster — sits ON TOP of the deck panels, centered
+          between them. Riser fires the named FX clip; quantized to the
+          next bar by the .als writer's LaunchQuantisation = 1. Disabled
+          (with a tooltip explaining why) when the .als doesn't have a
+          riser clip authored yet. */}
+      <div
+        className="absolute left-1/2 top-0 -translate-x-1/2 z-10 flex items-center gap-1 pt-1"
+        data-testid="fx-cluster"
+      >
+        <button
+          type="button"
+          onClick={() => fxFire.mutate("riser")}
+          disabled={!riserAvailable || fxFire.isPending}
+          title={
+            riserAvailable
+              ? "Fire the Riser one-shot on the next bar"
+              : "No 'Riser' clip in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
+          }
+          aria-label="Fire riser"
+          className={`text-[10px] font-bold uppercase tracking-widest leading-none rounded px-2.5 py-1.5 border transition-colors ${
+            riserAvailable
+              ? "bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
+              : "bg-neutral-900 text-neutral-700 border-neutral-800 cursor-not-allowed"
+          }`}
+        >
+          ▲ Riser
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
       <DeckPanel
         side="a"
         columns={columns}
@@ -91,6 +141,9 @@ export function TwoDeckStrip() {
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "a", sceneIdx })}
         onStopDeck={() => stopDeck.mutate("a")}
+        filterActive={filterActive.a}
+        filterAvailable={!!filterAvailable}
+        onToggleFilter={() => fxFilter.mutate("a")}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
@@ -108,10 +161,14 @@ export function TwoDeckStrip() {
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "b", sceneIdx })}
         onStopDeck={() => stopDeck.mutate("b")}
+        filterActive={filterActive.b}
+        filterAvailable={!!filterAvailable}
+        onToggleFilter={() => fxFilter.mutate("b")}
         onSeek={(track, slot, beats) =>
           seek.mutate({ track, slot, positionBeats: beats })
         }
       />
+      </div>
     </div>
   );
 }
@@ -132,6 +189,9 @@ function DeckPanel({
   onSyncTempo,
   onFireDeck,
   onStopDeck,
+  filterActive,
+  filterAvailable,
+  onToggleFilter,
   onSeek,
 }: {
   side: "a" | "b";
@@ -146,6 +206,9 @@ function DeckPanel({
   onSyncTempo: (bpm: number) => void;
   onFireDeck: (sceneIdx: number) => void;
   onStopDeck: () => void;
+  filterActive: boolean;
+  filterAvailable: boolean;
+  onToggleFilter: () => void;
   onSeek: (track: number, slot: number, beats: number) => void;
 }) {
   const SOURCE_ROLES = ["drums", "bass", "vocals", "other"] as const;
@@ -262,6 +325,9 @@ function DeckPanel({
         onSyncTempo={onSyncTempo}
         onFireDeck={onFireDeck}
         onStopDeck={onStopDeck}
+        filterActive={filterActive}
+        filterAvailable={filterAvailable}
+        onToggleFilter={onToggleFilter}
       />
       <DeckWaveform
         side={side}
@@ -293,6 +359,9 @@ function DeckHeader({
   onSyncTempo,
   onFireDeck,
   onStopDeck,
+  filterActive,
+  filterAvailable,
+  onToggleFilter,
 }: {
   side: "a" | "b";
   sideLabel: string;
@@ -306,6 +375,9 @@ function DeckHeader({
   onSyncTempo: (bpm: number) => void;
   onFireDeck: (sceneIdx: number) => void;
   onStopDeck: () => void;
+  filterActive: boolean;
+  filterAvailable: boolean;
+  onToggleFilter: () => void;
 }) {
   const accentText = side === "a" ? "text-violet-200" : "text-indigo-200";
   // Sync gesture: snap the project's master tempo to this deck's
@@ -373,6 +445,29 @@ function DeckHeader({
         }`}
       >
         PFL
+      </button>
+      <button
+        type="button"
+        onClick={onToggleFilter}
+        disabled={!filterAvailable}
+        title={
+          !filterAvailable
+            ? "No 'Filter' return in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
+            : filterActive
+            ? `Filter off — Deck ${sideLabel} returns to full range`
+            : `Filter on — HPF Deck ${sideLabel} (cuts lows for transitions)`
+        }
+        aria-pressed={filterActive}
+        aria-label={`HPF Deck ${sideLabel}`}
+        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+          !filterAvailable
+            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
+            : filterActive
+            ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
+            : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
+        }`}
+      >
+        HPF
       </button>
       {anchorCell ? (
         <>

@@ -490,6 +490,30 @@ export function abletonStopDeck(
   return request(`/ableton/transport/stop-deck/${side}`, { method: "POST" });
 }
 
+export function abletonFxFilter(
+  side: "a" | "b",
+): Promise<{ ok: boolean; side: string; active: boolean; warning?: string }> {
+  return request(`/ableton/fx/filter/${side}`, { method: "POST" });
+}
+
+export function abletonFxFire(
+  name: string,
+): Promise<{ ok: boolean; name: string; warning?: string }> {
+  return request(`/ableton/fx/${name}`, { method: "POST" });
+}
+
+export interface FxState {
+  filter: Record<"a" | "b", boolean>;
+  discovered: {
+    returns: Record<string, number>;
+    scenes: Record<string, number>;
+  };
+}
+
+export function abletonFxState(): Promise<FxState> {
+  return request("/ableton/fx/state");
+}
+
 export function abletonSetTempo(bpm: number): Promise<void> {
   return request<void>("/ableton/tempo", {
     method: "POST",
