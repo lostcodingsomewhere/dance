@@ -221,14 +221,16 @@ class AbletonBridge:
             cols = data.get("deck_columns")
             is_pre_pair_shape = False
             if isinstance(cols, dict):
-                # If the persisted columns dict doesn't include the new A/B
-                # deck kinds, it's a pre-pair shape (5 columns). Drop it
-                # entirely so the next push_track_to_live recreates the
-                # full 9-deck layout in Live. Migrating in place would
-                # leave us with 4 stem decks instead of 8 — worse than
-                # rebuilding.
+                # Discard any persisted columns dict that doesn't match
+                # the current 10-track shape — either pre-pair (5 cols,
+                # no _a/_b) or the 9-track intermediate (single ``mix``).
+                # In either case, in-place migration would leave a partial
+                # layout in Live; safer to drop the cache and let the next
+                # push_track_to_live rebuild from scratch.
                 key_set = set(cols.keys())
-                if "drums_a" not in key_set and "drums" in key_set:
+                missing_pair = "drums_a" not in key_set and "drums" in key_set
+                missing_split_mix = "mix" in key_set and "mix_a" not in key_set
+                if missing_pair or missing_split_mix:
                     is_pre_pair_shape = True
                     self._deck_columns = None
                 else:
@@ -249,12 +251,12 @@ class AbletonBridge:
                 " (pre-pair columns discarded — will rebuild)"
                     if is_pre_pair_shape else "",
             )
-            # Forward-migrate any pre-A/B state so the next persist writes
-            # in the new shape and we never re-process this. Triggered
-            # either by old cells (renamed by _migrate_deck_kind) or by
-            # the columns-discard branch above.
+            # Forward-migrate any pre-current-shape state so the next
+            # persist writes in the new shape and we never re-process this.
+            # Triggered either by old cells (renamed by _migrate_deck_kind)
+            # or by the columns-discard branch above.
             if is_pre_pair_shape or any(
-                k in {"drums", "bass", "vocals", "other"}
+                k in {"drums", "bass", "vocals", "other", "mix"}
                 for _, k in self._deck_cells
             ):
                 self._persist_state()  # pragma: no cover - migration edge
@@ -263,15 +265,19 @@ class AbletonBridge:
 
     @staticmethod
     def _migrate_deck_kind(kind: str) -> str:
-        """Forward-migrate pre-A/B deck-kind names.
+        """Forward-migrate pre-deck-pair deck-kind names.
 
-        Old persistence had un-sided kinds: ``drums``, ``bass``, etc. New
-        layout splits each into A/B. We default to A for migration — the A
-        side is the conventional "primary" deck. ``mix`` is unchanged
-        (still a single track).
+        Two historical shapes get folded into the current 10-track layout:
+
+        - Pre-pair (single-deck) ``drums`` / ``bass`` / ``vocals`` / ``other``
+          → A-side (the conventional "primary" deck).
+        - 9-track intermediate shape ``mix`` → ``mix_a``. (Mix split into
+          per-deck references in the 10-track shape.)
         """
         if kind in {"drums", "bass", "vocals", "other"}:
             return f"{kind}_a"
+        if kind == "mix":
+            return "mix_a"
         return kind
 
     def stop(self) -> None:
@@ -469,16 +475,23 @@ class AbletonBridge:
             return recovered
         return None
 
-    # Legacy display names from the pre-deck-pair layout. Kept here so
-    # ``clean_live_decks`` can sweep stragglers after the A/B reshape —
-    # a user whose Live session still has the old 5-deck tracks needs
-    # those removed before the new 9-deck layout can be created cleanly.
+    # Display names from prior layouts. Kept here so ``clean_live_decks``
+    # can sweep stragglers after each reshape. Covers:
+    #
+    #   • Original 5-deck shape (single "Deck Mix" + 4 unsplit stems).
+    #   • 9-deck intermediate (A/B per stem + single "Deck Mix").
+    #
+    # The current 10-deck layout uses "Deck Mix A" / "Deck Mix B" in
+    # ``_DECK_DISPLAY_NAMES``; those are merged via union in
+    # ``clean_live_decks`` so both old and current names get nuked.
     _LEGACY_DECK_DISPLAY_NAMES: frozenset[str] = frozenset({
+        # Pre-pair (5-track) layout
         "Deck Mix",
         "Deck Drums",
         "Deck Bass",
         "Deck Vocals",
         "Deck Other",
+        # 9-track intermediate also had "Deck Mix" (single); included above.
     })
 
     def clean_live_decks(self, timeout: float = 1.0) -> dict[str, Any]:
@@ -516,7 +529,8 @@ class AbletonBridge:
 
     # Live's track-color palette indexes — picked to keep stems visually
     # distinct. A-side is the bright color, B-side a darker variant of the
-    # same hue so the eye groups them as "the same role." MIX stays orange.
+    # same hue so the eye groups them as "the same role." MIX is orange,
+    # darker for B-side to match the convention.
     # These are RGB ints, not the 0-69 clip-color-index range.
     _STEM_TRACK_COLORS: dict[str, int] = {
         "drums_a":  0xFF3030,  # red
@@ -527,20 +541,20 @@ class AbletonBridge:
         "vocals_b": 0x186080,  # dark blue
         "other_a":  0x60D060,  # green
         "other_b":  0x357835,  # dark green
-        "mix":      0xFFA500,  # orange — the full mix (reference)
+        "mix_a":    0xFFA500,  # orange — A-deck mix reference
+        "mix_b":    0xA06800,  # dark orange — B-deck mix reference
     }
     # Order matters — defines column layout in Live. The 8 stem decks come
     # FIRST so APC40's default 8-strip view maps to them one-to-one (one
-    # hardware fader per stem deck). MIX lives at index 8, reachable via
-    # APC40 bank-shift; the Cue track (created later) sits at index 9, off
-    # the default visible strips entirely. See
-    # docs/proposals/stem-deck-pair.md.
+    # hardware fader per stem deck). Mix tracks live at indices 8-9,
+    # reachable via APC40 bank-shift; the Cue track (created later) sits
+    # at index 10. See docs/proposals/two-deck-ui-rethink.md.
     _DECK_KINDS: tuple[str, ...] = (
         "drums_a", "drums_b",
         "bass_a", "bass_b",
         "vocals_a", "vocals_b",
         "other_a", "other_b",
-        "mix",
+        "mix_a", "mix_b",
     )
     # Source stem kinds — what Demucs emits, what the pipeline operates on,
     # what callers pass to push_track_to_live. The bridge maps each to its
@@ -555,7 +569,8 @@ class AbletonBridge:
         "vocals_b": "Deck Vocals B",
         "other_a":  "Deck Other A",
         "other_b":  "Deck Other B",
-        "mix":      "Deck Mix",
+        "mix_a":    "Deck Mix A",
+        "mix_b":    "Deck Mix B",
     }
 
     # Dedicated Cue track — output routed to outs 3/4 (the Scarlett 4i4's
@@ -908,21 +923,23 @@ class AbletonBridge:
             except OSError as exc:  # pragma: no cover - best-effort
                 warnings.append(f"OSC send for {deck_kind} failed: {exc}")
 
-        # Whole-song loads also drop the original mix file into the (single,
-        # un-sided) MIX cell. Without this, the SceneGrid renders the SONG
-        # cell as empty after a load — looks broken, doesn't match the
-        # offline .als writer which has done the same thing for offline-
-        # generated sets all along (see als/writer.py).
+        # Whole-song loads also drop the original mix file into the
+        # side-matching MIX cell (mix_a or mix_b). Without this the SceneGrid
+        # renders the SONG cell as empty after a load — looks broken,
+        # doesn't match the offline .als writer (see als/writer.py).
         if full_song and track.file_path:
             mix_path = Path(track.file_path)
             if mix_path.exists():
-                mix_idx = deck_columns["mix"]
+                mix_kind = f"mix_{side}"
+                mix_idx = deck_columns[mix_kind]
                 try:
                     self.client.create_audio_clip(mix_idx, scene_index, str(mix_path))
-                    self.client.set_clip_name(mix_idx, scene_index, f"{title} (mix)")
-                    self._deck_cells[(scene_index, "mix")] = track.id
+                    self.client.set_clip_name(
+                        mix_idx, scene_index, f"{title} (mix {side.upper()})"
+                    )
+                    self._deck_cells[(scene_index, mix_kind)] = track.id
                 except OSError as exc:  # pragma: no cover - best-effort
-                    warnings.append(f"OSC send for mix failed: {exc}")
+                    warnings.append(f"OSC send for {mix_kind} failed: {exc}")
             else:
                 warnings.append(f"mix file missing on disk: {track.file_path!r}")
 
@@ -963,7 +980,7 @@ class AbletonBridge:
             self.client.create_audio_track(-1)
             self.client.set_track_name(idx, self._DECK_DISPLAY_NAMES[kind])
             self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
-            if kind == "mix":
+            if kind in ("mix_a", "mix_b"):
                 try:
                     self.client.set_track_mute(idx, True)
                 except OSError:  # pragma: no cover - best-effort

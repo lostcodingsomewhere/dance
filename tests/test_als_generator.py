@@ -248,13 +248,14 @@ def test_writer_emits_root_ableton_with_known_attrs(tmp_path: Path):
         assert root.get(k) == v, f"attr {k} mismatch"
 
 
-def test_writer_emits_nine_deck_audio_tracks(tmp_path: Path):
-    """Deck-pair layout: 8 stem decks (A/B per role) + 1 mix = 9. Always
-    emits all 9 for consistent APC40 layout; B-side gets empty clip slots."""
+def test_writer_emits_ten_deck_audio_tracks(tmp_path: Path):
+    """Two-deck layout: 8 stem decks (A/B per role) + 2 mix decks
+    (mix_a + mix_b) = 10. Always emits all 10 for consistent APC40
+    layout; B-side stems get empty clip slots, mix_b also empty."""
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    assert len(audio_tracks) == 9
+    assert len(audio_tracks) == 10
 
 
 def test_writer_emits_one_main_track_with_correct_tempo(tmp_path: Path):
@@ -272,19 +273,19 @@ def test_writer_track_color_palette(tmp_path: Path):
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
     # The writer orders tracks per DECK_ORDER: 8 stem decks (A/B per
-    # role) then mix.
+    # role) then per-deck mix references (Mix A + Mix B).
     names = [t.find("./Name/EffectiveName").get("Value") for t in audio_tracks]
     assert names == [
         "Drums A", "Drums B",
         "Bass A", "Bass B",
         "Vocals A", "Vocals B",
         "Other A", "Other B",
-        "Mix",
+        "Mix A", "Mix B",
     ]
 
     expected_kinds = (
         "drums", "drums", "bass", "bass", "vocals", "vocals",
-        "other", "other", "mix",
+        "other", "other", "mix", "mix",
     )
     for t, src in zip(audio_tracks, expected_kinds):
         color_idx = int(t.find("./ColorIndex").get("Value"))
@@ -294,11 +295,14 @@ def test_writer_track_color_palette(tmp_path: Path):
 
 
 def test_writer_crossfader_assignment_per_side(tmp_path: Path):
-    """A-side decks → 0 (A), B-side decks → 2 (B), mix → 1 (no binding)."""
+    """A-side decks (stems + mix_a) → 0 (A), B-side decks (stems + mix_b)
+    → 2 (B). No tracks remain at 1 (no-binding) — every deck is bound to
+    its side's group so the crossfader controls the whole deck."""
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    expected = ["0", "2", "0", "2", "0", "2", "0", "2", "1"]
+    #          drums_a drums_b bass_a bass_b voc_a voc_b oth_a oth_b mix_a mix_b
+    expected = ["0",    "2",    "0",   "2",   "0",  "2",  "0",  "2",  "0",  "2"]
     for t, want in zip(audio_tracks, expected):
         manual = t.find("./DeviceChain/Mixer/CrossFadeState/Manual")
         assert manual is not None, f"track {t.find('./Name/EffectiveName').get('Value')} missing crossfade"
@@ -311,20 +315,22 @@ def test_writer_crossfader_assignment_per_side(tmp_path: Path):
 def test_writer_b_side_decks_have_empty_clip_slots(tmp_path: Path):
     """B-side decks ship with empty clip slot 0 — ready to receive an
     incoming track's stems for transitions. Slot itself is present (a
-    real ClipSlot element); the AudioClip child is just absent."""
+    real ClipSlot element); the AudioClip child is just absent.
+    Includes mix_b: the offline path is a single-song snapshot, so only
+    mix_a gets the source mix file."""
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # B-side decks are indices 1, 3, 5, 7 in DECK_ORDER.
-    for i in (1, 3, 5, 7):
+    # B-side decks are odd indices (1, 3, 5, 7) for stems + 9 for mix_b.
+    for i in (1, 3, 5, 7, 9):
         t = audio_tracks[i]
         clip = t.find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
         )
         name = t.find("./Name/EffectiveName").get("Value")
         assert clip is None, f"B-side deck {name} unexpectedly has a clip"
-    # A-side decks DO have a clip in slot 0.
-    for i in (0, 2, 4, 6, 8):  # 8 is mix, also gets a clip
+    # A-side decks (0, 2, 4, 6) + mix_a (8) DO have a clip in slot 0.
+    for i in (0, 2, 4, 6, 8):
         t = audio_tracks[i]
         clip = t.find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
@@ -381,15 +387,17 @@ def test_writer_rejects_empty_stems(tmp_path: Path):
 
 
 def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
-    """The mix track's clip should be muted so playback uses the stems.
-    A-side stem clips should not be disabled. B-side decks have no
-    clip at all (see test_writer_b_side_decks_have_empty_clip_slots)."""
+    """mix_a's clip should be muted so playback uses the stems. A-side
+    stem clips should not be disabled. B-side decks (including mix_b)
+    have no clip at all (see test_writer_b_side_decks_have_empty_clip_slots).
+    """
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # Mix is last per DECK_ORDER.
-    mix = audio_tracks[-1]
-    disabled = mix.find(
+    # mix_a is at index 8 (the 9th deck, the second-to-last).
+    mix_a = audio_tracks[8]
+    assert mix_a.find("./Name/EffectiveName").get("Value") == "Mix A"
+    disabled = mix_a.find(
         "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
     )
     assert disabled is not None
@@ -437,9 +445,9 @@ def test_generator_structure_matches_spec(
     out = AlsGenerator(session, als_settings).write(track)
     root = etree.fromstring(gzip.decompress(out.read_bytes()))
 
-    # 9 AudioTrack (8 stem decks A/B per role + mix)
+    # 10 AudioTrack (8 stem decks A/B per role + mix_a + mix_b)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    assert len(audio_tracks) == 9
+    assert len(audio_tracks) == 10
 
     # 1 MainTrack with tempo == 128.0
     tempo = root.find("./LiveSet/MainTrack/DeviceChain/Mixer/Tempo/Manual")
@@ -474,11 +482,17 @@ def test_generator_stem_to_track_mapping(
             f"track {kind}_a should reference {stem_paths[kind]}"
         )
 
-    # And mix references the original file.
-    mix_path = by_name["Mix"].find(
+    # Mix A references the original file (A-side carries the offline
+    # snapshot). Mix B is empty by design — it's reserved for the next
+    # track during transitions.
+    mix_path = by_name["Mix A"].find(
         "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/SampleRef/FileRef/Path"
     )
     assert mix_path.get("Value") == str(Path(track.file_path).resolve())
+    mix_b_clip = by_name["Mix B"].find(
+        "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
+    )
+    assert mix_b_clip is None
 
 
 def test_generator_locator_positions_in_beats(
@@ -515,11 +529,10 @@ def test_generator_track_colors(als_settings, session, complete_track_with_stems
         for t in root.findall("./LiveSet/Tracks/AudioTrack")
     }
     # A-side and B-side decks share the source-stem color (different sides
-    # of the same role group visually).
-    for src in ("drums", "bass", "vocals", "other"):
+    # of the same role group visually). Same for mix_a / mix_b.
+    for src in ("drums", "bass", "vocals", "other", "mix"):
         assert by_name[f"{src.capitalize()} A"] == STEM_COLOR_INDEX[src]
         assert by_name[f"{src.capitalize()} B"] == STEM_COLOR_INDEX[src]
-    assert by_name["Mix"] == STEM_COLOR_INDEX["mix"]
 
 
 def test_generator_default_path_inside_output_dir(
@@ -608,11 +621,11 @@ def test_generator_handles_missing_stem_kinds_gracefully(
     root = etree.fromstring(gzip.decompress(out.read_bytes()))
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
     names = sorted(t.find("./Name/EffectiveName").get("Value") for t in audio_tracks)
-    # All 9 deck tracks always present, even when source stems are missing.
+    # All 10 deck tracks always present, even when source stems are missing.
     assert names == [
         "Bass A", "Bass B",
         "Drums A", "Drums B",
-        "Mix",
+        "Mix A", "Mix B",
         "Other A", "Other B",
         "Vocals A", "Vocals B",
     ]

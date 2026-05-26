@@ -77,16 +77,17 @@ STEM_COLOR_INDEX: dict[str, int] = {
 }
 
 
-# Canonical track order — 8 stem decks (A/B per role) then mix. MIX
-# lives last so APC40's default 8-strip view maps 1:1 to the stem decks.
-# Mirror of dance.osc.bridge.AbletonBridge._DECK_KINDS — kept in sync by
-# hand; the bridge tests catch drift on the runtime side.
+# Canonical track order — 8 stem decks (A/B per role) then per-deck
+# mix references. Stems come first so APC40's default 8-strip view maps
+# 1:1 to them; mix_a and mix_b live at indices 8-9, off the default
+# view. Mirror of dance.osc.bridge.AbletonBridge._DECK_KINDS — kept in
+# sync by hand; the bridge tests catch drift on the runtime side.
 DECK_ORDER: tuple[str, ...] = (
     "drums_a", "drums_b",
     "bass_a", "bass_b",
     "vocals_a", "vocals_b",
     "other_a", "other_b",
-    "mix",
+    "mix_a", "mix_b",
 )
 
 # Back-compat alias — old callers (and docs) referenced STEM_ORDER.
@@ -441,7 +442,11 @@ def _populate_audio_track(
     if entry is None:
         return
     _build_audio_clip(
-        value, clip_id=track_id, entry=entry, bpm=bpm, muted=(deck_kind == "mix")
+        value,
+        clip_id=track_id,
+        entry=entry,
+        bpm=bpm,
+        muted=deck_kind in ("mix_a", "mix_b"),
     )
 
 
