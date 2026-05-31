@@ -8,13 +8,11 @@ import socket
 import time
 from typing import Any
 
-import pytest
 from pythonosc import udp_client
 
 from dance.osc.bridge import AbletonBridge, AbletonState
 from dance.osc.client import AbletonOSCClient
 from dance.osc.listener import AbletonOSCListener
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -309,6 +307,97 @@ def test_bridge_get_num_tracks_times_out_when_live_silent():
         bridge.stop()
 
 
+# Deck-column recovery — the 10 deck tracks in index order, used by both the
+# prefixed (OSC-created) and bare (.als-writer) name tests below.
+_DECK_COLUMN_ORDER = [
+    "drums_a",
+    "drums_b",
+    "bass_a",
+    "bass_b",
+    "vocals_a",
+    "vocals_b",
+    "other_a",
+    "other_b",
+    "mix_a",
+    "mix_b",
+]
+
+
+def _recover_with_track_names(names: list[str]) -> dict[str, int] | None:
+    """Spin up a fake Live that replies to /live/song/get/track_names with
+    ``names``, then run recover_deck_columns against it. Returns the
+    recovered column map (or None)."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/track_names", names)
+
+    fake_live_listener.on("/live/song/get/track_names", on_query)
+    fake_live_listener.start()
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        return bridge.recover_deck_columns(timeout=1.0)
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_recover_adopts_bare_als_writer_names():
+    """Opening an exported .als yields tracks named "Drums A" … "Mix B"
+    (no "Deck " prefix — see dance/als/writer.py:_display_for). Recovery
+    must adopt those so the deck grid populates after `dance export-als`.
+    Regression for the prefix mismatch that left the app stuck on
+    "Waiting for Ableton deck columns"."""
+    bare_names = [
+        "Drums A",
+        "Drums B",
+        "Bass A",
+        "Bass B",
+        "Vocals A",
+        "Vocals B",
+        "Other A",
+        "Other B",
+        "Mix A",
+        "Mix B",
+    ]
+    recovered = _recover_with_track_names(bare_names)
+    assert recovered is not None
+    assert recovered == {kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)}
+
+
+def test_bridge_recover_adopts_prefixed_deck_names():
+    """The canonical OSC-created layout uses "Deck Drums A" … "Deck Mix B".
+    Recovery must keep adopting those too (no regression from widening the
+    accepted set to include the bare .als names)."""
+    prefixed = [
+        "Deck Drums A",
+        "Deck Drums B",
+        "Deck Bass A",
+        "Deck Bass B",
+        "Deck Vocals A",
+        "Deck Vocals B",
+        "Deck Other A",
+        "Deck Other B",
+        "Deck Mix A",
+        "Deck Mix B",
+    ]
+    recovered = _recover_with_track_names(prefixed)
+    assert recovered is not None
+    assert recovered == {kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)}
+
+
+def test_bridge_recover_returns_none_on_partial_layout():
+    """If only some deck tracks are present (e.g. user renamed one), recovery
+    bails rather than adopting a half-built grid."""
+    partial = ["Drums A", "Drums B", "Bass A"]  # missing the rest
+    assert _recover_with_track_names(partial) is None
+
+
 def _stub_stem(kind: str, path: str):
     """Quack-typed stand-in for a StemFile row (avoids hitting the DB)."""
     class _S:
@@ -509,6 +598,89 @@ def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):
         # The drums stem landed on the A side (empty row → 'a').
         assert (0, "drums_a") in bridge._deck_cells
         assert (0, "drums_b") not in bridge._deck_cells
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_promote_forced_side_enqueues_not_clobbers(tmp_path):
+    """Promoting a rec onto a side whose cell is already loaded (and maybe
+    playing) must enqueue on the next free scene of THAT side — never
+    overwrite the occupied cell. Reproduces the promote-clobber bug."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.start()
+
+    drums1 = tmp_path / "drums1.wav"
+    drums1.write_bytes(b"RIFF")
+    drums2 = tmp_path / "drums2.wav"
+    drums2.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        # First drums stem live-loaded onto Deck A at scene 0 (now "playing").
+        r1 = bridge.push_track_to_live(
+            _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
+        )
+        assert r1["scene_index"] == 0
+        assert bridge._deck_cells[(0, "drums_a")] == 1
+
+        # Promote a different drums rec, forced onto Deck A again. Must land
+        # on scene 1, NOT overwrite the scene-0 drums_a cell.
+        r2 = bridge.push_track_to_live(
+            _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"], side="a"
+        )
+        assert r2["scene_index"] == 1
+        assert r2["stems_loaded"] == 1
+        # Scene-0 cell preserved (still track 1); new cell at scene 1.
+        assert bridge._deck_cells[(0, "drums_a")] == 1
+        assert bridge._deck_cells[(1, "drums_a")] == 2
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_promote_auto_side_uses_free_side_at_scene_zero(tmp_path):
+    """With Deck A busy at scene 0 and no forced side, a promote should fill
+    the free B side at the SAME scene rather than overwriting A or skipping
+    to a fresh scene."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.start()
+
+    drums1 = tmp_path / "drums1.wav"
+    drums1.write_bytes(b"RIFF")
+    drums2 = tmp_path / "drums2.wav"
+    drums2.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        bridge.push_track_to_live(
+            _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
+        )
+        # No forced side: should pick the free B side at scene 0.
+        r2 = bridge.push_track_to_live(
+            _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"]
+        )
+        assert r2["scene_index"] == 0
+        assert bridge._deck_cells[(0, "drums_a")] == 1
+        assert bridge._deck_cells[(0, "drums_b")] == 2
     finally:
         bridge.stop()
         fake_live_listener.stop()

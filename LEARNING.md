@@ -58,10 +58,16 @@ dance export-als --all            # one .als per track in ~/Music/Dance/Sets/
 uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
 cd companion-app && npm run dev   # http://localhost:5173
 
-# 5. Open a Set
+# 5. Open a Set — ONLY to load the deck columns into Live
 open "/Users/arya/Music/Dance/Sets/<some track>.als"
-# → Live launches with 5 stem tracks + master tempo set
-# → Hit space, play scene 1, start mixing on APC40
+# → Live launches with the 10-column 2-deck layout (Drums/Bass/Vocals/Other/Mix
+#   × A/B) + master tempo set. The app adopts these columns automatically.
+# → From here, DON'T mix from the .als's own clips. Live-load stems through the
+#   app instead: ⌘K to search, or promote a rec — each load drops the stems onto
+#   a deck column over OSC. That path is what links cells to the library and
+#   drives per-combo rec re-scoring. (Static .als clips are columns-only by
+#   design — see docs/proposals/als-deck-name-prefix-mismatch.md.)
+# → Fire stems from the app's grid / the APC40.
 ```
 
 ### Shutting down

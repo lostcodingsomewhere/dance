@@ -15,6 +15,7 @@ import mutagen
 from sqlalchemy.orm import Session
 
 from dance.core.database import Track, TrackState
+from dance.core.paths import nfc_path
 
 logger = logging.getLogger(__name__)
 
@@ -188,15 +189,22 @@ class IngestStage:
             # Compute content hash
             file_hash = self.compute_audio_hash(file_path)
 
+            # Canonical NFC form for everything that touches the DB. macOS may
+            # hand us NFD filenames; the DB and filesystem must agree or
+            # ``os.path.exists`` later fails for accented names. See
+            # ``dance.core.paths.nfc_path``.
+            path_str = nfc_path(file_path)
+            name_str = nfc_path(file_path.name)
+
             # First dedup pass: by content hash (the canonical identity).
             existing = session.query(Track).filter_by(file_hash=file_hash).first()
 
             if existing:
                 # Same content - check if file moved
-                if existing.file_path != str(file_path):
-                    logger.info(f"Track moved: {existing.file_path} -> {file_path}")
-                    existing.file_path = str(file_path)
-                    existing.file_name = file_path.name
+                if existing.file_path != path_str:
+                    logger.info(f"Track moved: {existing.file_path} -> {path_str}")
+                    existing.file_path = path_str
+                    existing.file_name = name_str
                     session.commit()
                     return IngestResult(status="updated", track_id=existing.id)
 
@@ -210,9 +218,7 @@ class IngestStage:
             # scanner runs *before* that finalize step (or if the finalize
             # raced), we'd create a duplicate. Path match recovers from
             # either ordering by adopting the optimistic row.
-            optimistic = (
-                session.query(Track).filter_by(file_path=str(file_path)).first()
-            )
+            optimistic = session.query(Track).filter_by(file_path=path_str).first()
             if optimistic is not None:
                 logger.info(
                     f"Adopting optimistic Track {optimistic.id} "
@@ -234,8 +240,8 @@ class IngestStage:
 
             track = Track(
                 file_hash=file_hash,
-                file_path=str(file_path),
-                file_name=file_path.name,
+                file_path=path_str,
+                file_name=name_str,
                 file_size_bytes=file_path.stat().st_size,
                 state=TrackState.PENDING.value,
                 **metadata,

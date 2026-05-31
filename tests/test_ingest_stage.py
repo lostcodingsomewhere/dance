@@ -105,3 +105,56 @@ def test_ingest_moved_file_updates_existing(session, tmp_path):
     session.expire_all()
     track = session.get(Track, first.track_id)
     assert track.file_path == str(moved)
+
+
+def test_ingest_normalizes_nfd_path_to_nfc(session, tmp_path):
+    """Unicode-normalization regression: a path handed to ingest in
+    decomposed (NFD) form must be persisted in composed (NFC) form so the
+    DB and the on-disk filename agree after an rsync between macOS machines.
+
+    This bit a real 282-track library on 2026-05-30 — 65 tracks with
+    accented filenames failed ``os.path.exists`` because the DB held NFD
+    while the rsynced files on disk were NFC. See ``dance.core.paths``."""
+    import unicodedata
+
+    # "Beyoncé.wav": NFD = "e" + combining acute (U+0301).
+    # NFC collapses it to a single precomposed "é". Same render, diff bytes.
+    nfd_name = "Beyoncé.wav"
+    nfc_name = "Beyoncé.wav"
+    assert nfd_name != nfc_name  # genuinely distinct byte strings
+
+    audio = tmp_path / nfd_name
+    write_track(audio, TrackSpec(bpm=124.0, bars=2))
+    stage = IngestStage(library_dir=tmp_path)
+
+    # Ingest the NFD path (mimics what rglob yields when the file is NFD).
+    result = stage.ingest_file(session, audio)
+
+    assert result.status == "new"
+    track = session.get(Track, result.track_id)
+    assert track is not None
+    # Persisted as NFC even though we ingested NFD.
+    assert track.file_path == str(tmp_path / nfc_name)
+    assert track.file_name == nfc_name
+    assert unicodedata.is_normalized("NFC", track.file_path)
+    assert unicodedata.is_normalized("NFC", track.file_name)
+
+
+def test_ingest_nfc_and_nfd_paths_dedup_to_one_row(session, tmp_path):
+    """The same file referenced once as NFD and once as NFC must resolve to
+    a single Track row — normalization makes the path-based dedup pass agree."""
+    import unicodedata
+
+    nfd_name = "Résumé.wav"  # "Résumé.wav" decomposed
+    audio = tmp_path / nfd_name
+    write_track(audio, TrackSpec(bpm=124.0, bars=2))
+    stage = IngestStage(library_dir=tmp_path)
+
+    first = stage.ingest_file(session, audio)
+    # Re-ingest via the precomposed (NFC) spelling of the same path.
+    nfc_path_obj = Path(unicodedata.normalize("NFC", str(audio)))
+    second = stage.ingest_file(session, nfc_path_obj)
+
+    assert first.track_id == second.track_id
+    assert second.status == "unchanged"
+    assert session.query(Track).count() == 1

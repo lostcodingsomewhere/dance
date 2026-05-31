@@ -42,8 +42,20 @@ These come from the user's persistent memory — they apply project-wide.
 - **Python 3.10+**, target `py310`. Ruff line length 100, rules `E F I N W UP` minus `E501`. mypy strict-ish (`warn_return_any`, `warn_unused_ignores`).
 - **Pre-commit** (no hook installed; run manually):
   ```bash
-  ruff check src/dance tests && ruff format src/dance tests && mypy src/dance && pytest -q
+  ruff check src/dance tests && mypy src/dance && pytest -q
   ```
+  - **ruff is pinned to `>=0.12,<0.13`** in `pyproject.toml` for reproducibility.
+    If your venv has a newer ruff (e.g. the off-spec Python 3.14 venv ships 0.15),
+    `pip install 'ruff>=0.12,<0.13'` first.
+  - **The tree is NOT ruff-clean** — ~145 pre-existing lint findings
+    (UP035/UP045/I001/F401…) exist at every ruff version, and the gate was never
+    actually enforced. So **scope ruff to the files you changed**, e.g.
+    `ruff check <your files>`, not `ruff check src/dance tests` (which dumps ~145
+    unrelated errors). Cleaning the whole tree is a separate, deliberate task.
+  - **Do NOT run `ruff format` wholesale** (`ruff format src/dance tests`). This
+    code was hand-formatted and never `ruff format`-ed — *any* ruff version
+    rewrites dozens of files. Format only files you changed; prefer
+    `ruff format --check <file>` to inspect before writing.
 - **Tests use synthetic audio.** `tests/audio_fixtures.py:24` — no real audio files in the repo, no downloads in CI. See [`docs/dev.md`](docs/dev.md) "Synthetic audio fixture".
 - **One file per pipeline stage.** `src/dance/pipeline/stages/<name>.py`. The dispatcher auto-discovers via `_register_default_stages()`. Pattern: [`docs/dev.md`](docs/dev.md) "Adding a new pipeline stage".
 - **One file per API resource.** `src/dance/api/routers/<resource>.py`. Pattern: [`docs/dev.md`](docs/dev.md) "Adding a new API endpoint".
@@ -54,7 +66,7 @@ These come from the user's persistent memory — they apply project-wide.
 
 | User says | What to do |
 |---|---|
-| "let's DJ" / "load this playlist" | `dance config --spotify-playlist <url>` → `dance run --once` → `dance build-graph` → `dance export-als --all`. See [`LEARNING.md`](LEARNING.md) for the full runbook. |
+| "let's DJ" / "load this playlist" | `dance config --spotify-playlist <url>` → `dance run --once` → `dance build-graph` → `dance export-als --all`. See [`LEARNING.md`](LEARNING.md) for the full runbook. Note: an exported `.als` is opened in Live **only to load the deck columns** — stems are then **live-loaded through the app** (⌘K / rec promote → OSC). The `.als` clips themselves are not library-linked by design; see [`docs/proposals/als-deck-name-prefix-mismatch.md`](docs/proposals/als-deck-name-prefix-mismatch.md). |
 | "the als is broken" / "Live won't open the set" | See [`docs/troubleshooting.md`](docs/troubleshooting.md) "Live rejects the .als entirely". Don't refactor `writer.py` from scratch — it's template-based on purpose. |
 | "let's tag tracks" | `dance tag` (CLAP zero-shot, fast) or `dance tag --deep` (Qwen2-Audio, 10–30 s/track). See [`docs/tagging.md`](docs/tagging.md). |
 | "let's plan a set" / "make a set" | Open the companion app → ⌘\\ to open the Set Rail → "create empty set" → fill via ⌘K. Sets persist; rail surfaces tail-recs scored against the trailing arc. See [`docs/proposals/set-rail-and-search-consolidation.md`](docs/proposals/set-rail-and-search-consolidation.md). |

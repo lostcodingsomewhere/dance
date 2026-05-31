@@ -505,9 +505,9 @@ class AbletonBridge:
         if names is None:
             return None
         recovered: dict[str, int] = {}
-        for kind, expected in self._DECK_DISPLAY_NAMES.items():
+        for kind, accepted in self._DECK_RECOVERY_NAMES.items():
             for idx, name in enumerate(names):
-                if name == expected and kind not in recovered:
+                if name in accepted and kind not in recovered:
                     recovered[kind] = idx
                     break
         # Adopt the Cue track too — partial recovery is fine here since the
@@ -621,6 +621,28 @@ class AbletonBridge:
         "other_b":  "Deck Other B",
         "mix_a":    "Deck Mix A",
         "mix_b":    "Deck Mix B",
+    }
+
+    # Names accepted when ADOPTING existing Live tracks during recovery.
+    # The canonical name we CREATE (via push_track_to_live → set_track_name)
+    # is the "Deck …"-prefixed form above. But the static .als writer
+    # (dance/als/writer.py:_display_for) emits the bare "Drums A" form, so
+    # opening an exported Set yields tracks recovery must also adopt —
+    # otherwise the deck grid never populates after `dance export-als`.
+    # We only WIDEN what we accept; everything we create stays prefixed.
+    # (Explicit literal, not a class-body comprehension — those can't see
+    # other class vars like _DECK_DISPLAY_NAMES.)
+    _DECK_RECOVERY_NAMES: dict[str, frozenset[str]] = {
+        "drums_a": frozenset({"Deck Drums A", "Drums A"}),
+        "drums_b": frozenset({"Deck Drums B", "Drums B"}),
+        "bass_a": frozenset({"Deck Bass A", "Bass A"}),
+        "bass_b": frozenset({"Deck Bass B", "Bass B"}),
+        "vocals_a": frozenset({"Deck Vocals A", "Vocals A"}),
+        "vocals_b": frozenset({"Deck Vocals B", "Vocals B"}),
+        "other_a": frozenset({"Deck Other A", "Other A"}),
+        "other_b": frozenset({"Deck Other B", "Other B"}),
+        "mix_a": frozenset({"Deck Mix A", "Mix A"}),
+        "mix_b": frozenset({"Deck Mix B", "Mix B"}),
     }
 
     # Dedicated Cue track — output routed to outs 3/4 (the Scarlett 4i4's
@@ -1257,6 +1279,38 @@ class AbletonBridge:
         )
         return "a" if a_count <= b_count else "b"
 
+    def _free_stem_slot(self, kinds: list[str], *, forced_side: str | None) -> tuple[int, str]:
+        """Resolve ``(scene_index, side)`` for a single-stem load so the
+        chosen side's cell is empty for every kind in ``kinds`` — never
+        clobbering a cell that's already loaded (and possibly playing).
+
+        - ``forced_side`` ('a'/'b'): lowest scene where THAT side is free
+          for all kinds. A forced load advances past an occupied cell rather
+          than overwriting it (the promote-a-rec enqueue contract).
+        - ``forced_side`` None (auto-pick): lowest scene where EITHER side is
+          free; when both are free defer to ``_pick_side`` (less-full,
+          tie → 'a'), else take whichever side is free.
+        """
+
+        def side_free(scene: int, s: str) -> bool:
+            return all((scene, f"{k}_{s}") not in self._deck_cells for k in kinds)
+
+        i = 0
+        while True:
+            if forced_side is not None:
+                if side_free(i, forced_side):
+                    return i, forced_side
+            else:
+                a_free = side_free(i, "a")
+                b_free = side_free(i, "b")
+                if a_free and b_free:
+                    return i, self._pick_side(scene_index=i)
+                if a_free:
+                    return i, "a"
+                if b_free:
+                    return i, "b"
+            i += 1
+
     def push_track_to_live(
         self,
         track: "Track",
@@ -1328,35 +1382,28 @@ class AbletonBridge:
 
         deck_columns: dict[str, int] = self._deck_columns
 
-        # Resolve the scene_index now that we know which kinds we're loading.
+        # Resolve where this load lands. All stems of one push_track_to_live
+        # call go to the SAME side so anchor-detection (4-of-4 same track in
+        # a row) stays meaningful per side. A forced side (UI's A/B buttons)
+        # must never overwrite an occupied — possibly *playing* — cell, so
+        # the scene scan honors it instead of being applied after the fact.
+        forced_side = side if side in ("a", "b") else None
         if scene_index is None:
             if full_song:
+                # Whole-song loads reserve a fully-empty row; _pick_side
+                # (or the forced side) then chooses which deck side fills it.
                 scene_index = self.next_free_row()
+                side = forced_side or self._pick_side(scene_index=scene_index)
             elif valid_kinds:
-                # Single-stem load — find the lowest scene where EITHER side
-                # (A or B) of this source kind is free. We let the side
-                # picker below decide which side actually gets it; here we
-                # just need a row with capacity.
-                first_src = valid_kinds[0]
-                i = 0
-                while (
-                    (i, f"{first_src}_a") in self._deck_cells
-                    and (i, f"{first_src}_b") in self._deck_cells
-                ):
-                    i += 1
-                scene_index = i
+                # Single-stem load: pick a scene whose target side is free
+                # for these kinds so we enqueue rather than clobber.
+                scene_index, side = self._free_stem_slot(valid_kinds, forced_side=forced_side)
             else:
                 scene_index = 0
-
-        # Pick the side (A or B) for this load. All stems of one
-        # push_track_to_live call go to the SAME side so anchor-detection
-        # stays meaningful per side. Explicit caller override (UI's A/B
-        # buttons) wins; otherwise _pick_side picks the less-full side.
-        if side in ("a", "b"):
-            chosen_side: str = side
+                side = forced_side or "a"
         else:
-            chosen_side = self._pick_side(scene_index=scene_index)
-        side = chosen_side
+            # Caller pinned an exact scene — honor it even if it overwrites.
+            side = forced_side or self._pick_side(scene_index=scene_index)
 
         # Validate sources for this load.
         title = (track.title or track.file_name or f"Track {track.id}").strip()

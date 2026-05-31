@@ -567,14 +567,20 @@ def resync_decks(
 
     for entry in scanned:
         clip_name: str = entry["clip_name"]
-        kind: str = entry["kind"]
-        # Reverse the load-format: "{title} ({kind})". Pull "{kind}" from
-        # the trailing parenthetical (last "(...)"); the rest is title.
+        kind: str = entry["kind"]  # deck-column kind, e.g. "drums_a", "mix_b"
+        # Reverse the load-format set in bridge.push_track_to_live:
+        # stems -> "{title} ({source} {side})" e.g. "Bad Memories (drums a)";
+        # mix   -> "{title} (mix {side})"      e.g. "Bad Memories (mix a)".
+        # The trailing parenthetical is "{source} {side}"; reconstruct the deck
+        # kind as "{source}_{side}" and require it to match this cell's column.
+        # (Also accept the legacy "({kind})" form where the paren already equals
+        # the deck kind, e.g. "(drums_a)".)
         title = clip_name
         if clip_name.endswith(")") and "(" in clip_name:
             opener = clip_name.rfind("(")
             paren = clip_name[opener + 1 : -1].strip().lower()
-            if paren == kind:
+            paren_kind = paren.replace(" ", "_")  # "drums a" -> "drums_a"
+            if paren_kind == kind or paren == kind:
                 title = clip_name[:opener].strip()
         track = session.query(Track).filter(Track.title == title).one_or_none()
         if track is None:

@@ -66,7 +66,14 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
-    "ruff>=0.1",
+    # Pinned for reproducibility. This tree is NOT ruff-clean at any version
+    # (~145 pre-existing lint findings: UP035/UP045/I001/F401…), and `ruff
+    # format` rewrites dozens of files at every version — the code was
+    # hand-formatted and the ruff gate was never actually enforced. The pin just
+    # keeps everyone on the same ruff so results are consistent. Lint/format
+    # only the files you touch; don't run the gate tree-wide expecting green.
+    # See CLAUDE.md "Pre-commit".
+    "ruff>=0.12,<0.13",
     "mypy>=1.5",
     # FastAPI 0.103 ships with Starlette 0.27, whose TestClient still uses the
     # legacy ``httpx.Client(app=...)`` constructor removed in httpx 0.28.

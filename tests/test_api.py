@@ -147,6 +147,13 @@ class FakeAbletonBridge:
     def get_deck_state(self) -> dict[str, Any]:
         return self.deck_state_return
 
+    def scan_live_for_cells(self, **kwargs: Any) -> list[dict[str, Any]]:
+        # Tests set ``scan_return`` to simulate clips found in Live's slots.
+        return getattr(self, "scan_return", [])
+
+    def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
+        self.adopted_cells = dict(cells)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -546,6 +553,53 @@ def test_load_track_with_stems_creates_five_tracks(
         "kinds": None,
         "scene_index": None,
     }
+
+
+def test_resync_adopts_runtime_format_clip_names(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    """Resync must reverse the clip-name format the bridge actually writes:
+    "{title} ({source} {side})" (e.g. "Anthem (drums A)"), reconstructing the
+    deck kind "drums_a". Regression for the parser that only accepted the
+    legacy "({kind})" form and so left every app-loaded clip unmatched after a
+    backend restart."""
+    t = make_track(title="Anthem")
+    session.commit()
+    # Simulate Live reporting clips placed by push_track_to_live: stem cell uses
+    # "(drums A)", mix cell uses "(mix A)". Plus a genuinely-unknown clip.
+    fake_bridge.scan_return = [
+        {"scene_index": 0, "kind": "drums_a", "clip_name": "Anthem (drums A)"},
+        {"scene_index": 0, "kind": "mix_a", "clip_name": "Anthem (mix A)"},
+        {"scene_index": 1, "kind": "bass_b", "clip_name": "Someone Else's Clip"},
+    ]
+
+    r = client.post("/api/v1/ableton/decks/resync")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scanned"] == 3
+    assert body["adopted"] == 2  # the two "Anthem" cells resolve to the track
+    # Both Anthem cells mapped to the track id.
+    assert fake_bridge.adopted_cells == {
+        (0, "drums_a"): t.id,
+        (0, "mix_a"): t.id,
+    }
+    # The foreign clip is reported unmatched, not silently dropped.
+    assert [u["clip_name"] for u in body["unmatched"]] == ["Someone Else's Clip"]
+
+
+def test_resync_adopts_legacy_kind_clip_names(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    """Back-compat: the older "({kind})" clip-name form still adopts."""
+    t = make_track(title="Legacy")
+    session.commit()
+    fake_bridge.scan_return = [
+        {"scene_index": 0, "kind": "drums_a", "clip_name": "Legacy (drums_a)"},
+    ]
+    r = client.post("/api/v1/ableton/decks/resync")
+    assert r.status_code == 200
+    assert r.json()["adopted"] == 1
+    assert fake_bridge.adopted_cells == {(0, "drums_a"): t.id}
 
 
 def test_load_track_without_stems_creates_one_track(

@@ -50,6 +50,7 @@ from dance.api.schemas import (
 )
 from dance.config import Settings
 from dance.core.database import Track, TrackState, get_session_factory
+from dance.core.paths import nfc_path
 from dance.pipeline.events import StageEvent
 from dance.spotify.csv_importer import (
     CsvRow,
@@ -499,8 +500,8 @@ def ingest_track(
     track = Track(
         file_hash=placeholder_hash,
         spotify_id=spotify_id,
-        file_path=str(expected_path),
-        file_name=expected_path.name,
+        file_path=nfc_path(expected_path),
+        file_name=nfc_path(expected_path.name),
         file_size_bytes=0,
         title=title,
         artist=artist,
@@ -685,8 +686,8 @@ def ingest_playlist(
             track = Track(
                 file_hash=placeholder_hash,
                 spotify_id=hit.spotify_id,
-                file_path=str(expected_path),
-                file_name=expected_path.name,
+                file_path=nfc_path(expected_path),
+                file_name=nfc_path(expected_path.name),
                 file_size_bytes=0,
                 title=hit.title,
                 artist=hit.artist,
