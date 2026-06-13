@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { useSoloTrack } from "../hooks/useTransport";
 import {
@@ -15,32 +15,36 @@ import { RoleIcon } from "./RoleIcon";
 
 /**
  * Column header strip atop the Booth. With the two-deck layout (see
- * docs/proposals/two-deck-ui-rethink.md) there are now 10 columns: 4
- * source roles × A/B sides + 2 mix references. Songs sit center; the
- * grid mirrors around them.
+ * docs/proposals/two-deck-ui-rethink.md) there are 8 columns: 4 source
+ * roles × A/B sides, in APC40 mk2 fader order (strip 1 → drums A, strip
+ * 2 → drums B, …). The mix/anchor reference is NOT a column here — it
+ * lives as a per-deck chip inside each TwoDeckStrip panel header.
  *
  * Headers carry the per-source-role color (A/B share a hue so the eye
  * groups them as one role); the A/B badge inside the chip distinguishes
- * sides. Solo (S) button per header still cues that one deck's audio
- * through Live's Solo/PFL bus to the headphone outs.
+ * sides (A-side bright, B-side muted). An optional 1–8 fader-number badge
+ * makes the screen→hand mapping explicit. Solo (S) button per header
+ * cues that one deck's audio through Live's Solo/PFL bus to the headphone
+ * outs — its lit state reads from the contract's ``soloed_kinds`` so it
+ * can never contradict Live or the per-deck PFL toggles.
  *
- * Drag-to-reorder is removed for now — the canonical mirror layout
- * (drums A | bass A | vocals A | other A | song A | song B | other B
- * | vocals B | bass B | drums B) carries meaning, so free reordering
- * would break the spatial mental model.
+ * Drag-to-reorder is removed for now — the canonical fader-order layout
+ * carries meaning, so free reordering would break the spatial mental
+ * model and the 1:1 APC40 strip mapping.
  */
 export function BoothColumnHeaders() {
   const deckMap = useDeckMap();
   const soloTrack = useSoloTrack();
+  const soloedKinds = useAbletonState().soloed_kinds;
   const columns = deckMap.data?.columns ?? null;
-  const [soloed, setSoloed] = useState<Set<string>>(new Set());
+  // Source of truth for "is it lit": Live's actual solo bus, surfaced via
+  // the WS contract. Clicking still sends the solo command (optimistic),
+  // but the lit state is driven from here so the header "S" buttons and
+  // the per-deck PFL toggles can't drift apart.
+  const soloed = new Set(soloedKinds);
 
   function toggleSolo(deckKind: string, trackIdx: number) {
     const wasSoloed = soloed.has(deckKind);
-    const next = new Set(soloed);
-    if (wasSoloed) next.delete(deckKind);
-    else next.add(deckKind);
-    setSoloed(next);
     soloTrack.mutate({ track: trackIdx, soloed: !wasSoloed });
   }
 
@@ -48,14 +52,15 @@ export function BoothColumnHeaders() {
 
   return (
     <div
-      className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1"
+      className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1"
       data-testid="booth-column-headers"
     >
       <div aria-hidden="true" />
-      {TWO_DECK_COLUMN_ORDER.map((deckKind) => (
+      {TWO_DECK_COLUMN_ORDER.map((deckKind, i) => (
         <ColumnHeaderChip
           key={deckKind}
           deckKind={deckKind}
+          faderNumber={i + 1}
           trackIdx={columns[deckKind]}
           isSoloed={soloed.has(deckKind)}
           onSoloToggle={() => {
@@ -70,11 +75,14 @@ export function BoothColumnHeaders() {
 
 function ColumnHeaderChip({
   deckKind,
+  faderNumber,
   trackIdx,
   isSoloed,
   onSoloToggle,
 }: {
   deckKind: string;
+  /** APC40 fader strip number (1–8) this column maps to. */
+  faderNumber: number;
   trackIdx: number | undefined;
   isSoloed: boolean;
   onSoloToggle: () => void;
@@ -86,19 +94,29 @@ function ColumnHeaderChip({
   // A/B are visually distinguishable even though they share the role
   // color and the same role label.
   const styles = ROLE_STYLES[role as StemRole];
-  // Strip the A/B suffix from the visible label — the deck container
-  // above identifies which side this is. We keep the suffix in the
-  // tooltip + aria for accessibility / debugging.
+  // Role label + A/B side, e.g. "DRUMS A". With the 8-column fader-order
+  // layout the two columns for one role sit adjacent, so the side suffix
+  // is what tells them apart at a glance.
   const visibleLabel = roleLabel(role);
   return (
     <div
-      title={`${deckColumnLabel(deckKind)} — routes to crossfader ${sideBadge}`}
+      title={`${deckColumnLabel(deckKind)} · APC40 fader ${faderNumber} — routes to crossfader ${sideBadge}`}
       className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-[10px] uppercase tracking-wider font-semibold transition-all ${
         styles.header
       } ${side === "b" ? "opacity-75" : ""}`}
     >
+      {/* Fader-number badge — makes the screen→hand mapping explicit
+          (column N → APC40 strip N). */}
+      <span className="text-[8px] font-mono tabular-nums text-neutral-500/80 shrink-0 leading-none">
+        {faderNumber}
+      </span>
       <RoleIcon role={role} size={12} />
-      <span className="flex-1 truncate text-[10px]">{visibleLabel}</span>
+      <span className="flex-1 truncate text-[10px]">
+        {visibleLabel}
+        {sideBadge && (
+          <span className="ml-0.5 text-[9px] opacity-80">{sideBadge}</span>
+        )}
+      </span>
       {trackIdx != null && (
         <button
           type="button"

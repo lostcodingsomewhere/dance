@@ -50,6 +50,17 @@ class AbletonState:
     # with 0 = center. We subscribe on bridge init and push updates to the FE
     # so the on-screen crossfader bar follows the APC40 hardware fader live.
     crossfader: float | None = None
+    # Deck-kinds whose Live track currently has Solo engaged. With Solo/Cue
+    # mode = Cue (set on bridge init), a soloed track is routed to the
+    # headphone PFL bus (outs 3/4). Derived from per-deck solo subscriptions;
+    # lets the FE light up the real PFL state instead of guessing from the
+    # last /pfl/{side} call. Sorted in _DECK_KINDS order for stable output.
+    soloed_kinds: list[str] = field(default_factory=list)
+    # Monotonic counter that increments on EVERY mutation of the loaded
+    # deck-cell map (load / clear / move / anchor-fill / resync). The FE
+    # watches this and refetches GET /ableton/decks the instant it changes,
+    # instead of polling on a timer.
+    deck_map_revision: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +72,8 @@ class AbletonState:
             "track_meters": dict(self.track_meters),
             "playing_positions": dict(self.playing_positions),
             "crossfader": self.crossfader,
+            "soloed_kinds": list(self.soloed_kinds),
+            "deck_map_revision": self.deck_map_revision,
         }
 
 
@@ -156,6 +169,14 @@ class AbletonBridge:
         # exposes this map as the cell-level deck view.
         self._deck_cells: dict[tuple[int, str], int] = {}
 
+        # track_index -> bool, the raw Solo state Live pushed for each deck
+        # column. Populated by per-deck solo subscriptions (see
+        # _subscribe_deck_columns). The bridge maps these track indices back
+        # to deck-kinds via _deck_columns to derive AbletonState.soloed_kinds.
+        # We keep the raw per-track map (not just the kind list) so an
+        # un-recovered track index doesn't get silently dropped.
+        self._track_solo: dict[int, bool] = {}
+
         # Index of the dedicated "Cue" track in Live — output routed to the
         # Scarlett 4i4's outs 3/4 so previews play in headphones without
         # leaking to the master speakers. Lazy-created on first preview call.
@@ -180,6 +201,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
+        self.listener.on("/live/track/get/solo", self._on_track_solo)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -425,6 +447,54 @@ class AbletonBridge:
             self.state.track_meters[track] = level
             self._broadcast()
 
+    def _on_track_solo(self, _address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track_index, 0|1) for /live/track/get/solo (both
+        # on the immediate snapshot at subscribe time and on every change).
+        # Record the raw per-track state, then recompute the deck-kind list.
+        if len(args) >= 2:
+            track = int(args[0])
+            soloed = bool(args[1])
+            self._track_solo[track] = soloed
+            self._recompute_soloed_kinds()
+            self._broadcast()
+
+    def _recompute_soloed_kinds(
+        self, columns: dict[str, int] | None = None
+    ) -> None:
+        """Derive ``AbletonState.soloed_kinds`` from the raw per-track solo
+        map + the current deck-column layout. Emits deck-kinds (e.g.
+        ``"drums_a"``) in canonical ``_DECK_KINDS`` order so the output is
+        stable across re-derivations.
+
+        ``columns`` defaults to ``self._deck_columns``; callers mid-creation
+        (when ``self._deck_columns`` hasn't been assigned the freshly-built
+        map yet) pass the new layout explicitly.
+
+        A track index with no deck-column mapping (e.g. the Cue track, or a
+        solo push that arrived before recovery) is ignored — only deck
+        columns contribute. No-op-safe when the layout is None."""
+        if columns is None:
+            columns = self._deck_columns or {}
+        # Invert: track_index -> deck_kind.
+        idx_to_kind = {idx: kind for kind, idx in columns.items()}
+        soloed = {
+            idx_to_kind[idx]
+            for idx, on in self._track_solo.items()
+            if on and idx in idx_to_kind
+        }
+        self.state.soloed_kinds = [k for k in self._DECK_KINDS if k in soloed]
+
+    def _bump_deck_revision(self) -> None:
+        """Increment the deck-map revision counter and broadcast.
+
+        Called from every code path that mutates the loaded deck-cell map
+        (load, clear/delete, anchor-fill, adopt/resync, reset). The FE
+        watches ``AbletonState.deck_map_revision`` and refetches the deck map
+        the instant it changes — no 2 s polling timer. Pairs with the
+        ``_persist_state`` calls that already bracket every cell mutation."""
+        self.state.deck_map_revision += 1
+        self._broadcast()
+
     def _on_num_tracks(self, address: str, args: tuple[Any, ...]) -> None:
         if args:
             self._reply_values[address] = int(args[0])
@@ -522,6 +592,9 @@ class AbletonBridge:
             self._deck_columns = recovered
             self._subscribe_deck_columns(recovered)
             self._persist_state()
+            # Columns are part of the deck map the FE renders — a recovery
+            # that adopts a different layout should trigger a refetch.
+            self._bump_deck_revision()
             return recovered
         return None
 
@@ -570,7 +643,10 @@ class AbletonBridge:
         self._deck_columns = None
         self._deck_cells = {}
         self._cue_track_idx = None
+        self._track_solo = {}
+        self._recompute_soloed_kinds()
         self._persist_state()
+        self._bump_deck_revision()
         return {"deleted": len(deck_indices), "indices": sorted(deck_indices)}
 
     # ------------------------------------------------------------------
@@ -666,7 +742,9 @@ class AbletonBridge:
         """
         self._deck_columns = None
         self._deck_cells = {}
+        self._recompute_soloed_kinds()
         self._persist_state()
+        self._bump_deck_revision()
 
     def get_deck_state(self) -> dict[str, Any]:
         """Snapshot of which Ableton tracks are our deck columns and which
@@ -753,6 +831,7 @@ class AbletonBridge:
         store + persist."""
         self._deck_cells = dict(cells)
         self._persist_state()
+        self._bump_deck_revision()
 
     def next_free_slot(self, kind: str) -> int:
         """Lowest scene index where the given kind's cell is empty."""
@@ -804,6 +883,7 @@ class AbletonBridge:
         # (e.g. user clicked X on a stale UI).
         removed = self._deck_cells.pop((slot_index, kind), None)
         self._persist_state()
+        self._bump_deck_revision()
         return {
             "ok": True,
             "track_index": track_index,
@@ -1475,6 +1555,8 @@ class AbletonBridge:
         # Persist after every load so a backend restart can reconstruct
         # the grid without losing what's in Live.
         self._persist_state()
+        # Tell the FE the deck-cell map changed so it refetches immediately.
+        self._bump_deck_revision()
 
         return {
             "scene_index": scene_index,
@@ -1501,6 +1583,20 @@ class AbletonBridge:
             self.client.create_audio_track(-1)
             self.client.set_track_name(idx, self._DECK_DISPLAY_NAMES[kind])
             self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
+            # Crossfader routing: A-side decks → group A, B-side decks →
+            # group B, mix → None (always audible). Mirrors the static .als
+            # writer (dance/als/writer.py:_crossfade_value_for) so a
+            # live-loaded deck blends under the crossfader exactly like an
+            # exported Set would. Requires the AbletonOSC fork patch — see
+            # docs/abletonosc_setup.md. Best-effort: on stock AbletonOSC the
+            # address is unhandled and the deck stays at Live's default
+            # (None), so the crossfader just won't affect it.
+            try:
+                self.client.set_track_crossfade_assign(
+                    idx, self._crossfade_assign_for(kind)
+                )
+            except OSError:  # pragma: no cover - best-effort
+                pass
             if kind in ("mix_a", "mix_b"):
                 try:
                     self.client.set_track_mute(idx, True)
@@ -1510,6 +1606,33 @@ class AbletonBridge:
             idx += 1
         self._subscribe_deck_columns(columns)
         return columns
+
+    @staticmethod
+    def _side_of(deck_kind: str) -> str | None:
+        """``"drums_a"`` → ``"a"``; ``"mix_b"`` → ``"b"``; bare → None.
+        Mirrors dance.als.writer._side_of — kept in sync by hand (both walk
+        the same _DECK_KINDS / DECK_ORDER shape)."""
+        if deck_kind.endswith("_a"):
+            return "a"
+        if deck_kind.endswith("_b"):
+            return "b"
+        return None
+
+    @classmethod
+    def _crossfade_assign_for(cls, deck_kind: str) -> int:
+        """Live MixerDevice.crossfade_assign enum for a deck-kind:
+        A-side → 0 (A), B-side → 2 (B), anything else → 1 (None).
+
+        Single semantic source of truth with the static .als writer's
+        _crossfade_value_for (writer encodes the same 0/1/2 as strings into
+        CrossFadeState/Manual). The integer constants live on
+        AbletonOSCClient (CROSSFADE_A/NONE/B)."""
+        side = cls._side_of(deck_kind)
+        if side == "a":
+            return AbletonOSCClient.CROSSFADE_A
+        if side == "b":
+            return AbletonOSCClient.CROSSFADE_B
+        return AbletonOSCClient.CROSSFADE_NONE
 
     def _subscribe_deck_columns(self, columns: dict[str, int]) -> None:
         """Ask AbletonOSC to push meter + playing-clip updates for each deck
@@ -1531,6 +1654,18 @@ class AbletonBridge:
                 self.client.start_listen_playing_clip(track_idx)
             except OSError:  # pragma: no cover - best-effort
                 pass
+            try:
+                # PFL/Solo state — AbletonOSC replies once immediately and
+                # on every change, populating AbletonState.soloed_kinds.
+                self.client.start_listen_solo(track_idx)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        # Column layout may have shifted (recovery / re-create), so the
+        # track_index → kind mapping behind soloed_kinds can change even
+        # before any new solo push arrives. Recompute from the layout we
+        # were handed (self._deck_columns may not be assigned yet during
+        # _create_deck_columns).
+        self._recompute_soloed_kinds(columns)
 
     # ------------------------------------------------------------------
     # Cue / preview — audition a candidate clip in headphones without

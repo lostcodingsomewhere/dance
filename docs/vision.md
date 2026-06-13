@@ -22,7 +22,7 @@ Three modes co-exist in this paradigm:
 
 The app is **not a search box**. It is a **continuously re-scoring set of suggestions** that respond to what's currently playing.
 
-At every moment, **each column** of the 8×5 grid (drums, bass, vocals, other, mix) has its own recommendation stream. Each stream answers a different question:
+At every moment, **each stem role** has its own recommendation stream. The on-screen grid is now an **8-column 2-deck** layout — the four stem roles (drums, bass, vocals, other) each appear twice, once per deck (A / B), in fader order. The recs are role-scoped (one feed per role, plus a mix/anchor feed); the deck is chosen at load time. Each stream answers a different question:
 
 | Column | Question its recs answer |
 |---|---|
@@ -30,7 +30,7 @@ At every moment, **each column** of the 8×5 grid (drums, bass, vocals, other, m
 | Bass | "Given the current drums + vocals + other, what bass would land?" |
 | Vocals | "Given the current drums + bass + other, what vocals would land?" |
 | Other | "What melodic / synth / pad element fits the current combo?" |
-| Mix | "What full song would I anchor to right now?" |
+| Mix | "What full song would I anchor to right now?" (the Mix/anchor reference lives as a per-deck header chip, not a grid column) |
 
 As you swap one stem, every other column's recs re-score around the new combination. Decisions cascade. Pull a new vocal in → the drums/bass/other columns update because the context changed. You move through a tree of "what's possible right now", and the system shows you the live edges.
 
@@ -41,7 +41,7 @@ Filters and free-text vibe search live per-column. "More aggressive drums" filte
 Naming the anti-vision sharpens the vision:
 
 - **Not a library browser.** Spotify already exists. Pre-set curation is part of the flow but it's not the focus.
-- **Not a song-to-song DJ deck.** Rekordbox, Traktor, Serato exist. This repo explicitly removed Traktor. If you want crossfaders and song decks, use those.
+- **Not a song-to-song DJ deck.** Rekordbox, Traktor, Serato exist. This repo explicitly removed Traktor. The rig does now have two decks and uses the hardware A/B crossfader to blend Deck A's stems against Deck B's — but the unit of play is still the stem instance, not the song; the crossfader blends two *stem combos*, not two tracks.
 - **Not a producer's DAW.** Ableton exists. We don't compete with the engine; we sit on top of it.
 - **Not multi-user.** No collab, no cloud sync, no streaming.
 - **Not mobile-first.** Laptop screen during dev; potentially iPad as secondary surface someday, but not the design target.
@@ -65,7 +65,7 @@ These decisions fall out of the vision and are locked:
 
 1. **Frontend is the primary surface.** Ableton is the engine; the APC40 is the hands; the React app is the eyes and the brain. Live's UI is hidden during a set.
 
-2. **Columns, not rows, are the primary visual unit** of the 8×5 grid. Each column is a stem role (drums/bass/vocals/other/mix). Rows exist as a loading convention and as a "fire whole song" anchor.
+2. **Columns, not rows, are the primary visual unit** of the grid. The grid is 8 columns — the four stem roles (drums/bass/vocals/other) × two decks (A/B), in fader order. Rows exist as a loading convention and as a "fire whole song" anchor. The Mix/anchor reference is a per-deck header chip, not a grid column.
 
 3. **Stems loop by default.** A drum stem keeps grooving until you swap it. Per-clip override available for stems that should play through (e.g. a vocal verse → chorus → verse arc).
 
@@ -73,7 +73,7 @@ These decisions fall out of the vision and are locked:
 
 5. **Curation lives in the recs, not in tagging.** No "this track is drums-only" metadata. The system surfaces what works given current context; the user doesn't have to pre-classify.
 
-6. **The 8×5 grid mirrors the APC40.** Same shape, same orientation (bottom row = scene 1), same row-is-scene semantics. Muscle memory wins.
+6. **The 8×5 grid mirrors the APC40.** Same shape, same orientation (bottom row = scene 1), same row-is-scene semantics. The 8 columns map 1:1 to the APC40's 8 faders (1–4 = Deck A, 5–8 = Deck B); the hardware A/B crossfader blends the two decks. Muscle memory wins.
 
 7. **Compat is per-stem, not per-track.** Key/BPM/energy compatibility is computed against the active combo of stems, not against a "now playing song". When you only have drums playing, only the drums are part of the compat math for other columns.
 

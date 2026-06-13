@@ -1,5 +1,8 @@
 # FX Returns + APC40 Send-Mode — Live Author Runbook
 
+> ⚠️ **Status: SUPERSEDED by [`fx-phase-1-runbook.md`](fx-phase-1-runbook.md).**
+> **Do not follow this runbook.** The FX return-track names it specifies (`A-Reverb`, `B-Delay`, `C-Filter`, `D-Riser`) do **not** match the OSC bridge's exact-name requirement — the bridge looks up return tracks named **`Filter`**, **`Reverb`**, **`Delay`**, and **`Riser`** (bare names, no `A-`/`C-` prefix). Authoring returns with the names below yields **dead FX**: the bridge can't find them, so the throws/sweeps silently do nothing. Use the phase-1 runbook for the current, verified return-track naming and wiring. This doc is kept for historical context only.
+
 Status: **runbook** — to be executed by you (the DJ) with Ableton Live 12.4 open. Not auto-executable from Claude because the `.als` template is extracted from a real Live save and must round-trip through Live to stay valid.
 
 Companion to [hardware-and-live-controls.md](hardware-and-live-controls.md) §2 (FX returns) and §3 (risers).

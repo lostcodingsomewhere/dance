@@ -67,11 +67,11 @@ What's happening: the user is shaping the trajectory across many swaps. Decision
 | Need | Source |
 |---|---|
 | Energy curve over time | Compact sparkline inline in MasterStrip (always visible) |
-| Recent stem swaps | Horizontally-scrolling PlayedStrip at the bottom |
+| Recent stem swaps | Recent-plays history in the MasterStrip's session chip |
 | Have I leaned hard on one source? | "Used N× already" badge on tracks heavily mined (v2+) |
 | Set shape vs intent | Optional set-arc template overlay (v2+) |
 
-**Eyes-on demand: occasional.** Glanced at every 5–10 minutes during lulls — but because both signals live in slim strips at top/bottom, no surface switch is needed.
+**Eyes-on demand: occasional.** Glanced at every 5–10 minutes during lulls — but because both signals live in the MasterStrip at the top, no surface switch is needed.
 
 ## Surfaces in the live-remixing Booth
 
@@ -79,16 +79,17 @@ Top-to-bottom layout (current; mirrors what's in `views/Booth.tsx`):
 
 | Surface | Where | What it answers |
 |---|---|---|
-| MasterStrip | Top bar | BPM (click → genre-anchored slider with explicit Apply) · KEY · combo VU meter · energy arc · Live-bridge heartbeat · resync · vibe search · view tabs |
-| SceneGrid (5 cols × 4 rows, expandable to 8) | Just below MasterStrip — the centerpiece | Canonical APC40 mirror. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. Per-column "S" buttons in headers toggle solo (cue/PFL → headphones). Hover any loaded cell → small × in the top-right removes that one stem from the grid. |
-| ComboStrip | Below the grid | "What's playing right now?" — one card per stem role with the source track of each playing stem PLUS an interactive waveform. Each card shows: role chip + title/artist/key + a 32 px waveform with (a) live playhead from Live's per-clip `playing_position`, (b) faint colored section bands behind the peaks, (c) small unicode icons (▲ buildup, ▼ drop, ◌ breakdown, ◇ bridge, ▷ intro, ◁ outro, ● verse, ★ chorus) at section starts with hover-tooltips revealing the full name, (d) click-to-scrub that snaps to the section the click landed in. Flags anchor mode when all playing cells point at the same scene + same source track. (Replaced the earlier MasterVisualizer surface — same info, no duplication.) |
-| CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's full waveform (same section bands + cue icons as ComboStrip), ⏹ stop, and a "→ Load … to master" one-click commit. |
-| Per-column rec banners (5 across) | Below the cue strip | "What should I swap into each column next?" — live-rescored against the active combo. Per card: ▶ stem preview · ♪ song preview · Load stem · Load song. |
-| PlayedStrip | Bottom footer | Set name, play count, recent plays history, end-set. |
+| MasterStrip | Top bar (rendered by the app shell, above the Booth view) | BPM (click → genre-anchored slider with explicit Apply) · KEY · combo VU meter · energy arc · Live-bridge heartbeat · resync · vibe search · view tabs · session chip (play count + end-set) |
+| TwoDeckStrip | Just below MasterStrip — "what's playing right now?" | Two panels, one per deck (A / B). Each panel stacks its four playing stem waveforms (drums / bass / vocals / other) for that deck, with live playhead from Live's per-clip `playing_position`, faint colored section bands behind the peaks, unicode section icons (▲ buildup, ▼ drop, ◌ breakdown, ◇ bridge, ▷ intro, ◁ outro, ● verse, ★ chorus) at section starts with hover-tooltips, and click-to-scrub. The per-deck Mix/anchor reference shows as a header chip on its panel. (Replaced the earlier single-deck ComboStrip / MasterVisualizer surfaces.) |
+| Crossfader | Between the two deck panels and the grid | Mirrors the APC40 hardware A/B crossfader; drag on-screen to set. A on the left, B on the right — blends Deck A's stems against Deck B's. |
+| BoothColumnHeaders | Above the grid | Colored role chips (DRUMS · BASS · VOCALS · MELODY/other · SONG) with per-column Solo "S" buttons (cue/PFL → headphones). |
+| SceneGrid (8 cols × 4 rows, expandable to 8 rows) | The centerpiece | Canonical APC40 mirror in **fader order**: drums_a, drums_b, bass_a, bass_b, vocals_a, vocals_b, other_a, other_b. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. Hover any loaded cell → small × in the top-right removes that one stem from the grid. |
+| CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's full waveform (same section bands + cue icons as TwoDeckStrip), ⏹ stop, and a "→ Load … to master" one-click commit. |
+| Per-column rec banners (5 role feeds across) | Below the cue strip | "What should I swap into each role next?" — live-rescored against the active combo. Five feeds (drums / bass / vocals / other / mix); each card's ⤒A / ⤒B buttons pick the deck at load time. Per card: ▶ stem preview · ♪ song preview · Load stem · Load song. |
 
-All three column-style strips (SceneGrid, ComboStrip, per-column rec banners) share the same `[2.5rem leading + 5 stem cols] gap-1` grid template so the 5 stem columns line up vertically through the whole booth view.
+The column-style strips share a 10-stem-column grid template (8 stem cells = 4 roles × 2 decks; the 5 rec-role feeds each span 2 cols so they sit above their A/B pair) so columns line up vertically through the whole booth view.
 
-There are no sidebars. Glanceable signals (energy arc, played history) live in slim strips so the grid + banners own the center. The grid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8.
+There are no sidebars. Glanceable signals (energy arc, session/play count) live in the MasterStrip so the grid + banners own the center. The grid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8. (There is no PlayedStrip footer; play count + end-set moved into the MasterStrip's session chip.)
 
 ## What information must be co-located
 
@@ -119,7 +120,7 @@ A well-tuned single-surface UI should support this pattern without forcing the u
 
 Non-negotiable for this user (see [`../HARDWARE.md`](../HARDWARE.md)):
 
-- **APC40 mk2 — 8×5 clip grid.** Hardware-fixed. Each row = scene, each column = stem-role track. The companion app's grid mirrors this orientation.
+- **APC40 mk2 — 8×5 clip grid.** Hardware-fixed. Each row = scene; the 8 columns are stem-role × deck tracks (drums/bass/vocals/other × A/B, in fader order). The companion app's grid mirrors this orientation, and the 8 channel faders map 1:1 (faders 1–4 = Deck A, faders 5–8 = Deck B). The hardware A/B crossfader blends Deck A against Deck B.
 - **Ableton Live Standard 12.4.** Audio engine, mixer, clock, clip-launch quantize, master out. Not negotiable.
 - **MacBook Pro M2 Pro 16 GB.** The screen the companion app runs on, primary surface during dev.
 - **No Bluetooth audio path.** Wired-only.
@@ -130,7 +131,7 @@ Non-negotiable for this user (see [`../HARDWARE.md`](../HARDWARE.md)):
 - **Swap** — firing a new cell in a column where one cell is already playing, replacing it.
 - **Layer** — firing a cell in a column that's currently silent.
 - **Anchor** — firing a whole row to play the original song combo. Recovery / fallback move.
-- **Stem role** — drums / bass / vocals / other / mix. Maps to one of the 5 columns of the APC40 grid.
+- **Stem role** — drums / bass / vocals / other (+ mix as the anchor reference). Each of the 4 stem roles occupies two grid columns — one per deck (A / B) — so the grid is 8 stem columns wide. Mix/anchor is shown as a per-deck header chip, not a grid column.
 - **Cell** — the intersection of a row (track) and column (stem role). One stem of one track.
 - **Rec stream** — the live-rescored list of candidate cells for one column, refreshed on combo change.
 - **Compat chip** — at-a-glance match indicator on a candidate cell — relative to the active combo, not relative to a single track.

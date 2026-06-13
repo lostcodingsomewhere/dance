@@ -6,6 +6,17 @@ Update freely — keep entries dated, keep them short, keep the *what surprised 
 
 ---
 
+## How to actually get there (the approach, not the tooling)
+
+The build keeps growing; the playing doesn't. Four corrections, in priority order:
+
+1. **Pick a real gig date 4–6 weeks out — now — and make it the forcing function.** Invert the self-graded "5 consecutive recorded sets you'd play for a stranger" trigger (Phase 5 below): that bar is infinitely deferrable because *you* grade it. A booked date you can't move grades it for you. House party, a friend's birthday, a bar's open-decks night — anything with a date and other humans. Work backward from it.
+2. **Tools freeze: no new app features until first play-out.** The companion app and pipeline are good enough to DJ on. Every new feature is procrastination dressed as progress. Until you've played out once, the only code changes allowed are *bug fixes that block playing* — nothing additive. After the gig, reassess.
+3. **Record-and-listen is a per-session ritual, not a Phase-4 gate.** Don't wait until "Phase 4: 15-min recorded set" to start recording. Record *every* session from today and listen back to at least part of it. In the bedroom phase you have no crowd, so the recording is your only honest feedback signal. Make it a habit before it's a milestone.
+4. **Check Phase 0 off first.** Before anything clever: open a generated `.als`, hit play, and confirm sound comes out of the Edifiers and the Bose cues independently. "Hear sound out of the speakers" is the gate everything else stands on — don't assume it; verify it at the start of the next session and tick the box.
+
+---
+
 ## The runbook (start here every session)
 
 ### First-time setup (one-off)
@@ -115,6 +126,15 @@ Append to the top. Use this template:
 **Broke:** what surprised me / what didn't work
 **Next time:** one thing to try
 ```
+
+### 2026-06-13 — Docs/course fix pass (drift cleanup, no DJing)
+
+**Played:** No DJing — documentation + course correction pass while a real pipeline run was in flight elsewhere.
+**Worked:**
+- Course (`docs/course/index.html` + the companion-app mirror, kept byte-identical): fixed the library path (`~/Music/Dance/library` → `~/Music/DJ/library`); rewrote Move 1 (The Fade) to the 2-deck fader map (1–4 = Deck A, 5–8 = Deck B, Mix off-fader) and the hardware A/B crossfader; corrected the 4th rec signal (Energy match → Tag overlap) and added that live banners re-score on the active stem combo (embedding + key + BPM); added a Cue-is-additive heads-up; added the one-lead-vocal rule and an "anchor is home" strategy framing; promoted record-and-listen-back into a per-session habit from Lesson 1.1; added a weekly "recs-off rep" exercise; added an "ingest stalls" note (ffmpeg, ~580 MB first-run weights, SIGBUS on Py3.14).
+- Repo docs: updated `dj_ux_flow.md` + `vision.md` to the 8-column 2-deck grid (Mix moved to per-deck header chips; crossfader now used) and the actual rendered Booth surfaces (TwoDeckStrip/Crossfader/BoothColumnHeaders, no ComboStrip/MasterVisualizer/PlayedStrip); rewrote `als-export.md` to the 10-track 2-deck shape with the "clips are scaffold decoys, live-load through the app" framing up front; fixed `troubleshooting.md` (real CSV path `scripts/yt_dlp_csv_import.py` + new `dance ingest` wrapper; added a Demucs SIGBUS/exit-138 entry); flagged `proposals/hardware-fx-runbook.md` SUPERSEDED (wrong FX return-track names); updated `CLAUDE.md` Booth surfaces.
+**Broke:** Nothing run live — docs only. The course had drifted badly from the shipped 2-deck layout; the single-deck "5 columns on faders 1–5" map was the most misleading bit.
+**Next time:** Stop editing docs and DJ. Pick the gig date (see "How to actually get there"), check Phase 0 off, record the session.
 
 ### 2026-05-22 — Booth UX hardening + visualizers + deck-state persistence
 

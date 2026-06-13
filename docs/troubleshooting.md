@@ -37,6 +37,23 @@ DANCE_CLAP_DEVICE=cpu DANCE_DEMUCS_DEVICE=cpu dance process
 
 The deep tagger's Qwen2-Audio is the most fragile on MPS — see `src/dance/llm/qwen_audio.py:144` for the special-case load order (CPU first, then `model.to("mps")`). If it crashes, fall back via `DANCE_DEEP_TAGGER_DEVICE=cpu`.
 
+## Demucs separation crashes (SIGBUS / exit 138) on Python 3.14
+
+On this machine's off-spec **Python 3.14** venv, Demucs stem-separation can die with a **bus error (SIGBUS)** — the process exits with code **138** (128 + signal 10) and the track makes no progress (no stems produced, the run bounces straight to the next track or to an `error` state). This is a native crash in the torch/Demucs stack under the non-standard interpreter, not a bug in the pipeline code.
+
+**Workaround — run separation on CPU:**
+
+```bash
+DANCE_DEMUCS_DEVICE=cpu dance process
+```
+
+CPU separation is slower (a few minutes per track instead of ~1–3) but stable — it sidesteps the MPS path that triggers the crash. Also:
+
+- **Reduce concurrent load** — separate fewer tracks at a time (e.g. `dance process -n 1`) so you're not running multiple Demucs processes against memory pressure at once.
+- **Make sure ffmpeg is installed** (`brew install ffmpeg`) — a missing/half-broken ffmpeg can surface as an abrupt native exit during decode rather than a clean error.
+
+If you need MPS speed, the durable fix is to run the pipeline on a spec-compliant Python 3.10 interpreter (see the Python-3.14 memory note); CPU separation is the right move when you just need the run to finish.
+
 ## OSC firewall on macOS
 
 The first time the backend starts and the OSC listener binds to UDP `127.0.0.1:11001`, macOS may prompt:
@@ -83,7 +100,12 @@ curl -H "Authorization: Bearer $TOKEN" \
   "https://api.spotify.com/v1/playlists/<id>/tracks?limit=5"
 ```
 
-**Workaround in this repo:** `dance ingest-csv` — bypass Spotify entirely. Export the playlist to CSV via https://exportify.net (which uses an old grandfathered Spotify app and still works), then feed the CSV to `yt-dlp` for the actual audio download from YouTube Music. The library dir ends up populated the same way `dance sync` would have done, and the rest of the pipeline runs unchanged.
+**Workaround in this repo: bypass Spotify entirely.** There is no `dance ingest-csv` command — the CSV path lives in two places:
+
+- **`python scripts/yt_dlp_csv_import.py`** — the CSV → yt-dlp downloader. Export the playlist to CSV via https://exportify.net (which uses an old grandfathered Spotify app and still works), then feed the CSV to this script for the actual audio download from YouTube Music. The library dir ends up populated the same way `dance sync` would have done, and the rest of the pipeline runs unchanged.
+- **The companion app's Spotify/CSV ingest flow** — the same import surfaced in the UI.
+
+Once the library dir is populated (by either path, or by dropping local files — see [below](#loading-audio-from-a-local-folder-no-spotify-needed)), run `dance process` (or the new **`dance ingest`** wrapper, which chains sync → process → tag → build-graph → export-als) to advance everything through the pipeline.
 
 > ⚠️ **YouTube has its own anti-bot wall (2025-2026) — but it's solvable.** Confirmed working on 2026-05-16. All five pieces below are required; missing any one returns "Only storyboard images are available" or HTTP 403 from googlevideo.com.
 >

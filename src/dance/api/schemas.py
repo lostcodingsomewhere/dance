@@ -381,6 +381,17 @@ class AbletonStateOut(BaseModel):
     # track_index → currently-playing clip's playing_position in beats.
     # Subscribed per clip when it starts; cleared when it stops.
     playing_positions: dict[int, float] = Field(default_factory=dict)
+    # Master crossfader position (-1 full A, 0 center, +1 full B). Mirrors
+    # the APC40 hardware fader; null until Live first pushes it.
+    crossfader: float | None = None
+    # Deck-kinds whose Live track currently has Solo on (with Solo/Cue mode =
+    # Cue, these are routed to the headphone PFL bus). Canonical deck-kind
+    # strings in _DECK_KINDS order, e.g. ["drums_a", "mix_b"].
+    soloed_kinds: list[str] = Field(default_factory=list)
+    # Monotonic counter that bumps on every deck-cell map mutation (load /
+    # clear / move / anchor-fill / resync). The FE refetches GET
+    # /ableton/decks the instant this changes instead of polling on a timer.
+    deck_map_revision: int = 0
 
 
 class TempoRequest(BaseModel):

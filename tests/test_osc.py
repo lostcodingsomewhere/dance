@@ -793,3 +793,274 @@ def test_bridge_state_to_dict_is_json_safe():
     json.dumps(d)  # would raise if non-JSON-safe
     assert d["tempo"] == 128.0
     assert d["playing_clips"] == {0: 2}
+
+
+# ---------------------------------------------------------------------------
+# Live-contract additions: crossfade_assign, soloed_kinds, deck_map_revision
+# ---------------------------------------------------------------------------
+
+
+def test_client_set_crossfade_assign_address_and_args():
+    """set_track_crossfade_assign emits /live/track/set/crossfade_assign with
+    an integer enum (0=A, 1=None, 2=B)."""
+    port = _free_port()
+    received: list[tuple[str, tuple[Any, ...]]] = []
+    listener = AbletonOSCListener(port=port)
+    listener.on_any(lambda addr, args: received.append((addr, args)))
+    listener.start()
+    try:
+        client = AbletonOSCClient(port=port)
+        client.set_track_crossfade_assign(3, client.CROSSFADE_A)
+        client.set_track_crossfade_assign(4, client.CROSSFADE_B)
+        client.set_track_crossfade_assign(8, client.CROSSFADE_NONE)
+        client.get_track_crossfade_assign(3)
+
+        assert _wait_for(lambda: len(received) >= 4)
+        by_addr_all = [(a, args) for a, args in received]
+        sets = [args for a, args in by_addr_all if a == "/live/track/set/crossfade_assign"]
+        assert (3, 0) in sets
+        assert (4, 2) in sets
+        assert (8, 1) in sets
+        gets = [args for a, args in by_addr_all if a == "/live/track/get/crossfade_assign"]
+        assert (3,) in gets
+        # OSC must carry plain ints, not bools/floats.
+        for _t, v in sets:
+            assert type(v) is int
+    finally:
+        listener.stop()
+
+
+def test_client_solo_listen_addresses():
+    """start/stop_listen_solo emit the generic track listen verbs."""
+    port = _free_port()
+    received: list[tuple[str, tuple[Any, ...]]] = []
+    listener = AbletonOSCListener(port=port)
+    listener.on_any(lambda addr, args: received.append((addr, args)))
+    listener.start()
+    try:
+        client = AbletonOSCClient(port=port)
+        client.start_listen_solo(5)
+        client.stop_listen_solo(5)
+        assert _wait_for(lambda: len(received) >= 2)
+        by_addr = {a: args for a, args in received}
+        assert by_addr["/live/track/start_listen/solo"] == (5,)
+        assert by_addr["/live/track/stop_listen/solo"] == (5,)
+    finally:
+        listener.stop()
+
+
+def test_bridge_crossfade_assign_value_for_each_deck_kind():
+    """A-side decks → A(0), B-side decks → B(2), mix-less / unsided → None(1).
+    Mirrors dance.als.writer._crossfade_value_for."""
+    assert AbletonBridge._crossfade_assign_for("drums_a") == AbletonOSCClient.CROSSFADE_A
+    assert AbletonBridge._crossfade_assign_for("vocals_b") == AbletonOSCClient.CROSSFADE_B
+    assert AbletonBridge._crossfade_assign_for("mix_a") == AbletonOSCClient.CROSSFADE_A
+    assert AbletonBridge._crossfade_assign_for("mix_b") == AbletonOSCClient.CROSSFADE_B
+    # A bare/unsided kind (defensive) → None group.
+    assert AbletonBridge._crossfade_assign_for("mix") == AbletonOSCClient.CROSSFADE_NONE
+
+
+def test_bridge_crossfade_matches_als_writer_semantics():
+    """The bridge's live-load routing must agree with the static .als writer
+    for EVERY deck-kind so a live-loaded deck blends identically to an export.
+    """
+    from dance.als import writer
+
+    for deck_kind in AbletonBridge._DECK_KINDS:
+        bridge_val = AbletonBridge._crossfade_assign_for(deck_kind)
+        writer_val = int(writer._crossfade_value_for(deck_kind))
+        assert bridge_val == writer_val, f"mismatch on {deck_kind}"
+
+
+def test_bridge_create_deck_columns_assigns_crossfade_per_side():
+    """_create_deck_columns sends /live/track/set/crossfade_assign for each of
+    the 10 deck tracks: A-side → 0, B-side → 2, mix follows its side."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+    received: list[tuple[str, tuple[Any, ...]]] = []
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [0])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.on_any(lambda a, args: received.append((a, args)))
+    fake_live_listener.start()
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        bridge.push_track_to_live(_stub_track(), [], include_stems=False)
+        assert _wait_for(
+            lambda: sum(
+                1 for a, _ in received if a == "/live/track/set/crossfade_assign"
+            )
+            >= 10
+        )
+        assigns = {
+            args[0]: args[1]
+            for a, args in received
+            if a == "/live/track/set/crossfade_assign"
+        }
+        # Indices 0..9 in _DECK_KINDS order; A-side at even, B-side at odd
+        # for the 8 stem decks, then mix_a (8) / mix_b (9).
+        # drums_a=0 → A, drums_b=1 → B, ... mix_a=8 → A, mix_b=9 → B.
+        assert assigns[0] == AbletonOSCClient.CROSSFADE_A   # drums_a
+        assert assigns[1] == AbletonOSCClient.CROSSFADE_B   # drums_b
+        assert assigns[8] == AbletonOSCClient.CROSSFADE_A   # mix_a
+        assert assigns[9] == AbletonOSCClient.CROSSFADE_B   # mix_b
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_soloed_kinds_derived_from_solo_pushes():
+    """A Live /live/track/get/solo push for a deck-column track index lands in
+    AbletonState.soloed_kinds as the matching deck-kind; clearing it removes
+    the kind. Indices that aren't deck columns are ignored."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        # Pretend the decks were created at indices 0..9.
+        bridge._deck_columns = {
+            kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)
+        }
+        fake_live = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+        # Solo on drums_a (idx 0) and mix_b (idx 9); a non-deck idx 99 too.
+        fake_live.send_message("/live/track/get/solo", [0, 1])
+        fake_live.send_message("/live/track/get/solo", [9, 1])
+        fake_live.send_message("/live/track/get/solo", [99, 1])
+        assert _wait_for(
+            lambda: bridge.state.soloed_kinds == ["drums_a", "mix_b"]
+        )
+        # Clear drums_a → only mix_b remains.
+        fake_live.send_message("/live/track/get/solo", [0, 0])
+        assert _wait_for(lambda: bridge.state.soloed_kinds == ["mix_b"])
+    finally:
+        bridge.stop()
+
+
+def test_bridge_soloed_kinds_stable_canonical_order():
+    """soloed_kinds is emitted in _DECK_KINDS order regardless of the order
+    solo pushes arrive."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        bridge._deck_columns = {
+            kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)
+        }
+        fake_live = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+        # Push in reverse-ish order: mix_b(9), bass_a(2), drums_a(0).
+        fake_live.send_message("/live/track/get/solo", [9, 1])
+        fake_live.send_message("/live/track/get/solo", [2, 1])
+        fake_live.send_message("/live/track/get/solo", [0, 1])
+        assert _wait_for(
+            lambda: bridge.state.soloed_kinds == ["drums_a", "bass_a", "mix_b"]
+        )
+    finally:
+        bridge.stop()
+
+
+def test_bridge_deck_map_revision_bumps_on_load(tmp_path):
+    """deck_map_revision increments on each push_track_to_live (a deck-cell
+    mutation), so the FE knows to refetch the deck map."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.start()
+
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        assert bridge.state.deck_map_revision == 0
+        bridge.push_track_to_live(
+            _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+        )
+        rev_after_load = bridge.state.deck_map_revision
+        assert rev_after_load >= 1
+        # A second load bumps again.
+        bridge.push_track_to_live(
+            _stub_track(id=2), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+        )
+        assert bridge.state.deck_map_revision > rev_after_load
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_deck_map_revision_bumps_on_delete_and_reset(tmp_path):
+    """delete_cell and reset_deck_columns each bump the revision."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake_live_listener = AbletonOSCListener(port=send_port)
+    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+
+    def on_query(_addr, _args):
+        reply_client.send_message("/live/song/get/num_tracks", [10])
+
+    fake_live_listener.on("/live/song/get/num_tracks", on_query)
+    fake_live_listener.start()
+
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        bridge.push_track_to_live(
+            _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+        )
+        rev = bridge.state.deck_map_revision
+        # drums_a deck track index is 10 (base 10 + drums_a at offset 0).
+        bridge.delete_cell(track_index=10, slot_index=0)
+        assert bridge.state.deck_map_revision == rev + 1
+        rev = bridge.state.deck_map_revision
+        bridge.reset_deck_columns()
+        assert bridge.state.deck_map_revision == rev + 1
+    finally:
+        bridge.stop()
+        fake_live_listener.stop()
+
+
+def test_bridge_deck_map_revision_bumps_on_adopt():
+    """adopt_cells (the resync path) bumps the revision."""
+    listen_port = _free_port()
+    send_port = _free_port()
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        rev = bridge.state.deck_map_revision
+        bridge.adopt_cells({(0, "drums_a"): 1, (0, "bass_a"): 1})
+        assert bridge.state.deck_map_revision == rev + 1
+    finally:
+        bridge.stop()
+
+
+def test_bridge_state_to_dict_includes_new_contract_fields():
+    """to_dict carries soloed_kinds + deck_map_revision (and crossfader) so
+    the WebSocket broadcast surfaces the full live-state contract."""
+    import json
+
+    state = AbletonState(tempo=120.0)
+    state.soloed_kinds = ["drums_a", "mix_b"]
+    state.deck_map_revision = 7
+    state.crossfader = -0.25
+    d = state.to_dict()
+    json.dumps(d)  # JSON-safe
+    assert d["soloed_kinds"] == ["drums_a", "mix_b"]
+    assert d["deck_map_revision"] == 7
+    assert d["crossfader"] == -0.25

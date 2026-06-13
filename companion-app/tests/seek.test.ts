@@ -2,14 +2,30 @@ import { describe, expect, it } from "vitest";
 import { ratioToBeats, snapRatioToSection } from "../src/lib/seek";
 import type { Region } from "../src/types";
 
-const section = (id: number, ms: number): Region => ({
-  id,
-  region_type: "section",
-  position_ms: ms,
+// Minimal Region factory — fills every required field so the literal
+// satisfies the current Region type; the seek logic only reads
+// region_type + position_ms.
+const region = (over: Partial<Region> & Pick<Region, "id" | "region_type" | "position_ms">): Region => ({
   length_ms: 30_000,
-  section_label: "drop",
-  bar_count: 8,
+  section_label: null,
+  length_bars: null,
+  name: null,
+  color: null,
+  confidence: null,
+  source: "test",
+  stem_file_id: null,
+  ...over,
 });
+
+const section = (id: number, ms: number): Region =>
+  region({
+    id,
+    region_type: "section",
+    position_ms: ms,
+    length_ms: 30_000,
+    section_label: "drop",
+    length_bars: 8,
+  });
 
 describe("snapRatioToSection", () => {
   const durationSec = 240; // 4 min
@@ -47,7 +63,7 @@ describe("snapRatioToSection", () => {
     const mixed: Region[] = [
       ...regions,
       // Cue at 25.5% — would snap there if cues counted, but they don't.
-      { id: 99, region_type: "cue", position_ms: 61_200, length_ms: null },
+      region({ id: 99, region_type: "cue", position_ms: 61_200, length_ms: null }),
     ];
     // 26% click → snaps to the 25% *section*, not the cue.
     expect(snapRatioToSection(0.26, mixed, durationSec)).toBeCloseTo(0.25);

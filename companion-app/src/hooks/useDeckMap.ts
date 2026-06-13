@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api";
 import { store, useAppStore } from "../store";
+import { useAbletonState } from "./useAbletonState";
 
 /**
  * Poll the bridge's view of "what cells are loaded in Live". This is the
@@ -9,15 +10,30 @@ import { store, useAppStore } from "../store";
  * gets pruned when the backend disagrees (post-Phase-7 we read cells,
  * not scenes; a scene "exists" in the auto-reconcile sense if any of
  * its cells are populated).
+ *
+ * Freshness comes from the WebSocket contract's ``deck_map_revision``: it
+ * bumps whenever the loaded deck-cell map changes (load / clear /
+ * anchor-fill), and we invalidate the deck-map query the instant it does,
+ * so the grid reflects edits immediately instead of up to a poll-tick
+ * late. The HTTP poll is kept slow (10s) purely as a fallback for the
+ * case where the WS frame is missed or the revision doesn't move.
  */
 export function useDeckMap() {
   const localDecks = useAppStore((s) => s.loadedDecks);
+  const qc = useQueryClient();
+  const deckMapRevision = useAbletonState().deck_map_revision;
   const query = useQuery({
     queryKey: ["ableton", "decks"],
     queryFn: api.abletonDeckMap,
-    refetchInterval: 2000,
+    refetchInterval: 10000,
     staleTime: 1000,
   });
+
+  // Refetch the instant the bridge signals the deck-cell map changed.
+  // The slow poll above only matters if a revision bump is ever missed.
+  useEffect(() => {
+    qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+  }, [deckMapRevision, qc]);
 
   useEffect(() => {
     const cells = query.data?.cells;
