@@ -136,6 +136,27 @@ class AbletonOSCClient:
     def set_track_solo(self, track: int, soloed: bool) -> None:
         self._send("/live/track/set/solo", track, 1 if soloed else 0)
 
+    # Crossfade assignment: which side of the master crossfader a track
+    # follows. Lives on track.mixer_device.crossfade_assign (an int enum,
+    # NOT the master Song.crossfader value). Live LOM values:
+    #   0 = A (left), 1 = None (always audible), 2 = B (right).
+    # These match dance.als.writer's CrossFadeState/Manual values so a
+    # live-loaded deck routes identically to a static .als export. Requires
+    # our AbletonOSC fork's /live/track/set/crossfade_assign handler — see
+    # docs/abletonosc_setup.md.
+    CROSSFADE_A = 0
+    CROSSFADE_NONE = 1
+    CROSSFADE_B = 2
+
+    def set_track_crossfade_assign(self, track: int, value: int) -> None:
+        """Assign a track to a crossfader side. ``value`` ∈ {0=A, 1=None, 2=B}."""
+        self._send("/live/track/set/crossfade_assign", track, int(value))
+
+    def get_track_crossfade_assign(self, track: int) -> None:
+        """Ask Live to push a track's crossfade_assign back via
+        /live/track/get/crossfade_assign. Reply args: (track, value)."""
+        self._send("/live/track/get/crossfade_assign", track)
+
     def set_track_name(self, track: int, name: str) -> None:
         """Rename a track in Live's session view."""
         self._send("/live/track/set/name", track, name)
@@ -269,6 +290,16 @@ class AbletonOSCClient:
 
     def start_listen_playing_clip(self, track: int) -> None:
         self._send("/live/track/start_listen/playing_slot_index", track)
+
+    def start_listen_solo(self, track: int) -> None:
+        """Subscribe to a track's Solo state. AbletonOSC pushes
+        ``/live/track/get/solo`` (track, 0|1) on every change AND once
+        immediately on subscribe. With Solo/Cue mode = Cue this reflects
+        which decks are routed to the headphone PFL bus."""
+        self._send("/live/track/start_listen/solo", track)
+
+    def stop_listen_solo(self, track: int) -> None:
+        self._send("/live/track/stop_listen/solo", track)
 
     def start_listen_track_meter(self, track: int) -> None:
         """Subscribe to a track's output meter level. AbletonOSC pushes
