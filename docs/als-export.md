@@ -1,6 +1,8 @@
 # Ableton Live Set (.als) export
 
-Generate a Live Set per track from the analyzed bundle (stems + cues + tempo). Open it in Live and you get five colored audio tracks pre-pointed at the right files, master tempo set, and timeline locators at every detected region.
+Generate a Live Set per track from the analyzed bundle (stems + cues + tempo). Open it in Live and you get the 2-deck column layout (8 stem tracks + 2 mix references) pre-built, master tempo set, and timeline locators at every detected region.
+
+> **Read this first — the `.als` is a column-layout SCAFFOLD, not a performance.** Its clips are **intentional decoys**: they exist only to lay out the deck columns / tracks Live expects so the OSC bridge has somewhere to load into. **Do not perform the clips that ship in the `.als`.** Once Live has the layout open, stems are **live-loaded through the companion app** (⌘K / rec-promote → OSC), which is what actually drives a set. The shipped clips are not library-linked by design — see [`proposals/als-deck-name-prefix-mismatch.md`](proposals/als-deck-name-prefix-mismatch.md).
 
 ## Quick start
 
@@ -28,15 +30,16 @@ The React UI's `LoadActions` component (`companion-app/src/components/LoadAction
 
 `src/dance/als/writer.py` (`build_live_set_xml`):
 
-- **5 audio tracks**, in this canonical vertical order:
-  - `Drums` — points at `<stems_dir>/<hash>/drums.wav`
-  - `Bass` — `bass.wav`
-  - `Vocals` — `vocals.wav`
-  - `Other` — `other.wav`
-  - `Mix` — points at the original full-mix file, muted by default
+- **10 audio tracks** — the 2-deck column layout (8 stems + 2 mix references), in fader order:
+  - `drums_a`, `drums_b` — Deck A / Deck B drums column
+  - `bass_a`, `bass_b`
+  - `vocals_a`, `vocals_b`
+  - `other_a`, `other_b`
+  - `mix_a`, `mix_b` — per-deck full-mix references, muted by default
+  - The A-side tracks point at the exported track's `<stems_dir>/<hash>/<role>.wav`; the B-side tracks are layout placeholders for the *next* song you live-load through the app. These shipped clips are scaffold decoys — don't perform them.
 - **2 Return tracks** preserved from the template (A Reverb, B Delay) so sends are wired up.
 - **Master tempo** — set to the track's detected BPM (`audio_analysis.bpm`). Written to both `MainTrack/.../Tempo/Manual` *and* the master-tempo `AutomationEnvelope` anchor (the latter overrides Manual if you forget it).
-- **8 scenes**, with our AudioClip in scene 1 of each stem track. The remaining 7 slots are empty so you can drop in alternate loops / variations.
+- **8 scenes**, with our placeholder AudioClips in scene 1. The remaining slots are empty — but again, you don't fire these; the grid exists for the app to live-load into.
 - **WarpMarkers** — two per clip (start + end-of-stem), enough for Live to play the stem at its native tempo without re-warping.
 - **Locators** — one per track-level `Region` row, named from `region.name` or auto-named (`Cue 1`, `Intro`, etc. — see `src/dance/als/markers.py`). Per-stem regions are dropped (Live's master timeline can't carry them).
 
@@ -52,7 +55,7 @@ The React UI's `LoadActions` component (`companion-app/src/components/LoadAction
 | other  | 10    | light blue         |
 | mix    | 13    | white              |
 
-Live's 70-color palette is 7 cols × 10 rows; the indices above were chosen empirically by generating Sets and reading off Live. Edit `STEM_COLOR_INDEX` to taste.
+Color is keyed by stem **role**, so both decks of a role share a color (e.g. `drums_a` and `drums_b` are both orange-red; `mix_a` / `mix_b` both white). Live's 70-color palette is 7 cols × 10 rows; the indices above were chosen empirically by generating Sets and reading off Live. Edit `STEM_COLOR_INDEX` to taste.
 
 The TrackCard in the React UI uses a different scheme (`STEM_TRACK_COLORS` in `osc/bridge.py`) — that's for the live "Push to Live" path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
 
@@ -79,7 +82,7 @@ The `.als` format is **gzipped XML with a schema Ableton does not publish**. Wri
 Instead we **ship a real blank Live 12 Set as a template** (`src/dance/als/templates/blank_live12.xml`, decompressed from a user-saved `Untitled.als`) and surgically inject our content:
 
 1. Load template via `lxml`.
-2. Clone the template's sole `<AudioTrack>` as a DOM template; deepcopy it 5 times.
+2. Clone the template's sole `<AudioTrack>` as a DOM template; deepcopy it once per emitted track (the 8 stem columns + 2 mix references).
 3. **Renumber Pointee IDs** on each clone (`AutomationTarget`, `ModulationTarget`, `Pointee`, ...) to fresh globally-unique values starting at 30000. Without this Live errors with "non-unique Pointee IDs" — the clones share the template's IDs otherwise.
 4. Set per-stem `Id`, `Name`, `Color`; inject `<AudioClip>` into the first session ClipSlot pointing at the stem file.
 5. Update master tempo in `MainTrack/.../Tempo/Manual` **and** the matching `AutomationEnvelope FloatEvent` anchor (the envelope overrides Manual if you only update one).
@@ -118,8 +121,10 @@ dance export-als 42
 
 open ~/Music/Dance/Sets/...
   -> Live launches, opens the Set
-  -> 5 stem tracks ready, mix track muted
-  -> click a clip to play, or launch scene 1 for all stems at once
+  -> 8 stem columns + 2 mix references laid out (2-deck layout), mix tracks muted
+  -> DON'T fire the shipped clips — they're scaffold decoys.
+     Leave Live open on the layout and live-load stems from the
+     companion app (Cmd-K / rec-promote -> OSC).
 ```
 
 ## Limitations
@@ -127,7 +132,7 @@ open ~/Music/Dance/Sets/...
 | Limitation                                | Workaround |
 |-------------------------------------------|------------|
 | Stems referenced by **absolute** path     | Don't move the stems folder. Regenerate the .als after a move. |
-| Mix track is muted by default             | Click the mute button to unmute and use the original as a reference. |
+| Mix references (`mix_a`/`mix_b`) muted by default | Click the mute button to unmute and use the original as a reference. |
 | No device chains (EQ, compression, etc.)  | Set up a template Set with your chains; drag clips in. |
 | No automation envelopes                   | Drawing automation is a manual step in Live. |
 | Locators land on the master timeline      | Per-stem regions are intentionally dropped — Live's locators are master-scoped. |

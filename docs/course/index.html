@@ -347,6 +347,7 @@ const COURSES = [
         <h2>The Whole Job in One Sentence</h2>
         <p><strong>Move a group of people through time using music.</strong></p>
         <p>Not "play good songs." Not "have good taste." <em>Move people.</em> The crowd is your feedback signal. Are people dancing? Good. Are they turning to talk to their friend, checking their phone, or drifting toward the exit? You've lost them. Read it, adjust. That's DJing.</p>
+        <p>But here's the catch for where <em>you</em> are right now: in the bedroom phase you have no crowd. With no room to read, your feedback signal <strong>is the recording</strong>. Record every practice session and listen back as if you were a stranger at the party — that's the only honest mirror you have until your first gig. Record-and-listen-back is not optional; treat it as a per-session habit from day one, not a one-time exercise you'll get to later.</p>
 
         <h2>The Goal: Flow State</h2>
         <p>Elite DJs describe being "in the zone" — a state where decisions feel effortless, time blurs, and you know what to play before you consciously think it. Psychologists call this <strong>flow state</strong>.</p>
@@ -655,11 +656,11 @@ APC40 mk2</div>
         <p>The simplest fades take 4–8 bars. A faster fade (2 bars) feels abrupt. A longer fade (16+ bars) can feel slow and indecisive. 4–8 bars is the sweet spot for most transitions.</p>
 
         <h2>On Your APC40</h2>
-        <p>The 8 faders on the APC40 map to 8 tracks in Ableton. In a stem setup, your 5 columns (drums, bass, vocals, other, mix) are on faders 1–5. Pulling fader 1 down = reducing drum volume. Pulling multiple faders down together = fading out a whole track.</p>
+        <p>The 8 faders on the APC40 map 1:1 to your 8 stem decks (4 stems × 2 sides). Faders 1–4 = Deck A's drums / bass / vocals / other. Faders 5–8 = Deck B's same four roles. Pulling fader 1 down = reducing Deck A's drum volume. Pulling faders 1–4 down together = fading out the whole of Deck A. (The Mix/anchor reference isn't on a fader by default — it lives as a per-deck header chip, not a grid column.)</p>
         <p>Practice moving faders smoothly. Jerky fader moves are audible. A slow, even pull sounds intentional. The physical gesture matters.</p>
 
         <h2>The Crossfade</h2>
-        <p>The classic move: fade one track out while fading another in simultaneously. One hand on each fader. Left hand pulls down, right hand pulls up. They mirror each other.</p>
+        <p>The classic move: fade one track out while fading another in simultaneously. On this rig that's the <strong>hardware A/B crossfader</strong>, not two hands on two faders. Deck A is the left side, Deck B is the right. Slide from left to right and Deck A fades out as Deck B fades in — a single gesture instead of mirroring two faders.</p>
         <p>With stems, you can crossfade individual layers — fade out just the drums from Track A while fading in drums from Track B. Everything else stays the same. This is surgical crossfading and it's one of your signature moves.</p>
 
         <h2>When to Use It</h2>
@@ -1023,9 +1024,10 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
           <li><strong>Harmonic compatibility</strong> — do the keys match on the Camelot wheel?</li>
           <li><strong>Tempo proximity</strong> — are the BPMs close (within ±5%)?</li>
           <li><strong>Embedding similarity</strong> — do the tracks <em>sound</em> similar? (CLAP AI model)</li>
-          <li><strong>Energy match</strong> — do the RMS levels and stem presence patterns align?</li>
+          <li><strong>Tag overlap</strong> — do the tracks share vibe/genre tags (the CLAP zero-shot labels)?</li>
         </ul>
-        <p>When you fire a track, the companion app queries the graph: "given these seeds, what fits best right now?" The scored candidates appear in the ComboStrip banners and in the SetRail tail recs.</p>
+        <p>When you fire a track, the companion app queries the graph: "given these seeds, what fits best right now?" The scored candidates appear in the per-column rec banners and in the SetRail tail recs.</p>
+        <p>One honest detail: the live per-column banner recs don't just read the static graph — they re-score the candidates against your <em>active stem combo</em> in real time, weighting combo-embedding (does it sound like what's currently playing?), key, and BPM. So the banner suggestions shift as you mute and fire stems, not just when you change tracks.</p>
 
         <h2>The Camelot Wheel</h2>
         <p>The Camelot wheel is a harmonic compatibility system. Every key gets a number (1–12) and a letter (A = minor, B = major). Tracks are compatible if they share the same number, or if they're adjacent on the wheel (±1).</p>
@@ -1042,12 +1044,26 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <h2>Using ⌘K Search</h2>
         <p>Press <strong>⌘K</strong> anywhere in the app to open the command palette. Type an artist name, track title, or vibe (e.g., "dark bass" or "uplifting vocal"). Fuzzy search + CLAP semantic search run simultaneously. Results show Camelot position and estimated BPM. Click a result to load it into a deck column.</p>
 
+        <h2>Co-Pilot, Not Autopilot — The Recs-Off Rep</h2>
+        <p>The danger of a good rec engine is that you stop building the mental map it was supposed to bootstrap. You react to the banner instead of hearing the next move yourself. So once a week, run one practice set with the rec banners <strong>collapsed</strong> (hide them) and steer by ear + the Camelot wheel alone.</p>
+        <div class="step-block">
+          <div class="step-title">Recs-Off Rep (once a week)</div>
+          <ol>
+            <li>Collapse the per-column rec banners so you can't see the suggestions.</li>
+            <li>Pick your next stem the hard way: read the current Camelot position, decide what's harmonically safe, and trust your ear for energy and vibe.</li>
+            <li>Commit to your choice out loud (or note it).</li>
+            <li><em>Now</em> reveal the rec banner. Did the engine agree with you?</li>
+          </ol>
+          <div class="note">Reframe mastery as "I predicted what the rec would say" — not "I reacted to the rec." The day your ear and the banner agree most of the time, you've internalized the map.</div>
+        </div>
+
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
             <li>You can read a Camelot position (e.g., "8A") and know what keys are safe to mix next</li>
-            <li>You understand that the rec banners are AI-scored from 4 signals simultaneously</li>
+            <li>You understand that the rec banners are AI-scored from 4 graph signals, and that the live banners additionally re-score against your active stem combo</li>
             <li>You've used ⌘K to search your library by vibe or title</li>
+            <li>You've run at least one recs-off rep and predicted the engine's pick before revealing it</li>
           </ul>
         </div>
       `},
@@ -1184,12 +1200,19 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <h2>One Bassline Rule (Again)</h2>
         <p>Even in cross-source combos: one bass stem at a time. Always.</p>
 
+        <h2>One Lead Vocal Rule</h2>
+        <p>The vocal equivalent of the bassline rule: <strong>one lead topline at a time</strong>. Two lead vocals fight for the same attention the same way two basslines fight for the same low end — the listener can't follow either, and it reads as a mistake, not a mashup. A mashup vocal layered over a <em>hook</em> or a chant works (the hook is a texture, not a lead). Two full lead vocals trying to carry the song at once never works. If you bring in Track B's vocal, mute Track A's first.</p>
+
+        <h2>Anchor Is Home</h2>
+        <p>All this stem-juggling can make you forget the simplest, most reliable move: fire a whole row and play the original song. That's the <strong>anchor</strong> — and for a beginner it should be your default, not your fallback. Most of the time you're anchored on a real song; a single-stem swap is an <em>excursion</em> you take and then return from. Full 8-column free-improv — pulling stems from four different tracks at once — is the advanced mode. Earn it. When in doubt, re-fire the row and let the anchor carry you while you decide your next move.</p>
+
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
             <li>You've run at least 3 different cross-source combos and can describe which worked and why</li>
             <li>You've experienced a "mashup moment" — a vocal from one track over another's groove</li>
             <li>You've used the Camelot positions to explain why a combo sounded bad</li>
+            <li>You know both clash rules: one bassline, one lead vocal — and you treat the anchor (a whole row) as home base</li>
           </ul>
         </div>
       `},
@@ -1408,6 +1431,8 @@ Bar +4:  Shift-click HPF off on Deck A (slow 4-bar sweep back).</diagram>
         <p>Your Scarlett 4i4 has two independent stereo outputs: outs 1/2 go to the Edifiers (master — what the room hears). Outs 3/4 go to your Bose headphones (cue bus — what only you hear).</p>
         <p>In Ableton, each track has a <strong>Solo/Cue</strong> button (headphone icon). When Ableton's mixer is in <strong>Cue mode</strong> (the Solo button shows "C" instead of "S"), pressing solo on any track routes that track's audio to outs 3/4 only — your headphones. The master mix on outs 1/2 continues playing unchanged.</p>
 
+        <div class="callout"><strong>Heads-up — Live's Cue is additive, not a silent PFL.</strong> If you cue a clip that's <em>already playing</em>, it's still in the Master mix — the room hears it too. Live's Cue adds the cued source to your headphones; it does not pull a playing track out of the speakers the way a club mixer's PFL does. To pre-listen <em>silently</em>, audition an <em>unfired</em> clip (preview it before you launch it), or use the app's <strong>▶ rec-card preview</strong>, which routes through the dedicated Cue track so it never reaches Master. Soloing a stem that's already live = the crowd hears your audition.</div>
+
         <h2>Set Up Cue Mode</h2>
         <div class="step-block">
           <div class="step-title">Configure and Test Cue</div>
@@ -1589,7 +1614,15 @@ CLOCK 3 — SET ARC       ← 30 minutes view
 
         <h2>The Only Source That Actually Works</h2>
         <p>You've already discovered (via painful experience) that Spotify's API restrictions, YouTube's anti-bot systems, and spotDL's rate-limiting make streaming-to-file pipelines unreliable. The one path that reliably works:</p>
-        <p><strong>Buy tracks on Beatport.</strong> 320 kbps MP3 or AIFF. ~$2–3 per track. Instant download. No API nonsense. Drop the file in <code>~/Music/Dance/library/</code>, run <code>dance process</code>, done. Stems generated in ~5 minutes per track on your M2 Pro.</p>
+        <p><strong>Buy tracks on Beatport.</strong> 320 kbps MP3 or AIFF. ~$2–3 per track. Instant download. No API nonsense. Drop the file in <code>~/Music/DJ/library/</code> (run <code>dance config</code> to confirm your library dir), run <code>dance process</code> (or the new <code>dance ingest</code> wrapper, which chains sync → process → tag → build-graph → export-als), done. Stems generated in ~5 minutes per track on your M2 Pro.</p>
+
+        <h2>When Ingest Stalls</h2>
+        <p>Ingest is the step most likely to bite you, so don't treat it as frictionless:</p>
+        <ul>
+          <li><strong>Confirm ffmpeg is installed</strong> — <code>brew install ffmpeg</code>. It's required for downloads and decode, and on a fresh machine it's often missing.</li>
+          <li><strong>The first run downloads ~580 MB of model weights, once.</strong> It looks like a hang but isn't — let it finish. Subsequent runs are fast.</li>
+          <li><strong>On this machine's off-spec Python 3.14 venv,</strong> if a track bounces with no progress (no stems produced, exits abruptly), suspect a native crash in stem separation — Demucs can die with a SIGBUS / exit 138. See <code>docs/troubleshooting.md</code> for the workaround (run separation on CPU).</li>
+        </ul>
 
         <h2>Building a Library You Can Mix</h2>
         <p>The common beginner mistake: buying too many tracks across too many genres. A library of 500 tracks across 10 genres is harder to mix than a library of 100 tracks within 2 genres. Within-genre compatibility (key, tempo, energy) is much higher — the AI recommendations are stronger, the harmonic matches are more reliable, and you know your library better.</p>
@@ -1650,7 +1683,7 @@ error             (something failed — see the Pipeline view for why)</div>
         <div class="step-block">
           <div class="step-title">New Track Workflow</div>
           <ol>
-            <li>Drop audio files into <code>~/Music/Dance/library/</code></li>
+            <li>Drop audio files into <code>~/Music/DJ/library/</code> (run <code>dance config</code> to confirm your library dir)</li>
             <li><code>dance process</code> — runs all pipeline stages until every track is complete</li>
             <li><code>dance tag</code> — CLAP zero-shot tagging (~50ms/track, fast)</li>
             <li><code>dance build-graph</code> — rebuilds the recommendation graph</li>
