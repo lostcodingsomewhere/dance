@@ -16,12 +16,13 @@ import { useDeckMap } from "./useDeckMap";
  * playing role right now?". The result becomes ``exclude_track_ids`` so the
  * banner doesn't recommend a track that's already in the active combo.
  *
- * NOTE: the backend's ColumnRecRequest takes ``combo_stem_ids`` (stem-file
- * ids) for embedding-based combo scoring. The deck-cell payload doesn't
- * carry stem_file_id yet, so we pass ``stemIds: []`` and rely on the
- * combo-empty fallback (key + BPM against master tempo). When the deck-map
- * is extended with stem_file_id per cell, this hook starts feeding real
- * combo embeddings with no banner changes.
+ * The backend's ColumnRecRequest takes ``combo_stem_ids`` (stem-file ids)
+ * for embedding-based combo scoring. DeckCell now carries ``stem_file_id``
+ * (types.ts), so we harvest the ids from the cells that are actually
+ * FIRING in Live right now and feed them as the active combo. With real
+ * stem ids flowing the backend's combo-embedding scoring fires; an empty
+ * combo (nothing playing) still falls back to key + BPM against master
+ * tempo. No banner changes are needed — the cards just re-score.
  */
 export function useColumnRecs(column: string, opts: { k?: number } = {}) {
   const ableton = useAbletonState();
@@ -38,12 +39,17 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
       if (s != null) playingSceneIdxs.add(s);
     }
     const excludeTracks: number[] = [];
+    const stemIds: number[] = [];
     for (const c of cells) {
       if (playingSceneIdxs.has(c.scene_index)) {
         excludeTracks.push(c.track_id);
+        // Feed the embedding signal: collect stem-file ids of the cells
+        // currently firing. Mix cells / not-yet-analyzed stems carry a
+        // null stem_file_id — skip those.
+        if (c.stem_file_id != null) stemIds.push(c.stem_file_id);
       }
     }
-    return { stemIds: [], excludeTracks };
+    return { stemIds, excludeTracks };
   }, [deckMap.data, ableton.playing_clips]);
 
   return useQuery({

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
@@ -27,16 +27,21 @@ const COLLAPSED_ROWS = 3;
 const EXPANDED_ROWS = 8;
 
 /**
- * The 8×5 scene grid — the canonical visual representation of what the APC40
- * is touching. Columns are stem roles (drums/bass/vocals/melody/song); rows
- * are scenes. Cells in the same row can come from different source tracks
- * (the live-remixing model); when all 4 stem cells in a row point at the
- * same track, that row is the song-as-recorded (anchor mode).
+ * The 8-column scene grid — the canonical mirror of what the APC40 is
+ * touching. Columns are the 8 stem decks in fader order (drums A · drums
+ * B · bass A · bass B · vocals A · vocals B · other A · other B); rows
+ * are scenes. The mix/anchor reference no longer has a column here — it
+ * lives as a per-deck chip in the TwoDeckStrip header. Cells in the same
+ * row can come from different source tracks (the live-remixing model);
+ * when all 4 stem cells on a side point at the same track, that side is
+ * the song-as-recorded (anchor mode).
  *
  * Interactions:
- * - Tap a cell → fire that one stem clip.
+ * - Tap a cell → fire that one stem clip (tap again → stop).
  * - Tap a row label → fire the whole scene (anchor mode).
  * - Hover a loaded cell → see truncated track title + metadata.
+ * - Fire a 2nd bass / lead-vocal while one is already playing → a
+ *   non-blocking "swap instead?" chip warns about mud (never blocks).
  */
 export function SceneGrid() {
   const deckMap = useDeckMap();
@@ -62,16 +67,45 @@ export function SceneGrid() {
     },
   });
   const [expanded, setExpanded] = useState(false);
-  // Two-deck column order: 10 columns, songs in center, deck mirror
-  // around the song spine. Drag-to-reorder is removed for now (the deck
+  // Soft "mud" warning — a transient, non-blocking chip shown when the DJ
+  // fires a 2nd bass (or 2nd lead-vocal) while one is already playing.
+  // Stacked basslines / lead vocals fight each other; the product
+  // philosophy is "the user decides, not autopilot", so we only nudge.
+  const [mudWarning, setMudWarning] = useState<StemRole | null>(null);
+  const mudTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Two-deck column order: 8 columns in APC40 fader order (drums A · drums
+  // B · bass A · …). Drag-to-reorder is removed for now (the deck
   // semantics break if columns are reordered freely — drums_a doesn't
-  // map cleanly to the bass spot).
+  // map cleanly to the bass spot). The mix/anchor reference is not a grid
+  // column; it lives in the TwoDeckStrip header.
   const stemColumns = TWO_DECK_COLUMN_ORDER;
 
   const columns = deckMap.data?.columns ?? null;
   const cells = deckMap.data?.cells ?? [];
   const playing = ableton.playing_clips ?? {};
   const tempo = ableton.tempo ?? 120;
+
+  // True when a stem of ``role`` (other than the cell we're about to fire)
+  // is already the firing clip somewhere — i.e. firing this one stacks a
+  // 2nd of the same role on top. Only "thick" roles get the nudge: two
+  // basslines = mud, two lead vocals = clash. Drums/melody layer fine.
+  function wouldStack(role: StemRole, deckKind: string, sceneIdx: number): boolean {
+    if (role !== "bass" && role !== "vocals") return false;
+    if (!columns) return false;
+    for (const side of ["a", "b"] as const) {
+      const dk = `${role}_${side}`;
+      if (dk === deckKind) continue; // the cell being fired
+      const tIdx = columns[dk];
+      if (tIdx != null && playing[tIdx] != null) return true;
+    }
+    return false;
+  }
+
+  function flashMud(role: StemRole) {
+    setMudWarning(role);
+    if (mudTimer.current) clearTimeout(mudTimer.current);
+    mudTimer.current = setTimeout(() => setMudWarning(null), 4000);
+  }
 
   // (scene_index, kind) → DeckCell, for O(1) lookup during render.
   const cellAt = useMemo(() => {
@@ -106,10 +140,25 @@ export function SceneGrid() {
   }
 
   return (
-    <div className="flex flex-col gap-1 select-none" data-testid="scene-grid">
+    <div
+      className="relative flex flex-col gap-1 select-none"
+      data-testid="scene-grid"
+    >
+      {/* Soft mud warning — floats over the grid, auto-dismisses, never
+          blocks the action that triggered it. */}
+      {mudWarning && (
+        <div
+          className="pointer-events-none absolute left-1/2 -top-1 -translate-x-1/2 -translate-y-full z-20 rounded-md border border-amber-400/50 bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-100 shadow-lg"
+          role="status"
+          data-testid="mud-warning"
+        >
+          2 {mudWarning === "bass" ? "basslines" : "lead vocals"} = mud — swap
+          instead?
+        </div>
+      )}
       {/* Rows — column headers + solo buttons live in BoothColumnHeaders
-          one level up, so the same 5 column labels can sit above
-          ComboStrip + SceneGrid + the rec banner row instead of being
+          one level up, so the same 8 column labels can sit above the
+          TwoDeckStrip + SceneGrid + the rec banner row instead of being
           repeated inside each. */}
       {rows.map((sceneIdx) => {
         // Per-side anchor detection: a side is "anchor-ready" when all 4
@@ -145,7 +194,7 @@ export function SceneGrid() {
         return (
           <div
             key={sceneIdx}
-            className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1 items-stretch"
+            className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1 items-stretch"
           >
             <RowLabel
               sceneIdx={sceneIdx}
@@ -160,75 +209,47 @@ export function SceneGrid() {
               pending={fireScene.isPending || stopScene.isPending}
             />
             {stemColumns.map((deckKind) => {
+              // The 8 grid columns are all stem decks (drums/bass/vocals/
+              // other × A/B) — the mix/anchor reference moved to the
+              // TwoDeckStrip header, so there's no mix-column shadow here.
               const role = sourceKindOf(deckKind);
-              const side = sideOf(deckKind);
               const trackIdx = columns[deckKind];
               const cell = cellAt.get(`${sceneIdx}|${deckKind}`);
               const isPlaying =
                 trackIdx != null && playing[trackIdx] === sceneIdx;
-              // Mix columns: show a shadow when empty + that side's stems
-              // are anchor-ready (we can infer which track this should
-              // belong to). The clear-X on the shadow nukes the whole
-              // SIDE (4 stems + this mix cell) in one click.
-              const isMixCol = role === "mix";
-              const sideAnchorTid =
-                side === "a" ? aAnchor : side === "b" ? bAnchor : null;
-              const showShadow =
-                isMixCol && cell == null && sideAnchorTid != null;
-              const shadowCell: DeckCell | undefined = showShadow
-                ? allStemCells.find(
-                    (c) =>
-                      c.track_id === sideAnchorTid && c.kind.endsWith(`_${side}`),
-                  )
-                : undefined;
-              const onClearSide = showShadow && side != null
-                ? () => {
-                    // Nuke all 4 stems on this side + this mix cell.
-                    for (const r of ["drums", "bass", "vocals", "other"]) {
-                      const dk = `${r}_${side}`;
-                      const c = cellAt.get(`${sceneIdx}|${dk}`);
-                      const tIdx = columns[dk];
-                      if (c != null && tIdx != null) {
-                        deleteCell.mutate({ track: tIdx, slot: sceneIdx });
-                      }
-                    }
-                    // Mix cell may already be empty for shadow — guard.
-                    const mixTIdx = columns[`mix_${side}`];
-                    const mixC = cellAt.get(`${sceneIdx}|mix_${side}`);
-                    if (mixC != null && mixTIdx != null) {
-                      deleteCell.mutate({ track: mixTIdx, slot: sceneIdx });
-                    }
-                  }
-                : undefined;
               return (
                 <Cell
                   key={deckKind}
                   role={role}
                   deckKind={deckKind}
-                  cell={shadowCell ?? cell}
+                  cell={cell}
                   loaded={cell != null}
-                  shadow={showShadow}
                   playing={isPlaying}
                   beatMs={beatMs}
                   onTap={
                     cell != null && trackIdx != null
-                      ? () =>
-                          isPlaying
-                            ? stopCell.mutate({ track: trackIdx, slot: sceneIdx })
-                            : fireCell.mutate({ track: trackIdx, slot: sceneIdx })
+                      ? () => {
+                          if (isPlaying) {
+                            stopCell.mutate({ track: trackIdx, slot: sceneIdx });
+                            return;
+                          }
+                          // Soft mud nudge — fire anyway, just warn when a
+                          // 2nd bass / lead-vocal would stack. Never blocks.
+                          if (wouldStack(role, deckKind, sceneIdx)) {
+                            flashMud(role);
+                          }
+                          fireCell.mutate({ track: trackIdx, slot: sceneIdx });
+                        }
                       : undefined
                   }
                   onRemove={
-                    showShadow
-                      ? onClearSide
-                      : cell != null && trackIdx != null
+                    cell != null && trackIdx != null
                       ? () =>
                           deleteCell.mutate({ track: trackIdx, slot: sceneIdx })
                       : undefined
                   }
                   onAnchorFill={
                     cell != null
-                    && !isMixCol
                     && loneStemTrackId === cell.track_id
                     && !anchorFill.isPending
                       ? () =>

@@ -10,22 +10,20 @@ import { useAutoSession } from "../hooks/useAutoSession";
 /**
  * The Booth — the only screen you should look at during a set.
  *
- * Live-remixing layout:
+ * Live-remixing layout (two-deck rethink — see
+ * docs/proposals/two-deck-ui-rethink.md):
  *
  *   ┌─ MasterStrip (BPM · KEY · energy arc · session chip · ⌘K · tabs) ─┐
  *   ├─────────────────────────────────────────────────────────────────┤
- *   │ BoothColumnHeaders (5 colored chips: DRUMS · BASS · VOCALS ·    │
- *   │   MELODY · SONG with per-column Solo "S" buttons)                │
- *   │                                                                  │
- *   │ ComboStrip (5 cards: track identity + scrubbable waveform per    │
- *   │             role, anchor hint, click-to-snap-to-section)         │
- *   │                                                                  │
- *   │ 3×5 SceneGrid (canonical APC40 mirror — tap cells, tap rows;     │
- *   │              ▾ expand to 8 rows)                                 │
- *   │                                                                  │
- *   │ CueStrip (prelisten — same waveform features, headphones out)    │
- *   │                                                                  │
- *   │ Per-column rec banners (5 across)                                │
+ *   │ TwoDeckStrip (Deck A / Deck B stacked-stem waveforms + per-deck   │
+ *   │   header: ◇ mix reference, PFL, FX, sync)                         │
+ *   │ Crossfader (A | B — mirrors APC40 hardware fader)                 │
+ *   │ BoothColumnHeaders (8 chips: DRUMS A · DRUMS B · BASS A · … in    │
+ *   │   APC40 fader order, with Solo "S" buttons)                       │
+ *   │ SceneGrid (8-column APC40 mirror — tap cells, tap rows; ▾ expand) │
+ *   │ CueStrip (prelisten — headphones out)                             │
+ *   │ Rec banners: 4 source-role feeds, each spanning its A+B columns   │
+ *   │   (drums · bass · vocals · other), + a full-width song feed below │
  *   └─────────────────────────────────────────────────────────────────┘
  *
  * Session play count + end-session lives in the MasterStrip's SessionChip
@@ -33,9 +31,9 @@ import { useAutoSession } from "../hooks/useAutoSession";
  * — the SceneGrid is the only thing that should be earning the
  * bottom-of-screen real estate.
  *
- * ColumnHeaders → ComboStrip → SceneGrid → recs all share the same
- * ``[2.5rem leading + 5 stem cols] gap-1`` grid template, so the 5
- * stem columns line up vertically and the labels at the top govern
+ * BoothColumnHeaders → SceneGrid → the role-rec banner row all share the
+ * same ``[2rem leading + repeat(8) stem cols] gap-1`` grid template, so
+ * the 8 stem columns line up vertically and the labels at the top govern
  * everything beneath them.
  *
  * Side effects:
@@ -46,10 +44,12 @@ export function Booth() {
   useAutoSession();
   useAutoLog();
 
-  // Source roles for the rec banner — 4 stem feeds + 1 song feed.
-  // Recs are role-scoped (not side-scoped); each card's ⤒A/⤒B buttons
-  // pick the deck at load time.
-  const recRoles = ["drums", "bass", "vocals", "other", "mix"];
+  // Source roles for the rec banner — 4 stem feeds, each spanning its
+  // role's two grid columns (A+B). Recs are role-scoped (not side-scoped);
+  // each card's ⤒A/⤒B buttons pick the deck at load time. The "mix" (song)
+  // feed is a full-width banner below, since the mix is no longer a grid
+  // column.
+  const recRoles = ["drums", "bass", "vocals", "other"];
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -64,9 +64,9 @@ export function Booth() {
         <BoothColumnHeaders />
         <SceneGrid />
         <CueStrip />
-        {/* Recs banner: 5 source-role feeds. Each card spans 2 of the
-            10 grid cols below so they sit above their A/B pair. */}
-        <div className="grid grid-cols-[2rem_repeat(10,minmax(0,1fr))] gap-1">
+        {/* Recs banner: 4 source-role feeds. Each card spans 2 of the 8
+            grid cols below so it sits above its A/B pair. */}
+        <div className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1">
           <div aria-hidden="true" />
           {recRoles.map((c) => (
             <div key={c} className="col-span-2">
@@ -74,6 +74,10 @@ export function Booth() {
             </div>
           ))}
         </div>
+        {/* Song / anchor rec banner — full width below the per-role
+            feeds. These are whole-song candidates (load = all 4 stems
+            into a deck). */}
+        <ColumnRecBanner column="mix" k={5} />
       </main>
     </div>
   );

@@ -164,6 +164,16 @@ export interface AbletonState {
    * Driven primarily by APC40 hardware fader; the on-screen Crossfader
    * component mirrors this and lets the user drag it as a fallback. */
   crossfader: number | null;
+  /** Deck-kind strings (e.g. "drums_a", "bass_b") whose Live track has
+   * Solo on right now. The single source of truth for PFL/Solo lit state
+   * across the header "S" buttons and the per-deck PFL toggles — both
+   * render their active state from this list so they can't contradict
+   * Live or each other. */
+  soloed_kinds: string[];
+  /** Integer that bumps whenever the loaded deck-cell map changes (load /
+   * clear / anchor-fill). The deck-map hook watches this and refetches
+   * immediately so the grid reflects changes with no poll lag. */
+  deck_map_revision: number;
 }
 
 export const EMPTY_ABLETON_STATE: AbletonState = {
@@ -175,6 +185,8 @@ export const EMPTY_ABLETON_STATE: AbletonState = {
   track_meters: {},
   playing_positions: {},
   crossfader: null,
+  soloed_kinds: [],
+  deck_map_revision: 0,
 };
 
 export interface TrackFilters {

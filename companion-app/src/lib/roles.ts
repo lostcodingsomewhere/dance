@@ -33,21 +33,20 @@ export function roleLabel(kind: string): string {
   return LABELS[kind] ?? kind;
 }
 
-/** Two-deck UI column order. Songs sit in the center (mix_a | mix_b
- * adjacent) so the layout mirrors around the song spine. Drums on the
- * outside per APC40 strip convention. See
- * docs/proposals/two-deck-ui-rethink.md. */
+/** Two-deck UI column order. Exactly 8 columns in APC40 mk2 fader order
+ * (strip 1 → drums A, strip 2 → drums B, … strip 8 → other B), interleaved
+ * by role so A/B for the same role sit adjacent. The mix/anchor reference
+ * is NOT a grid column — it lives as a per-deck header chip in each
+ * TwoDeckStrip panel. See docs/proposals/two-deck-ui-rethink.md. */
 export const TWO_DECK_COLUMN_ORDER: readonly string[] = [
   "drums_a",
-  "bass_a",
-  "vocals_a",
-  "other_a",
-  "mix_a",
-  "mix_b",
-  "other_b",
-  "vocals_b",
-  "bass_b",
   "drums_b",
+  "bass_a",
+  "bass_b",
+  "vocals_a",
+  "vocals_b",
+  "other_a",
+  "other_b",
 ];
 
 /** Backend deck-kind → user-facing column header label. Includes the

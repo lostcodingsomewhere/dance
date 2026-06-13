@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
@@ -32,20 +32,36 @@ export function TwoDeckStrip() {
   const deckMap = useDeckMap();
   const ableton = useAbletonState();
   const seek = useSeekClip();
-  // Which side (if any) is currently PFL'd to headphones. Single-side
-  // exclusive: toggling B clears A and vice versa. Local UI state — the
-  // backend has Live's actual solo state but tracking it here lets the
-  // toggles respond instantly without round-tripping.
-  const [pflSide, setPflSide] = useState<"a" | "b" | null>(null);
+  // Which side (if any) is currently PFL'd to headphones. PFL on a side
+  // sends Solo on every stem track of that side; the SINGLE source of
+  // truth for "is it lit" is the contract's ``soloed_kinds`` (Live's real
+  // solo bus), so this toggle and the header "S" buttons can't disagree.
+  // A side counts as PFL-active when any of its 4 stem-kinds are soloed.
+  const soloedKinds = ableton.soloed_kinds;
+  const pflSide: "a" | "b" | null =
+    soloedKinds.some((k) => k.endsWith("_a"))
+      ? "a"
+      : soloedKinds.some((k) => k.endsWith("_b"))
+      ? "b"
+      : null;
   const setPfl = useMutation({
     mutationFn: (side: "a" | "b" | "off") => api.abletonSetPfl(side),
   });
   function togglePfl(side: "a" | "b") {
-    const next = pflSide === side ? null : side;
-    setPflSide(next);
-    setPfl.mutate(next ?? "off");
+    // Optimistic command only — lit state is recomputed from soloed_kinds
+    // on the next WS frame, so we don't keep a local mirror.
+    const next = pflSide === side ? "off" : side;
+    setPfl.mutate(next);
   }
   const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
+  // Bring the original full-song (mix) clip in on a side — the "fall back
+  // to the record" parachute. The mix clip sits loaded-but-silent until
+  // fired; firing it unmutes the anchor reference. (No mute OSC endpoint
+  // exists, so firing the mix clip is how we surface the original.)
+  const unmuteMix = useMutation({
+    mutationFn: (vars: { trackIdx: number; sceneIdx: number }) =>
+      api.abletonFireClip(vars.trackIdx, vars.sceneIdx),
+  });
   const fireDeck = useMutation({
     mutationFn: (vars: { side: "a" | "b"; sceneIdx: number }) =>
       api.abletonFireDeck(vars.side, vars.sceneIdx),
@@ -158,6 +174,10 @@ export function TwoDeckStrip() {
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "a", sceneIdx })}
         onStopDeck={() => stopDeck.mutate("a")}
+        onUnmuteMix={(sceneIdx) => {
+          const t = columns["mix_a"];
+          if (t != null) unmuteMix.mutate({ trackIdx: t, sceneIdx });
+        }}
         filterActive={filterActive.a}
         filterAvailable={!!filterAvailable}
         onToggleFilter={() =>
@@ -189,6 +209,10 @@ export function TwoDeckStrip() {
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "b", sceneIdx })}
         onStopDeck={() => stopDeck.mutate("b")}
+        onUnmuteMix={(sceneIdx) => {
+          const t = columns["mix_b"];
+          if (t != null) unmuteMix.mutate({ trackIdx: t, sceneIdx });
+        }}
         filterActive={filterActive.b}
         filterAvailable={!!filterAvailable}
         onToggleFilter={() =>
@@ -228,6 +252,7 @@ function DeckPanel({
   onSyncTempo,
   onFireDeck,
   onStopDeck,
+  onUnmuteMix,
   filterActive,
   filterAvailable,
   onToggleFilter,
@@ -252,6 +277,7 @@ function DeckPanel({
   onSyncTempo: (bpm: number) => void;
   onFireDeck: (sceneIdx: number) => void;
   onStopDeck: () => void;
+  onUnmuteMix: (sceneIdx: number) => void;
   filterActive: boolean;
   filterAvailable: boolean;
   onToggleFilter: () => void;
@@ -351,6 +377,18 @@ function DeckPanel({
     return cellAt.get(`${anchor.sceneIdx}|mix_${side}`);
   }, [anchor, cellAt, side]);
 
+  // Mix/anchor reference for this side — the original full song. Shown as
+  // a muted ◇ chip in the header (the proposal's "fall back to the
+  // record" parachute). Click fires the mix clip so the original is
+  // audible. Lit when that mix clip is currently the firing clip.
+  const mixCell: DeckCell | undefined =
+    anchor != null ? cellAt.get(`${anchor.sceneIdx}|mix_${side}`) : undefined;
+  const mixTrackIdx = columns[`mix_${side}`];
+  const mixFiring =
+    mixTrackIdx != null && anchor != null
+      ? playing[mixTrackIdx] === anchor.sceneIdx
+      : false;
+
   const sideLabel = side.toUpperCase();
   const accentBg = side === "a"
     ? "bg-gradient-to-br from-violet-950/30 via-neutral-950/60 to-neutral-950"
@@ -374,6 +412,11 @@ function DeckPanel({
         firing={anchor?.firing ?? false}
         pflActive={pflActive}
         onTogglePfl={onTogglePfl}
+        mixCell={mixCell}
+        mixFiring={mixFiring}
+        onUnmuteMix={() =>
+          anchor != null && onUnmuteMix(anchor.sceneIdx)
+        }
         projectTempo={tempo}
         onSyncTempo={onSyncTempo}
         onFireDeck={onFireDeck}
@@ -415,6 +458,9 @@ function DeckHeader({
   firing,
   pflActive,
   onTogglePfl,
+  mixCell,
+  mixFiring,
+  onUnmuteMix,
   projectTempo,
   onSyncTempo,
   onFireDeck,
@@ -438,6 +484,13 @@ function DeckHeader({
   firing: boolean;
   pflActive: boolean;
   onTogglePfl: () => void;
+  /** The original full-song (mix) clip loaded on this side, if any —
+   * surfaced as a muted ◇ chip the DJ can fire to fall back to the
+   * record. ``undefined`` when no mix clip is loaded for the side. */
+  mixCell: DeckCell | undefined;
+  /** Whether that mix clip is the clip currently firing on this side. */
+  mixFiring: boolean;
+  onUnmuteMix: () => void;
   projectTempo: number | null;
   onSyncTempo: (bpm: number) => void;
   onFireDeck: (sceneIdx: number) => void;
@@ -509,6 +562,8 @@ function DeckHeader({
           pflActive
             ? `Stop monitoring Deck ${sideLabel} in headphones`
             : `Monitor Deck ${sideLabel} in headphones (PFL via Live's Solo with Solo/Cue=Cue)`
+            + "\nCaveat: Live's Cue is additive — a playing deck stays on Master too,"
+            + " so PFL adds it to headphones rather than isolating it."
         }
         aria-pressed={pflActive}
         aria-label={`PFL Deck ${sideLabel}`}
@@ -633,6 +688,33 @@ function DeckHeader({
             >
               mixed
             </span>
+          )}
+          {/* Mix / anchor reference — the original full song, replacing the
+              old SONG grid column. Muted ◇ chip; click fires the mix clip
+              so the record itself comes back in (the "fall back" parachute).
+              Lit emerald while the mix clip is the firing clip. */}
+          {mixCell && (
+            <button
+              type="button"
+              onClick={onUnmuteMix}
+              title={
+                mixFiring
+                  ? `Original (${mixCell.title ?? `Track #${mixCell.track_id}`}) is playing on Deck ${sideLabel}`
+                  : `Fall back to the original record (${mixCell.title ?? `Track #${mixCell.track_id}`}) on Deck ${sideLabel}`
+              }
+              aria-label={`Play original mix on Deck ${sideLabel}`}
+              aria-pressed={mixFiring}
+              className={`shrink-0 text-[9px] font-mono uppercase tracking-wider leading-none rounded px-1.5 py-1 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
+                mixFiring
+                  ? "bg-emerald-500/30 text-emerald-100 border-emerald-400/60"
+                  : "text-neutral-400 hover:text-neutral-100 border-neutral-700 hover:border-neutral-500"
+              }`}
+            >
+              <span>◇</span>
+              <span className="truncate">
+                {mixCell.title ?? `Track #${mixCell.track_id}`}
+              </span>
+            </button>
           )}
         </>
       ) : (
