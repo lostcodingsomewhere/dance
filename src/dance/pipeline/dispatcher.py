@@ -36,9 +36,18 @@ from dance.config import Settings
 from dance.core.database import Track, TrackState
 from dance.pipeline._gpu import GPU_SEMAPHORE
 from dance.pipeline.events import EventBus, StageEvent
+from dance.pipeline.heal_ledger import HealLedger
 from dance.pipeline.stage import Stage
 
 logger = logging.getLogger(__name__)
+
+
+# How many times a track may be silently healed from the SAME inflight state
+# before we give up and flag it as ERROR instead of re-queuing. This breaks
+# the infinite re-crash loop a hard native crash (SIGBUS / exit 138) would
+# otherwise cause — that crash isn't catchable by the worker's
+# ``except Exception``, so the track keeps coming back to the same *-ing state.
+_MAX_HEALS_BEFORE_ERROR = 2
 
 
 # Re-export under the legacy private name so existing call sites work.
@@ -81,6 +90,9 @@ class Dispatcher:
         self.session_factory = session_factory
         self.events = EventBus()
         self._stages: list[Stage] = []
+        # Serializes heal-ledger writes across worker threads (each write is a
+        # load-modify-save, so concurrent successes could otherwise clobber).
+        self._ledger_lock = threading.Lock()
 
         # Default progress logger.
         self.events.subscribe(_default_logger)
@@ -325,6 +337,14 @@ class Dispatcher:
             heal_session.close()
         if healed:
             logger.info("Healed %d inflight orphans: %s", sum(healed.values()), healed)
+            errored = {k: v for k, v in healed.items() if k.endswith(":errored")}
+            if errored:
+                logger.warning(
+                    "Flagged %d track(s) ERROR after repeated heals (likely hard "
+                    "native crashes): %s — see `dance status`",
+                    sum(errored.values()),
+                    errored,
+                )
 
         # Auto-advance skipped stages once, up front, in a single session.
         if skip_set:
@@ -442,6 +462,10 @@ class Dispatcher:
 
             dt_ms = int((time.monotonic() - t0) * 1000)
             if ok:
+                # Clean advance — forget any prior heal history for this track
+                # so a fresh crash later starts its counter from zero.
+                with self._ledger_lock:
+                    HealLedger(self.settings.data_dir).clear(int(track.id))
                 self.events.emit(
                     "completed", stage.name, track, duration_ms=dt_ms
                 )
@@ -508,37 +532,91 @@ class Dispatcher:
         return session.get(Track, cid)
 
     def _heal_inflight_orphans(self, session: Session) -> dict[str, int]:
-        """Reset every track stuck in a stage's ``inflight_state`` back to
-        the stage's ``input_state`` so a fresh worker can claim it.
+        """Reset tracks stuck in a stage's ``inflight_state`` back to the
+        stage's ``input_state`` so a fresh worker can claim it — UNLESS the
+        track has already been healed from that same state too many times, in
+        which case it's promoted to ERROR.
 
         Tracks land in ``*-ing`` states when a worker claims them but then
         crashes / is killed / loses its process before flipping to
-        ``output_state``. Without this heal, they're orphaned forever — no
-        stage uses ``*-ing`` as its input. The heal is idempotent: a clean
-        DB returns an empty dict and writes nothing.
+        ``output_state``. A *graceful* crash inside ``process()`` is caught by
+        the worker's ``except Exception`` and marked ERROR directly — those
+        never reach here. What reaches here is a *hard* crash: a native SIGBUS
+        / segfault / exit 138 (common for Demucs on MPS) that takes the whole
+        process down before any Python handler runs. On the next ``dance
+        process`` startup we'd reset the track and null its error_message,
+        and it would crash exactly the same way again — an infinite silent
+        loop with nothing in ``dance status``.
+
+        To break that loop we keep a per-track heal counter in a sidecar JSON
+        (:class:`HealLedger`, no schema change). After
+        ``_MAX_HEALS_BEFORE_ERROR`` heals from the *same* inflight state we
+        flag the track ERROR with an actionable message instead of re-queuing.
 
         Stages without an ``inflight_state`` declaration are skipped (they
-        can't have produced orphans in the parallel claim model).
+        can't have produced orphans in the parallel claim model). Idempotent:
+        a clean DB returns an empty dict and writes nothing.
 
-        Returns: dict of stage_name -> number of tracks reset, for caller
-        logging. Empty dict if there was nothing to heal.
+        Returns: dict of ``stage_name`` -> number of tracks reset back to
+        input_state, plus a synthetic ``"<stage>:errored"`` key counting any
+        promoted to ERROR. Empty dict if there was nothing to heal.
         """
+        ledger = HealLedger(self.settings.data_dir)
         healed: dict[str, int] = {}
+        dirty = False
         for stage in self._stages:
             inflight = getattr(stage, "inflight_state", None)
             if inflight is None:
                 continue
-            rowcount = (
-                session.query(Track)
+            stuck_ids = [
+                int(row[0])
+                for row in session.query(Track.id)
                 .filter(Track.state == inflight.value)
-                .update(
-                    {Track.state: stage.input_state.value, Track.error_message: None},
-                    synchronize_session=False,
-                )
-            )
-            if rowcount:
-                healed[stage.name] = int(rowcount)
-        if healed:
+                .all()
+            ]
+            requeued = 0
+            errored = 0
+            for tid in stuck_ids:
+                count = ledger.record_heal(tid, inflight.value)
+                update = session.query(Track).filter(Track.id == tid)
+                if count >= _MAX_HEALS_BEFORE_ERROR:
+                    msg = (
+                        f"repeated native crash (likely SIGBUS/exit 138) during "
+                        f"{stage.name} on this machine — healed {count}× with no "
+                        f"progress; see docs/troubleshooting.md "
+                        f"(try DANCE_DEMUCS_DEVICE=cpu)"
+                    )[:500]
+                    update.update(
+                        {
+                            Track.state: stage.error_state.value,
+                            Track.error_message: msg,
+                        },
+                        synchronize_session=False,
+                    )
+                    ledger.clear(tid)
+                    errored += 1
+                    logger.error(
+                        "Track %s flagged ERROR: healed %d× from %s without "
+                        "progress (likely hard native crash)",
+                        tid,
+                        count,
+                        inflight.value,
+                    )
+                else:
+                    update.update(
+                        {
+                            Track.state: stage.input_state.value,
+                            Track.error_message: None,
+                        },
+                        synchronize_session=False,
+                    )
+                    requeued += 1
+                dirty = True
+            if requeued:
+                healed[stage.name] = requeued
+            if errored:
+                healed[f"{stage.name}:errored"] = errored
+        if dirty:
             session.commit()
         return healed
 

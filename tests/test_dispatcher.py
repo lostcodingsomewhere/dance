@@ -517,3 +517,103 @@ def test_run_parallel_auto_heals_then_processes(
     track = session.get(Track, stuck.id)
     assert track.state == "analyzed"
     assert track.error_message is None
+
+
+# ---------------------------------------------------------------------------
+# Crash counter (repeated heals -> ERROR)
+# ---------------------------------------------------------------------------
+
+
+def _heal_dispatcher(settings, session_factory):
+    d = Dispatcher(settings, session_factory=session_factory)
+    d.clear()
+    d.register(
+        ParallelFakeStage(
+            "separate",
+            TrackState.ANALYZED,
+            TrackState.SEPARATED,
+            TrackState.SEPARATING,
+        )
+    )
+    return d
+
+
+def test_repeated_heals_promote_track_to_error(
+    settings, session_factory, session, make_track
+):
+    """A track that keeps reappearing in the same inflight state (hard native
+    crash that the worker can't catch) is flagged ERROR after N heals instead
+    of being re-queued forever."""
+    d = _heal_dispatcher(settings, session_factory)
+
+    stuck = make_track(state="separating")
+    session.commit()
+
+    # Heal #1: re-queue (count == 1 < 2).
+    heal_session = session_factory()
+    try:
+        healed = d._heal_inflight_orphans(heal_session)
+    finally:
+        heal_session.close()
+    assert healed == {"separate": 1}
+    session.expire_all()
+    assert session.get(Track, stuck.id).state == "analyzed"
+
+    # Simulate the hard crash recurring: track lands back in *-ing.
+    t = session.get(Track, stuck.id)
+    t.state = "separating"
+    session.commit()
+
+    # Heal #2: count hits the threshold -> promote to ERROR.
+    heal_session = session_factory()
+    try:
+        healed = d._heal_inflight_orphans(heal_session)
+    finally:
+        heal_session.close()
+    assert healed == {"separate:errored": 1}
+
+    session.expire_all()
+    t = session.get(Track, stuck.id)
+    assert t.state == TrackState.ERROR.value
+    assert "repeated native crash" in (t.error_message or "")
+    assert "separate" in (t.error_message or "")
+
+
+def test_successful_advance_resets_crash_counter(
+    settings, session_factory, session, make_track, fast_idle_grace
+):
+    """One heal followed by a clean run() clears the ledger, so a later crash
+    starts counting from zero rather than tripping ERROR immediately."""
+    from dance.pipeline.heal_ledger import HealLedger
+
+    d = _heal_dispatcher(settings, session_factory)
+
+    stuck = make_track(state="separating")
+    session.commit()
+
+    # First heal records count=1 in the ledger.
+    heal_session = session_factory()
+    try:
+        d._heal_inflight_orphans(heal_session)
+    finally:
+        heal_session.close()
+    assert HealLedger(settings.data_dir).count_for(stuck.id, "separating") == 1
+
+    # Now run the pipeline: the orphan was re-queued to ANALYZED, the stage
+    # succeeds, and the successful advance must clear the ledger entry.
+    d.run()
+    session.expire_all()
+    assert session.get(Track, stuck.id).state == "separated"
+    assert HealLedger(settings.data_dir).count_for(stuck.id, "separating") == 0
+
+
+def test_heal_ledger_resets_on_different_inflight_state(settings):
+    """If a track later gets stuck in a DIFFERENT inflight state, the counter
+    resets — a different stage crashing is a fresh problem."""
+    from dance.pipeline.heal_ledger import HealLedger
+
+    ledger = HealLedger(settings.data_dir)
+    assert ledger.record_heal(7, "separating") == 1
+    assert ledger.record_heal(7, "separating") == 2
+    # New state -> reset to 1.
+    assert ledger.record_heal(7, "embedding") == 1

@@ -123,6 +123,48 @@ def config(
         console.print(f"  {k} = {v}")
 
 
+def _require_ffmpeg_or_exit() -> None:
+    """Fail fast with an actionable message if ffmpeg is missing.
+
+    ffmpeg is a hard native dependency for both ``sync`` (spotDL downloads)
+    and ``process`` (demucs / librosa decoding). Check it before any work so
+    a missing binary doesn't surface as an opaque mid-pipeline error.
+    """
+    from dance.pipeline.preflight import PreflightError, require_ffmpeg
+
+    try:
+        require_ffmpeg()
+    except PreflightError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+
+def _run_sync(settings: Settings, dry_run: bool = False):
+    """Core sync logic. Returns the DownloadResult.
+
+    Shared by the ``sync`` and ``ingest`` commands. Assumes a playlist is
+    configured and ffmpeg is present (callers check).
+    """
+    from dance.spotify.downloader import SpotifyDownloader
+
+    console.print(f"[cyan]Syncing:[/cyan] {settings.spotify_playlist_url}")
+    downloader = SpotifyDownloader(settings)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading...", total=None)
+        result = downloader.sync_playlist(dry_run=dry_run)
+        progress.update(task, completed=True)
+
+    console.print(f"[green]Downloaded:[/green] {result.downloaded}")
+    console.print(f"[yellow]Skipped:[/yellow] {result.skipped}")
+    console.print(f"[red]Failed:[/red] {result.failed}")
+    return result
+
+
 @main.command()
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
@@ -134,19 +176,16 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
         console.print("[red]Error:[/red] No Spotify playlist configured")
         sys.exit(1)
 
-    from dance.spotify.downloader import SpotifyDownloader
+    _require_ffmpeg_or_exit()
 
-    console.print(f"[cyan]Syncing:[/cyan] {settings.spotify_playlist_url}")
-    downloader = SpotifyDownloader(settings)
+    result = _run_sync(settings, dry_run=dry_run)
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        task = progress.add_task("Downloading...", total=None)
-        result = downloader.sync_playlist(dry_run=dry_run)
-        progress.update(task, completed=True)
-
-    console.print(f"[green]Downloaded:[/green] {result.downloaded}")
-    console.print(f"[yellow]Skipped:[/yellow] {result.skipped}")
-    console.print(f"[red]Failed:[/red] {result.failed}")
+    if not dry_run and result.downloaded > 0:
+        console.print(
+            f"\n[bold]Next:[/bold] {result.downloaded} new track(s) downloaded — "
+            "run [cyan]dance process[/cyan] (or [cyan]dance ingest[/cyan]) to make "
+            "them playable."
+        )
 
 
 @main.command()
@@ -182,13 +221,40 @@ def process(
     stages share a semaphore (``DANCE_GPU_CONCURRENCY``, default 1).
     """
     settings: Settings = ctx.obj["settings"]
+
+    _require_ffmpeg_or_exit()
+
+    _run_process(
+        settings,
+        limit=limit,
+        skip_stems=skip_stems,
+        skip_embeddings=skip_embeddings,
+        skip_ingest=skip_ingest,
+        track_id=track_id,
+    )
+
+    _print_remaining_work_hint(settings)
+
+
+def _run_process(
+    settings: Settings,
+    *,
+    limit: int | None = None,
+    skip_stems: bool = False,
+    skip_embeddings: bool = False,
+    skip_ingest: bool = False,
+    track_id: int | None = None,
+) -> dict[str, dict[str, int]]:
+    """Core process logic (scan + dispatch). Returns per-stage counts.
+
+    Shared by the ``process`` and ``ingest`` commands. Callers handle the
+    ffmpeg preflight and end-of-run hints.
+    """
     from dance.core.database import get_session_factory
-
-    SessionLocal = get_session_factory(settings.db_url)
-
     from dance.pipeline.dispatcher import Dispatcher
 
-    dispatcher = Dispatcher(settings, session_factory=SessionLocal)
+    session_factory = get_session_factory(settings.db_url)
+    dispatcher = Dispatcher(settings, session_factory=session_factory)
 
     if not skip_ingest:
         # Ingest first — scans library_dir, registers new audio files.
@@ -207,6 +273,41 @@ def process(
 
     for stage_name, counts in result.items():
         console.print(f"[green]{stage_name}:[/green] {counts}")
+
+    return result
+
+
+def _print_remaining_work_hint(settings: Settings) -> None:
+    """After a process pass, nudge the user if tracks are stuck short of
+    COMPLETE (errored, or still mid-pipeline)."""
+    session = get_session(settings.db_url)
+    try:
+        errored = (
+            session.query(Track).filter(Track.state == TrackState.ERROR.value).count()
+        )
+        incomplete = (
+            session.query(Track)
+            .filter(
+                Track.state.notin_(
+                    [TrackState.COMPLETE.value, TrackState.ERROR.value]
+                )
+            )
+            .count()
+        )
+    finally:
+        session.close()
+
+    if errored:
+        console.print(
+            f"\n[yellow]{errored} track(s) in ERROR[/yellow] — run "
+            "[cyan]dance status[/cyan] for details (repeated native crashes are "
+            "flagged there)."
+        )
+    if incomplete:
+        console.print(
+            f"[dim]{incomplete} track(s) still mid-pipeline — re-run "
+            "[cyan]dance process[/cyan] to advance them.[/dim]"
+        )
 
 
 @main.command("list")
@@ -498,6 +599,95 @@ def export_als(
 
 
 @main.command()
+@click.option("--skip-sync", is_flag=True, help="Skip the Spotify sync phase")
+@click.pass_context
+def ingest(ctx: click.Context, skip_sync: bool) -> None:
+    """Full new-track lifecycle in one command.
+
+    Runs, in order: sync → process → build-graph → tag → export-als --all.
+    This is the one-shot equivalent of the five-command runbook chain. Use
+    ``--skip-sync`` to re-ingest the existing library without hitting Spotify.
+    """
+    settings: Settings = ctx.obj["settings"]
+
+    # Preflight once, up front — both sync and process need ffmpeg.
+    _require_ffmpeg_or_exit()
+
+    # 1) Sync ----------------------------------------------------------------
+    downloaded = 0
+    if skip_sync:
+        console.print("[dim]Skipping Spotify sync (--skip-sync)[/dim]")
+    elif not settings.spotify_playlist_url:
+        console.print(
+            "[yellow]No Spotify playlist configured — skipping sync.[/yellow] "
+            "Set one with [cyan]dance config --spotify-playlist <url>[/cyan]."
+        )
+    else:
+        console.print("\n[bold cyan]1/5 Sync[/bold cyan]")
+        result = _run_sync(settings)
+        downloaded = result.downloaded
+
+    # 2) Process -------------------------------------------------------------
+    console.print("\n[bold cyan]2/5 Process[/bold cyan]")
+    _run_process(settings)
+
+    # 3) Build graph ---------------------------------------------------------
+    console.print("\n[bold cyan]3/5 Build graph[/bold cyan]")
+    ctx.invoke(build_graph)
+
+    # 4) Tag -----------------------------------------------------------------
+    console.print("\n[bold cyan]4/5 Tag[/bold cyan]")
+    ctx.invoke(tag)
+
+    # 5) Export .als ---------------------------------------------------------
+    console.print("\n[bold cyan]5/5 Export .als[/bold cyan]")
+    ctx.invoke(export_als, all_tracks=True)
+
+    # Final summary ----------------------------------------------------------
+    session = get_session(settings.db_url)
+    try:
+        playable = (
+            session.query(Track).filter(Track.state == TrackState.COMPLETE.value).count()
+        )
+        stuck = (
+            session.query(Track)
+            .filter(
+                Track.state.notin_(
+                    [TrackState.COMPLETE.value, TrackState.ERROR.value]
+                )
+            )
+            .count()
+        )
+        errored = (
+            session.query(Track).filter(Track.state == TrackState.ERROR.value).count()
+        )
+    finally:
+        session.close()
+
+    als_files = 0
+    try:
+        als_files = len(list(settings.als_output_dir.glob("*.als")))
+    except OSError:
+        pass
+
+    console.print("\n[bold green]Ingest complete.[/bold green]")
+    parts = [
+        f"{playable} track(s) now playable",
+        f"{als_files} .als file(s) in {settings.als_output_dir}",
+    ]
+    if downloaded:
+        parts.insert(0, f"{downloaded} newly downloaded")
+    console.print("  " + "; ".join(parts) + ".")
+    if stuck or errored:
+        blocked = stuck + errored
+        console.print(
+            f"  [yellow]{blocked} still stuck[/yellow] "
+            f"({errored} errored, {stuck} mid-pipeline) — run "
+            "[cyan]dance status[/cyan]."
+        )
+
+
+@main.command()
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show pipeline state counts."""
@@ -514,8 +704,49 @@ def status(ctx: click.Context) -> None:
             table.add_row(state.value, str(count))
         table.add_row("[bold]total[/bold]", f"[bold]{session.query(Track).count()}[/bold]")
         console.print(table)
+
+        # Surface repeatedly-crashing tracks so the heal loop is never silent.
+        _print_stuck_track_detail(settings, session)
     finally:
         session.close()
+
+
+def _print_stuck_track_detail(settings: Settings, session) -> None:
+    """Show ERROR tracks and any tracks the heal ledger is still tracking
+    (i.e. healed-from-inflight but not yet over the ERROR threshold), so a
+    repeated native crash is visible instead of silent."""
+    errored = (
+        session.query(Track)
+        .filter(Track.state == TrackState.ERROR.value)
+        .order_by(Track.id)
+        .all()
+    )
+    if errored:
+        etable = Table(title="Tracks in ERROR")
+        etable.add_column("ID", justify="right")
+        etable.add_column("Title")
+        etable.add_column("Error", overflow="fold")
+        for t in errored:
+            etable.add_row(
+                str(t.id),
+                (t.title or t.file_name or "-")[:30],
+                (t.error_message or "-"),
+            )
+        console.print(etable)
+
+    from dance.pipeline.heal_ledger import HealLedger
+
+    tracked = HealLedger(settings.data_dir).stuck_tracks()
+    if tracked:
+        console.print(
+            f"[yellow]{len(tracked)} track(s) have been healed from a crash and "
+            "re-queued[/yellow] (will be flagged ERROR if they keep crashing):"
+        )
+        for tid, info in sorted(tracked.items()):
+            console.print(
+                f"  track {tid}: healed {info.get('count')}× from "
+                f"{info.get('state')}"
+            )
 
 
 if __name__ == "__main__":
