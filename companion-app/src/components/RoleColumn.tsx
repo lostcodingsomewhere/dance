@@ -310,22 +310,32 @@ export function RoleColumn({
   setId,
   role,
   mode,
+  sharedRows,
 }: {
   setId: number | null;
   role: PlanRole;
   mode: Mode;
+  /** How many leading rows this column shares (via subgrid) with its
+   * siblings so their sections line up: header,[plan-label,plan-zone,]
+   * recs-label. The recs list lands in the implicit row after. */
+  sharedRows: number;
 }) {
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
   const styles = ROLE_STYLES[visRole(role)];
 
   return (
-    <div className="flex flex-col gap-1 min-w-0">
+    <div
+      className="grid grid-rows-subgrid min-w-0"
+      style={{ gridRow: `span ${sharedRows}` }}
+    >
       <div className={`rounded px-2 py-1 text-[10px] font-semibold uppercase text-center border ${styles.header}`}>
         {roleLabel(visRole(role))}
       </div>
 
-      {/* PLAN — your queued picks */}
+      {/* PLAN — your queued picks. The plan-zone row track is shared across
+          columns, so the empty placeholder stretches to match the tallest
+          queued column (see RoleColumnsGrid). */}
       {setId != null && (
         <>
           <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
@@ -334,7 +344,8 @@ export function RoleColumn({
       )}
 
       {/* RECS — live (booth, scored vs what's playing) or plan-scored (set) —
-          same card as the plan picks above. */}
+          same card as the plan picks above. This list sits in the per-column
+          implicit row, so a column with more recs doesn't stretch the others. */}
       <ZoneLabel>Recs</ZoneLabel>
       {mode === "live" ? (
         <LiveRecsZone setId={setId} role={role} />
