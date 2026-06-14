@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
+import { useClipPlayhead } from "../hooks/useClipPlayhead";
 import { useDeckMap } from "../hooks/useDeckMap";
 import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
@@ -777,25 +778,17 @@ function DeckWaveform({
     }
     return columns[`mix_${side}`] ?? columns[`drums_${side}`];
   }, [columns, playing, sceneIdx, side]);
-  const livePosBeats = playheadTrackIdx != null
-    ? positions[String(playheadTrackIdx)]
-    : undefined;
-
-  // Convert to 0-1 ratio for the playhead.
-  let position: number | undefined = undefined;
-  let elapsedSec: number | undefined = undefined;
-  if (duration && duration > 0 && clipBpm != null && clipBpm > 0) {
-    if (livePosBeats != null) {
-      elapsedSec = (livePosBeats / clipBpm) * 60;
-      position = (elapsedSec % duration) / duration;
-    } else if (beat != null && tempo != null) {
-      elapsedSec = (beat / tempo) * 60;
-      position = (elapsedSec % duration) / duration;
-    }
-  }
-  const remaining = duration != null && elapsedSec != null
-    ? duration - (elapsedSec % duration)
-    : null;
+  // Playhead/elapsed/remaining from the shared hook — the SAME conversion the
+  // cue/preview strip uses (Live's real per-clip position → 0-1 along this
+  // waveform), so deck and preview playheads can only be right or wrong in one
+  // place. No master-beat fallback: a deck that isn't firing shows no playhead
+  // (honest) rather than a master-beat ghost that doesn't match the audio.
+  // (``positions``/``beat`` props are read inside the hook now.)
+  const { position, elapsedSec, remaining } = useClipPlayhead({
+    trackIdx: playheadTrackIdx ?? null,
+    durationSec: duration ?? null,
+    clipBpm,
+  });
 
   function handleSeek(ratio: number) {
     if (

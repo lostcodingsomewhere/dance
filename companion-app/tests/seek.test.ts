@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ratioToBeats, snapRatioToSection } from "../src/lib/seek";
+import { clipPlayhead, ratioToBeats, snapRatioToSection } from "../src/lib/seek";
 import type { Region } from "../src/types";
 
 // Minimal Region factory — fills every required field so the literal
@@ -78,5 +78,34 @@ describe("ratioToBeats", () => {
 
   it("returns 0 at ratio 0", () => {
     expect(ratioToBeats(0, 240, 120)).toBe(0);
+  });
+});
+
+describe("clipPlayhead", () => {
+  it("maps a live beat position to the matching 0-1 ratio + seconds", () => {
+    // 4-min @ 120 BPM: 240 beats in = 120 s = halfway.
+    const v = clipPlayhead(240, 240, 120);
+    expect(v?.position).toBeCloseTo(0.5);
+    expect(v?.elapsedSec).toBeCloseTo(120);
+    expect(v?.remaining).toBeCloseTo(120);
+  });
+
+  it("wraps a looped beat position back into range", () => {
+    // 600 beats on a 480-beat (4-min @120) clip → 120 beats in → 25%.
+    expect(clipPlayhead(600, 240, 120)?.position).toBeCloseTo(0.25);
+  });
+
+  it("returns null without a usable duration or bpm", () => {
+    expect(clipPlayhead(100, 0, 120)).toBeNull();
+    expect(clipPlayhead(100, 240, 0)).toBeNull();
+  });
+
+  it("is the exact inverse of ratioToBeats — playhead lands where a click seeks", () => {
+    // This is the property that fixes "clickability": the playhead the cue
+    // strip draws and the beat a same-ratio click seeks to use one conversion.
+    for (const r of [0, 0.1, 0.37, 0.5, 0.99]) {
+      const beats = ratioToBeats(r, 240, 128);
+      expect(clipPlayhead(beats, 240, 128)?.position).toBeCloseTo(r);
+    }
   });
 });

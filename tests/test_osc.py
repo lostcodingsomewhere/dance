@@ -1449,6 +1449,56 @@ def test_preview_refires_until_clip_actually_plays(tmp_path):
             bridge.stop()
 
 
+def test_preview_subscribes_cue_clip_position_for_playhead(tmp_path):
+    """After a preview fires, the bridge subscribes the cue clip's
+    playing_position so the companion's preview waveform gets a REAL playhead
+    (track_index → beats in AbletonState.playing_positions) instead of falling
+    back to the master beat. stop_preview unsubscribes and clears the ghost."""
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio), label="PREVIEW song")
+            assert result["ok"] is True
+            cue_idx = result["cue_track_idx"]
+
+            # The cue slot's playing_position was subscribed.
+            assert _wait_for(
+                lambda: (cue_idx, bridge._CUE_SLOT)
+                in [
+                    (int(a[0]), int(a[1]))
+                    for a in live.args_for(
+                        "/live/clip/start_listen/playing_position"
+                    )
+                ]
+            )
+
+            # A pushed position lands in state.playing_positions (what the FE
+            # reads to place the playhead).
+            bridge._on_playing_position(
+                "/live/clip/get/playing_position",
+                (cue_idx, bridge._CUE_SLOT, 12.0),
+            )
+            assert bridge.state.playing_positions.get(cue_idx) == 12.0
+
+            # Stopping unsubscribes and drops the stale playhead.
+            bridge.stop_preview()
+            assert _wait_for(
+                lambda: (cue_idx, bridge._CUE_SLOT)
+                in [
+                    (int(a[0]), int(a[1]))
+                    for a in live.args_for(
+                        "/live/clip/stop_listen/playing_position"
+                    )
+                ]
+            )
+            assert cue_idx not in bridge.state.playing_positions
+        finally:
+            bridge.stop()
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — live-loading stems must ADOPT existing deck columns, never spawn a
 # duplicate set. Idempotency across re-loads + restarts + opened .als exports.

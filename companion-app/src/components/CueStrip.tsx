@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
+import { useClipPlayhead } from "../hooks/useClipPlayhead";
 import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
 import { useRegions } from "../hooks/useRegions";
@@ -41,6 +42,21 @@ export function CueStrip() {
   const seek = useSeekClip();
   const qc = useQueryClient();
 
+  // Playhead: derived in ONE place (useClipPlayhead) from Live's real per-clip
+  // position, the same as the Booth decks. Inputs are computed up here so the
+  // hook runs unconditionally (before the early return below). clipBpm is the
+  // track's analyzed BPM — what Live warps the preview clip to — so the
+  // playhead and the click-to-seek convert through the SAME bpm and agree.
+  const previewTrack = trackQuery.data;
+  const clipBpm = previewTrack?.analysis?.bpm ?? ableton.tempo;
+  const previewDuration =
+    previewTrack?.duration_seconds ?? waveform.data?.duration_seconds ?? null;
+  const playhead = useClipPlayhead({
+    trackIdx: previewing?.cueTrackIdx ?? null,
+    durationSec: previewDuration,
+    clipBpm,
+  });
+
   const commit = useMutation({
     mutationFn: () => {
       if (!previewing) throw new Error("nothing to commit");
@@ -76,23 +92,14 @@ export function CueStrip() {
   const isSong = previewing.column === "mix";
   const commitLabel = isSong ? "→ Load song to master" : `→ Load ${roleLabel(previewing.column).toLowerCase()} to master`;
 
-  // Playhead position 0-1. Derive from Live's master beat clock + the audio's
-  // own duration (waveform endpoint reports it). Wraps because preview clips
-  // loop by default. Without tempo/beat we just hide the playhead.
-  const tempo = ableton.tempo;
-  const beat = ableton.beat;
-  const duration =
-    track?.duration_seconds ?? waveform.data?.duration_seconds ?? null;
-  let playheadPosition: number | undefined = undefined;
-  let elapsedSec: number | undefined = undefined;
-  if (tempo != null && beat != null && duration && duration > 0) {
-    elapsedSec = (beat / tempo) * 60;
-    playheadPosition = (elapsedSec % duration) / duration;
-  }
-  const remaining =
-    duration != null && elapsedSec != null
-      ? duration - (elapsedSec % duration)
-      : null;
+  // Playhead/elapsed/remaining all come from the shared hook above (Live's
+  // real per-clip position → 0-1 along this waveform). No master-beat
+  // fabrication: if the cue clip isn't reporting a position we show no
+  // playhead rather than a wrong one.
+  const duration = previewDuration;
+  const playheadPosition = playhead.position;
+  const elapsedSec = playhead.elapsedSec;
+  const remaining = playhead.remaining;
 
   return (
     <div
@@ -155,14 +162,16 @@ export function CueStrip() {
             previewing.cueTrackIdx != null &&
             previewing.slot != null &&
             duration &&
-            tempo
+            clipBpm
               ? (ratio) => {
                   // Raw ratio — the click lands exactly where the DJ
-                  // points (no section snapping).
+                  // points (no section snapping). Convert through clipBpm
+                  // (the warp BPM), the same value the playhead uses, so
+                  // the click and the resulting playhead position agree.
                   seek.mutate({
                     track: previewing.cueTrackIdx!,
                     slot: previewing.slot!,
-                    positionBeats: ratioToBeats(ratio, duration, tempo),
+                    positionBeats: ratioToBeats(ratio, duration, clipBpm),
                   });
                 }
               : undefined
