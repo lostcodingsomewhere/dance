@@ -61,3 +61,30 @@ def test_context_combo_stem_ids_uses_other_role_tails(session, make_track):
     # Filling vocals → combo = tails of other stem roles: drums(b), bass(a).
     combo = sq.context_combo_stem_ids(session, queues, exclude_role="vocals")
     assert set(combo) == {stems[(b.id, "drums")], stems[(a.id, "bass")]}
+
+
+def test_role_own_stem_ids_seeds_from_same_role(session, make_track):
+    """When the only picks are in one role, role_own_stem_ids resolves that
+    role's queue to ITS stems — the fallback seed so single-role recs are scored
+    ('more like what you queued') instead of unscored 0s. Song → [] (no stem)."""
+    a = make_track(title="a")
+    b = make_track(title="b")
+    stems = {}
+    for t in (a, b):
+        for kind in ("drums", "bass", "vocals", "other"):
+            st = StemFile(track_id=t.id, kind=kind, path=f"/tmp/{t.id}-{kind}.wav")
+            session.add(st)
+            session.flush()
+            stems[(t.id, kind)] = st.id
+    session.flush()
+
+    queues = {"drums": [], "bass": [], "vocals": [], "other": [a.id, b.id], "song": [a.id]}
+    # The cross-role combo for "other" is empty (nothing else queued)...
+    assert sq.context_combo_stem_ids(session, queues, exclude_role="other") == []
+    # ...so we seed from the "other" role's own picks (in queue order).
+    own = sq.role_own_stem_ids(session, queues, "other")
+    assert own == [stems[(a.id, "other")], stems[(b.id, "other")]]
+    # Song has no single separated stem → no seed.
+    assert sq.role_own_stem_ids(session, queues, "song") == []
+    # An empty role → [].
+    assert sq.role_own_stem_ids(session, queues, "drums") == []

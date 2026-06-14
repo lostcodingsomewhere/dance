@@ -111,11 +111,41 @@ def context_combo_stem_ids(
     return out
 
 
+def role_own_stem_ids(
+    session: Session,
+    queues: dict[str, list[int]],
+    role: str,
+) -> list[int]:
+    """Resolve a single stem role's OWN queued tracks to that role's
+    ``stem_files.id``.
+
+    Used as a fallback combo seed when there's no cross-role context yet — e.g.
+    the only thing queued is one Melody pick, so scoring more Melody against the
+    *other* roles (``context_combo_stem_ids``) yields an empty combo and the
+    recommender returns unscored 0s. Seeding from this role's own picks makes the
+    recs "more like what you queued" instead. Returns ``[]`` for the song/mix
+    role (no single separated stem) or when the role isn't queued.
+    """
+    if role not in _STEM_ROLES:
+        return []
+    q = queues.get(role, [])
+    if not q:
+        return []
+    rows = (
+        session.query(StemFile.id, StemFile.track_id)
+        .filter(StemFile.track_id.in_(set(q)), StemFile.kind == role)
+        .all()
+    )
+    by_track = {int(t): int(sid) for sid, t in rows}
+    return [by_track[t] for t in q if t in by_track]
+
+
 __all__ = [
     "PLAN_ROLES",
     "context_combo_stem_ids",
     "encode_plan",
     "parse_plan",
     "plan_sequence",
+    "role_own_stem_ids",
     "role_to_column",
 ]
