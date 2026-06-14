@@ -6,9 +6,7 @@ import { useDeckMap } from "../hooks/useDeckMap";
 import {
   useDeleteCell,
   useFireCell,
-  useFireScene,
   useStopCell,
-  useStopScene,
 } from "../hooks/useTransport";
 import { formatDuration } from "../lib/format";
 import {
@@ -18,7 +16,6 @@ import {
   roleLabel,
   sideOf,
   sourceKindOf,
-  type DeckSide,
   type StemRole,
 } from "../lib/roles";
 import type { DeckCell } from "../types";
@@ -46,9 +43,7 @@ const EXPANDED_ROWS = 8;
 export function SceneGrid() {
   const deckMap = useDeckMap();
   const ableton = useAbletonState();
-  const fireScene = useFireScene();
   const fireCell = useFireCell();
-  const stopScene = useStopScene();
   const stopCell = useStopCell();
   const deleteCell = useDeleteCell();
   const qc = useQueryClient();
@@ -161,20 +156,8 @@ export function SceneGrid() {
           TwoDeckStrip + SceneGrid + the rec banner row instead of being
           repeated inside each. */}
       {rows.map((sceneIdx) => {
-        // Per-side anchor detection: a side is "anchor-ready" when all 4
-        // of its stems share one track. With deck pairs, each side has
-        // its own anchor — A holding the current song while B holds the
-        // next is the whole point.
-        const sideAnchor = (side: DeckSide): number | null => {
-          const tids = (["drums", "bass", "vocals", "other"] as const).map(
-            (r) => cellAt.get(`${sceneIdx}|${r}_${side}`)?.track_id,
-          );
-          if (tids.some((t) => t == null)) return null;
-          return new Set(tids).size === 1 ? (tids[0] as number) : null;
-        };
-        const aAnchor = sideAnchor("a");
-        const bAnchor = sideAnchor("b");
-        // Stem cells across both sides — for lone-stem detection.
+        // Stem cells across both sides — for lone-stem detection, which
+        // drives the per-cell anchor-fill (◇) affordance.
         const allStemCells: DeckCell[] = [];
         for (const dk of stemColumns) {
           if (dk.startsWith("mix")) continue;
@@ -183,31 +166,12 @@ export function SceneGrid() {
         }
         const loneStemTrackId =
           allStemCells.length === 1 ? allStemCells[0].track_id : null;
-        const anyPlaying = Object.values(columns).some(
-          (trackIdx) => playing[trackIdx] === sceneIdx,
-        );
-        const mixACell = cellAt.get(`${sceneIdx}|mix_a`);
-        const mixBCell = cellAt.get(`${sceneIdx}|mix_b`);
-        const anyLoaded =
-          allStemCells.length > 0 || mixACell != null || mixBCell != null;
 
         return (
           <div
             key={sceneIdx}
-            className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1 items-stretch"
+            className="grid grid-cols-8 gap-1 items-stretch"
           >
-            <RowLabel
-              sceneIdx={sceneIdx}
-              loaded={anyLoaded}
-              anchorReady={aAnchor != null || bAnchor != null}
-              playing={anyPlaying}
-              onTap={() =>
-                anyPlaying
-                  ? stopScene.mutate(sceneIdx)
-                  : fireScene.mutate(sceneIdx)
-              }
-              pending={fireScene.isPending || stopScene.isPending}
-            />
             {stemColumns.map((deckKind) => {
               // The 8 grid columns are all stem decks (drums/bass/vocals/
               // other × A/B) — the mix/anchor reference moved to the
@@ -286,50 +250,6 @@ export function SceneGrid() {
         </button>
       )}
     </div>
-  );
-}
-
-function RowLabel({
-  sceneIdx,
-  loaded,
-  anchorReady,
-  playing,
-  onTap,
-  pending,
-}: {
-  sceneIdx: number;
-  loaded: boolean;
-  anchorReady: boolean;
-  playing: boolean;
-  onTap: () => void;
-  pending: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onTap}
-      disabled={pending || !loaded}
-      title={
-        playing
-          ? `Stop scene ${sceneIdx + 1}`
-          : anchorReady
-          ? `Fire scene ${sceneIdx + 1} — play the original combo (anchor mode)`
-          : loaded
-          ? `Fire scene ${sceneIdx + 1} — plays whatever cells are loaded`
-          : `Scene ${sceneIdx + 1} (empty)`
-      }
-      className={`flex items-center justify-center rounded-md text-xs font-mono font-semibold transition-colors ${
-        playing
-          ? "bg-emerald-500/40 text-emerald-50 border border-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.5)] hover:bg-emerald-500/60 cursor-pointer"
-          : anchorReady
-          ? "bg-neutral-900/70 text-emerald-300/70 border border-emerald-500/30 hover:border-emerald-500/60 hover:text-emerald-300 cursor-pointer"
-          : loaded
-          ? "bg-neutral-900/70 text-neutral-400 border border-neutral-800 hover:border-neutral-700 cursor-pointer"
-          : "bg-neutral-950 text-neutral-700 border border-neutral-900"
-      }`}
-    >
-      {playing ? "⏹" : sceneIdx + 1}
-    </button>
   );
 }
 

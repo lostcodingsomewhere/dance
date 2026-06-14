@@ -301,12 +301,18 @@ def seek_clip(
     bridge: AbletonBridge = Depends(get_bridge),
 ) -> dict:
     """Jump a clip's playback to ``position`` beats. Sets BOTH the clip's
-    ``loop_start`` and ``start_marker`` to ``position`` and re-fires —
-    so on refire the clip plays from there, AND when the loop wraps it
-    returns to the same point (not 0). Live's clip-launch quantization
-    still snaps the audible jump to the next bar boundary.
+    ``loop_start`` and ``start_marker`` to ``position``, forces the clip to
+    instant launch (launch_quantization = None), and re-fires — so the jump
+    is audible immediately, the clip plays from there, AND when the loop wraps
+    it returns to the same point (not 0).
 
-    Why both: our stem clips have ``loop_start = 0, loop_end = clip
+    Instant launch: without overriding the clip's launch quantization, the
+    re-fire obeys Live's global 1-bar quantize, so the audible jump lags up to
+    a bar and feels broken. Setting launch_quantization to None makes the
+    seek snap immediately. Best-effort — a stock AbletonOSC fork without the
+    handler just leaves the clip on global quant (≤1-bar lag).
+
+    Why both markers: our stem clips have ``loop_start = 0, loop_end = clip
     length, loop_on = true``. Setting only ``start_marker`` lets the
     clip play once from ``position`` then wrap to 0 — visually "the
     loop resets." Bumping ``loop_start`` along with start_marker makes
@@ -314,15 +320,19 @@ def seek_clip(
     boundary moves with the click). ``loop_end`` is left at the clip's
     natural end.
 
-    Used by the FE's click-to-jump on Waveform — tap a position on the
-    stem-waveform of a playing cell to seek there.
+    The FE sends a precise ``position`` (no section snap) — it's exactly
+    where the user clicked on the Waveform of a playing cell.
 
     NOTE: this is persistent for the session — both markers move and
     stay there until another seek (or a reload). To "reset to top"
     you'd need to seek to 0 explicitly.
     """
+    # Markers are quick property sets; they precede the fire here so the
+    # re-fire reads the new loop_start / start_marker. launch_quantization is
+    # set to 0 (None) BEFORE the fire so the jump is instant, not bar-quantized.
     bridge.client.set_clip_loop_start(track_index, slot_index, position)
     bridge.client.set_clip_start_marker(track_index, slot_index, position)
+    bridge.client.set_clip_launch_quantization(track_index, slot_index, 0)
     bridge.client.fire_clip(track_index, slot_index)
     return {
         "ok": True,

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,6 +201,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
+        self.listener.on("/live/clip_slot/get/has_clip", self._on_has_clip)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
         self.listener.on("/live/track/get/solo", self._on_track_solo)
 
@@ -523,6 +525,21 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_has_clip(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, 0|1) for
+        # /live/clip_slot/get/has_clip. Stash (track, slot, bool) so the
+        # poller in preview_audio can confirm an async create_audio_clip
+        # actually populated the slot before firing.
+        if len(args) >= 3:
+            self._reply_values[address] = (
+                int(args[0]),
+                int(args[1]),
+                bool(args[2]),
+            )
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     # ------------------------------------------------------------------
     # Request/reply helpers
     # ------------------------------------------------------------------
@@ -732,6 +749,14 @@ class AbletonBridge:
     # delete + recreate so anchor-mode fire_scene calls never accidentally
     # re-trigger a stale preview.
     _CUE_SLOT: int = 0
+    # Live's Clip.launch_quantization enum value for "None" (fire instantly,
+    # no quantization). Set on the cue clip so previews are snappy regardless
+    # of the template's GlobalQuantisation (1 Bar) and transport state.
+    _LAUNCH_QUANT_NONE: int = 0
+    # How long to wait for Live to confirm the async create_audio_clip
+    # populated the cue slot before we fire it. ~1.5s covers a cold sample
+    # decode without hanging the request.
+    _CUE_CREATE_CONFIRM_TIMEOUT: float = 1.5
 
     def reset_deck_columns(self) -> None:
         """Forget the cached deck-column indices AND the per-cell load map.
@@ -824,6 +849,34 @@ class AbletonBridge:
         if reply_track != track or reply_slot != slot:
             return None
         return reply_name or None
+
+    def _clip_slot_has_clip(
+        self, track: int, slot: int, *, timeout: float = 0.2
+    ) -> bool | None:
+        """One-shot 'does this slot hold a clip?' query.
+
+        Returns ``True`` / ``False`` from Live, or ``None`` on timeout (Live
+        silent, or the running AbletonOSC fork doesn't expose has_clip).
+        Verifies the reply matches the requested (track, slot) so a delayed
+        reply for a different slot doesn't bleed in — same guard as
+        ``_get_clip_name``."""
+        addr = "/live/clip_slot/get/has_clip"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_clip_slot_has_clip(track, slot)
+        except OSError:
+            return None
+        if not evt.wait(timeout):
+            return None
+        result = self._reply_values.get(addr)
+        if not isinstance(result, tuple) or len(result) < 3:
+            return None
+        reply_track, reply_slot, reply_has = result
+        if reply_track != track or reply_slot != slot:
+            return None
+        return bool(reply_has)
 
     def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
         """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
@@ -1447,9 +1500,12 @@ class AbletonBridge:
                 "deck-column indices below are best-effort."
             )
 
-        # (Re)create the 5 deck columns if we don't have them, or — only when
-        # Live is reachable — if the user has deleted tracks in Live so our
-        # cached indices no longer fit.
+        # Provision the 10 deck columns if we don't have them cached, or — only
+        # when Live is reachable — if the cached indices no longer fit Live's
+        # current track count (user deleted tracks). _create_deck_columns is
+        # ADOPT-BEFORE-CREATE: it reuses any existing "Deck …" columns and
+        # only creates the genuinely-missing ones, so this never spawns a
+        # duplicate set even after a backend restart or an opened .als export.
         if self._deck_columns is None:
             self._deck_columns = self._create_deck_columns(
                 start_index=base if live_reachable else 0
@@ -1565,47 +1621,190 @@ class AbletonBridge:
             "warnings": warnings,
         }
 
-    def _create_deck_columns(self, *, start_index: int) -> dict[str, int]:
-        """Append 9 named, colored deck tracks to Live and return their indices.
+    # Every track name the bridge itself manages — used to recognize a
+    # freshly-appended (still Live-default-named) slot vs. one of our own
+    # tracks during lookup-after-create verification. Union of the canonical
+    # created deck names, their bare .als-writer equivalents, the legacy
+    # pre-pair names, and the Cue track. A slot whose name is NOT in here is
+    # safe to treat as the brand-new appended track.
+    @classmethod
+    def _managed_track_names(cls) -> frozenset[str]:
+        names: set[str] = set(cls._DECK_DISPLAY_NAMES.values())
+        names |= set(cls._LEGACY_DECK_DISPLAY_NAMES)
+        for accepted in cls._DECK_RECOVERY_NAMES.values():
+            names |= set(accepted)
+        names.add(cls._CUE_DISPLAY_NAME)
+        return frozenset(names)
 
-        Indices are *predicted* (created via fire-and-forget OSC). The caller
-        is responsible for using them in subsequent OSC calls in the same
-        order, which is safe because AbletonOSC processes commands serially.
+    def _create_track_and_get_index(
+        self, name: str, *, timeout: float = 1.0
+    ) -> int | None:
+        """Append a new audio track to Live, confirm it landed, name it, and
+        return its REAL index — never a pre-create prediction.
 
-        The mix track is muted at creation: it holds the original full-track
-        recording as a reference / parachute, and would double the audio if
-        unmuted alongside the summed stems. The DJ unmutes it explicitly
-        when they want to A/B against the original or fall back to it.
+        Steps (each guards against the layout drift that produced the
+        duplicate-deck / preview-leak bugs):
+
+        1. Read ``before = get_num_tracks()``. ``None`` → Live unreachable;
+           bail with ``None`` so callers don't fire into a guessed index.
+        2. ``create_audio_track(-1)`` — AbletonOSC appends at the end.
+        3. Poll ``get_num_tracks()`` until it reads ``before + 1`` (bounded
+           by ``timeout``) so we KNOW Live actually created the track before
+           we touch it.
+        4. The appended track's index is ``before``. Sanity-check by
+           re-reading ``get_track_names()``: the slot at ``before`` should
+           hold a Live default name (e.g. ``"5-Audio"`` / empty), i.e. not
+           one of our managed deck/cue names. A mismatch is logged but we
+           still trust the append index (the count delta is authoritative).
+        5. ``set_track_name(before, name)`` and return ``before``.
+
+        Returns ``None`` if Live is unreachable or the create couldn't be
+        confirmed within ``timeout`` — the caller decides how to degrade.
         """
-        columns: dict[str, int] = {}
-        idx = start_index
-        for kind in self._DECK_KINDS:
+        before = self.get_num_tracks(timeout=timeout)
+        if before is None:
+            return None
+        try:
             self.client.create_audio_track(-1)
-            self.client.set_track_name(idx, self._DECK_DISPLAY_NAMES[kind])
-            self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
-            # Crossfader routing: A-side decks → group A, B-side decks →
-            # group B, mix → None (always audible). Mirrors the static .als
-            # writer (dance/als/writer.py:_crossfade_value_for) so a
-            # live-loaded deck blends under the crossfader exactly like an
-            # exported Set would. Requires the AbletonOSC fork patch — see
-            # docs/abletonosc_setup.md. Best-effort: on stock AbletonOSC the
-            # address is unhandled and the deck stays at Live's default
-            # (None), so the crossfader just won't affect it.
-            try:
-                self.client.set_track_crossfade_assign(
-                    idx, self._crossfade_assign_for(kind)
+        except OSError:  # pragma: no cover - best-effort
+            return None
+        # Poll until Live confirms the count went up. AbletonOSC processes
+        # commands serially, so once the count reflects +1 the new track is
+        # really there. Bound the wait so a silent Live can't hang a request.
+        deadline = time.monotonic() + timeout
+        confirmed = False
+        while time.monotonic() < deadline:
+            now = self.get_num_tracks(timeout=min(0.2, timeout))
+            if now is not None and now >= before + 1:
+                confirmed = True
+                break
+        if not confirmed:
+            logger.warning(
+                "create_audio_track(%r) not confirmed by Live (count stuck "
+                "at %s) — refusing to name a guessed index",
+                name,
+                before,
+            )
+            return None
+        index = before
+        # Verify the appended slot isn't already one of our managed tracks —
+        # if it is, our index math is off and naming it would clobber a real
+        # deck/cue track. Verification is best-effort; the +1 count delta is
+        # the authority.
+        names = self.get_track_names(timeout=timeout)
+        if names is not None and 0 <= index < len(names):
+            if names[index] in self._managed_track_names():
+                logger.warning(
+                    "appended track at index %d holds managed name %r — "
+                    "layout drift; using append index anyway",
+                    index,
+                    names[index],
                 )
-            except OSError:  # pragma: no cover - best-effort
-                pass
-            if kind in ("mix_a", "mix_b"):
-                try:
-                    self.client.set_track_mute(idx, True)
-                except OSError:  # pragma: no cover - best-effort
-                    pass
-            columns[kind] = idx
-            idx += 1
+        try:
+            self.client.set_track_name(index, name)
+        except OSError:  # pragma: no cover - best-effort
+            return None
+        return index
+
+    def _create_deck_columns(self, *, start_index: int) -> dict[str, int]:
+        """Provision the 10 named, colored deck tracks in Live — ADOPTING any
+        that already exist and creating only the genuinely-missing ones.
+
+        Idempotency is the whole point: re-loading a track, restarting the
+        backend, or opening a static ``.als`` export must NOT spawn a second
+        set of "Deck …" tracks. We therefore:
+
+        1. Try ``recover_deck_columns()`` first — if Live already has all 10
+           columns (from a prior load, a template, or an exported Set), reuse
+           their real indices verbatim and create nothing.
+        2. Otherwise, look up which columns DO exist by name (partial layout)
+           and keep those indices; create only the missing kinds via
+           ``_create_track_and_get_index`` (lookup-after-create, never a
+           pre-create prediction).
+        3. If Live is unreachable for the create, fall back to the legacy
+           predicted-index append from ``start_index`` so offline/dev still
+           gets a usable (best-effort) map.
+
+        The mix tracks are muted at creation: they hold the original
+        full-track recording as a reference / parachute and would double the
+        audio if unmuted alongside the summed stems.
+        """
+        # 1. Full adopt — all 10 columns already in Live? Reuse, create none.
+        adopted_all = self.recover_deck_columns(timeout=1.0)
+        if adopted_all is not None:
+            return adopted_all
+
+        # 2. Partial adopt — keep whatever columns already exist by name.
+        # Reachability is gauged by num_tracks (the primitive the robust
+        # create helper relies on); track_names is only needed to scan for
+        # already-present columns and is optional.
+        live_reachable = self.get_num_tracks(timeout=1.0) is not None
+        names = self.get_track_names(timeout=1.0)
+        existing: dict[str, int] = {}
+        if names is not None:
+            for kind, accepted in self._DECK_RECOVERY_NAMES.items():
+                for idx, nm in enumerate(names):
+                    if nm in accepted and kind not in existing:
+                        existing[kind] = idx
+                        break
+
+        columns: dict[str, int] = {}
+        # Fallback running index for the Live-unreachable predicted path.
+        predicted_idx = start_index
+        for kind in self._DECK_KINDS:
+            if kind in existing:
+                # Adopt the existing column verbatim — don't recreate it.
+                columns[kind] = existing[kind]
+                continue
+            col_idx: int
+            if live_reachable:
+                # Create just this missing column at its real appended index.
+                created = self._create_track_and_get_index(
+                    self._DECK_DISPLAY_NAMES[kind], timeout=1.0
+                )
+                if created is None:
+                    # Create couldn't be confirmed; skip styling and fall
+                    # back to a predicted index so the map stays complete.
+                    columns[kind] = predicted_idx
+                    predicted_idx += 1
+                    continue
+                col_idx = created
+            else:
+                # Live unreachable — legacy predicted append (best-effort).
+                col_idx = predicted_idx
+                self.client.set_track_name(col_idx, self._DECK_DISPLAY_NAMES[kind])
+            self._style_deck_column(col_idx, kind)
+            columns[kind] = col_idx
+            predicted_idx = max(predicted_idx, col_idx + 1)
         self._subscribe_deck_columns(columns)
         return columns
+
+    def _style_deck_column(self, idx: int, kind: str) -> None:
+        """Apply color, crossfade routing, and (for mix tracks) mute to a
+        freshly-created deck column. Split out of ``_create_deck_columns`` so
+        the create-only path and the predicted-fallback path share styling.
+
+        Crossfader routing mirrors the static .als writer
+        (dance/als/writer.py:_crossfade_value_for) so a live-loaded deck
+        blends under the crossfader exactly like an exported Set would.
+        Best-effort: on stock AbletonOSC the crossfade address is unhandled
+        and the deck stays at Live's default (None).
+        """
+        try:
+            self.client.set_track_color(idx, self._STEM_TRACK_COLORS[kind])
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        try:
+            self.client.set_track_crossfade_assign(
+                idx, self._crossfade_assign_for(kind)
+            )
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        if kind in ("mix_a", "mix_b"):
+            try:
+                self.client.set_track_mute(idx, True)
+            except OSError:  # pragma: no cover - best-effort
+                pass
 
     @staticmethod
     def _side_of(deck_kind: str) -> str | None:
@@ -1673,37 +1872,55 @@ class AbletonBridge:
     # interface) with outs 3/4 enabled in Live's Output Config.
     # ------------------------------------------------------------------
 
-    def _ensure_cue_track(self, *, num_tracks_timeout: float = 0.5) -> int:
-        """Return the Cue track's index, creating + routing it if needed.
+    def _ensure_cue_track(self, *, num_tracks_timeout: float = 1.0) -> int | None:
+        """Return the Cue track's REAL index, adopting or creating it.
 
-        The Cue track lives next to the deck columns. Its output is set to
-        ``Ext. Out → 3/4`` (the 4i4's cue bus). Once created, it's reused
-        for the life of the bridge.
+        ADOPT-BEFORE-CREATE, never a pre-create prediction (the old prediction
+        is exactly what leaked previews into a deck track when the layout had
+        drifted):
+
+        1. Cached index from a prior call / disk → use it.
+        2. A track named exactly "Cue" already in Live → adopt its index.
+        3. Otherwise create one via ``_create_track_and_get_index`` (which
+           confirms the append landed and returns the REAL index), THEN set
+           its output routing to ``Ext. Out → 3/4`` on that real index, cache,
+           and persist.
+
+        Returns ``None`` if Live is unreachable or the create couldn't be
+        confirmed — the caller (preview_audio) must then refuse to fire rather
+        than risk leaking into a random track.
         """
         if self._cue_track_idx is not None:
             return self._cue_track_idx
 
-        # Try to adopt an existing "Cue" track first.
-        recovered = self.recover_deck_columns(timeout=num_tracks_timeout)
-        if self._cue_track_idx is not None:
-            return self._cue_track_idx
+        # Adopt an existing "Cue" track by name. get_track_names is the
+        # reliable name→index lookup; checking it directly (rather than via
+        # recover_deck_columns) keeps Cue adoption independent of whether the
+        # full deck layout happens to be present.
+        names = self.get_track_names(timeout=num_tracks_timeout)
+        if names is not None:
+            for existing_idx, nm in enumerate(names):
+                if nm == self._CUE_DISPLAY_NAME:
+                    self._cue_track_idx = existing_idx
+                    self._persist_state()
+                    return existing_idx
+        else:
+            # Live unreachable — can't confirm or create. Refuse to guess.
+            return None
 
-        # Otherwise create it. Predict its index from the current track
-        # count (same trick _create_deck_columns uses).
-        base = self.get_num_tracks(timeout=num_tracks_timeout)
-        if base is None:
-            # Live unreachable — best-effort prediction so we don't loop on
-            # a closed Live. Caller will see preview fail.
-            base = 0
-        if recovered is not None:
-            # Deck columns adopted; Cue appends after them.
-            base = max(max(self._deck_columns.values()) + 1, base) if self._deck_columns else base
-        idx = base
-        self.client.create_audio_track(-1)
-        self.client.set_track_name(idx, self._CUE_DISPLAY_NAME)
-        self.client.set_track_color(idx, self._CUE_COLOR)
-        self.client.set_track_output_routing_type(idx, self._CUE_OUTPUT_TYPE)
-        self.client.set_track_output_routing_channel(idx, self._CUE_OUTPUT_CHANNEL)
+        # No Cue track exists — create one at its REAL appended index.
+        idx = self._create_track_and_get_index(
+            self._CUE_DISPLAY_NAME, timeout=num_tracks_timeout
+        )
+        if idx is None:
+            # Create couldn't be confirmed; don't cache a guess.
+            return None
+        try:
+            self.client.set_track_color(idx, self._CUE_COLOR)
+            self.client.set_track_output_routing_type(idx, self._CUE_OUTPUT_TYPE)
+            self.client.set_track_output_routing_channel(idx, self._CUE_OUTPUT_CHANNEL)
+        except OSError:  # pragma: no cover - best-effort
+            pass
         self._cue_track_idx = idx
         self._persist_state()
         return idx
@@ -1716,9 +1933,13 @@ class AbletonBridge:
     ) -> dict[str, Any]:
         """Audition ``audio_path`` through the Cue track (headphones only).
 
-        Stops any in-progress preview first, then drops the new clip into
-        the Cue track's slot and fires it. The clip is replaced on every
-        call (rather than reused) so the user can rapidly cycle through
+        Stops any in-progress preview first, drops the new clip into the Cue
+        track's slot, WAITS for Live to confirm the (async) clip create
+        finished, then fires it. The wait closes the create→fire race that
+        left the clip loaded-but-never-playing; the fire is forced to instant
+        launch (launch_quantization=None) so the preview is snappy regardless
+        of the template's 1-bar global quantization. The clip is replaced on
+        every call (rather than reused) so the user can rapidly cycle through
         previews without accumulated state.
 
         Returns ``{"ok": bool, "cue_track_idx": int, "slot": int, "audio_path": str,
@@ -1737,6 +1958,25 @@ class AbletonBridge:
             }
 
         cue_idx = self._ensure_cue_track()
+        if cue_idx is None:
+            # No confirmed Cue track — refuse to fire. Firing into a guessed
+            # index is exactly how previews leaked onto the master/speakers
+            # (a deck track whose Audio To = Main). Surface a clear warning
+            # instead; the caller / UI shows it rather than blasting the room.
+            return {
+                "ok": False,
+                "cue_track_idx": None,
+                "slot": self._CUE_SLOT,
+                "audio_path": str(path),
+                "label": label,
+                "warnings": [
+                    "Could not establish a dedicated 'Cue' track in Live "
+                    "(Live unreachable or track create unconfirmed). Preview "
+                    "refused so it can't leak to the master/speakers. Open "
+                    "Live with AbletonOSC running, or add a track named "
+                    "'Cue' routed to Ext. Out 3/4, then retry."
+                ],
+            }
 
         # Stop + clear any prior preview so the new one starts cleanly.
         try:
@@ -1749,9 +1989,44 @@ class AbletonBridge:
             pass
 
         try:
+            # 1. Drop the sample in. AbletonOSC's create_audio_clip is async
+            #    — Live hasn't finished building the clip when this returns.
             self.client.create_audio_clip(cue_idx, self._CUE_SLOT, str(path))
+            # 2. Name it + force instant launch BEFORE the existence poll so
+            #    the slot is fully populated by the time we confirm + fire.
+            #    launch_quantization=None makes the preview fire immediately
+            #    instead of waiting for the global 1-bar quantize when the
+            #    transport is running. Best-effort: a fork without the handler
+            #    just leaves the clip on global quant (≤1-bar delay).
             if label:
                 self.client.set_clip_name(cue_idx, self._CUE_SLOT, label)
+            try:
+                self.client.set_clip_launch_quantization(
+                    cue_idx, self._CUE_SLOT, self._LAUNCH_QUANT_NONE
+                )
+            except OSError:  # pragma: no cover - best-effort
+                pass
+            # 3. WAIT for Live to confirm the clip exists, THEN fire. Without
+            #    this, fire_clip races the async create and no-ops on an empty
+            #    slot — the clip loads but never plays (the bug).
+            confirmed = self._wait_for_cue_clip(
+                cue_idx, timeout=self._CUE_CREATE_CONFIRM_TIMEOUT
+            )
+            if confirmed is False:
+                # Live answered has_clip but the slot is still empty after the
+                # timeout — fire anyway (best-effort) and flag it.
+                warnings.append(
+                    "Cue clip not confirmed present before firing "
+                    "(create may have failed or is slow); fired best-effort."
+                )
+            elif confirmed is None:
+                # No has_clip reply at all (Live silent or fork lacks the
+                # handler). Can't confirm; fire best-effort with a note.
+                warnings.append(
+                    "Could not confirm cue clip existence (has_clip query "
+                    "unanswered); fired best-effort — preview may not play if "
+                    "the clip wasn't ready."
+                )
             self.client.fire_clip(cue_idx, self._CUE_SLOT)
         except OSError as exc:
             warnings.append(f"OSC send failed: {exc}")
@@ -1772,6 +2047,31 @@ class AbletonBridge:
             "label": label,
             "warnings": warnings,
         }
+
+    def _wait_for_cue_clip(
+        self, cue_idx: int, *, timeout: float
+    ) -> bool | None:
+        """Poll ``has_clip`` on the cue slot until Live confirms a clip is
+        present, bounded by ``timeout``.
+
+        Returns:
+        - ``True``  — Live confirmed the clip exists (safe to fire).
+        - ``False`` — Live answered but the slot is still empty after timeout.
+        - ``None``  — no has_clip reply at all (Live silent / fork lacks the
+          handler); the caller fires best-effort.
+        """
+        deadline = time.monotonic() + timeout
+        saw_any_reply = False
+        while time.monotonic() < deadline:
+            has = self._clip_slot_has_clip(
+                cue_idx, self._CUE_SLOT, timeout=min(0.2, timeout)
+            )
+            if has is None:
+                continue  # no reply yet; keep polling until the deadline
+            saw_any_reply = True
+            if has:
+                return True
+        return False if saw_any_reply else None
 
     def stop_preview(self) -> dict[str, Any]:
         """Stop the current preview and clear the Cue track's slot.
