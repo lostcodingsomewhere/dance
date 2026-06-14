@@ -201,6 +201,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
+        self.listener.on("/live/clip_slot/get/has_clip", self._on_has_clip)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
         self.listener.on("/live/track/get/solo", self._on_track_solo)
 
@@ -524,6 +525,21 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_has_clip(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, 0|1) for
+        # /live/clip_slot/get/has_clip. Stash (track, slot, bool) so the
+        # poller in preview_audio can confirm an async create_audio_clip
+        # actually populated the slot before firing.
+        if len(args) >= 3:
+            self._reply_values[address] = (
+                int(args[0]),
+                int(args[1]),
+                bool(args[2]),
+            )
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     # ------------------------------------------------------------------
     # Request/reply helpers
     # ------------------------------------------------------------------
@@ -733,6 +749,14 @@ class AbletonBridge:
     # delete + recreate so anchor-mode fire_scene calls never accidentally
     # re-trigger a stale preview.
     _CUE_SLOT: int = 0
+    # Live's Clip.launch_quantization enum value for "None" (fire instantly,
+    # no quantization). Set on the cue clip so previews are snappy regardless
+    # of the template's GlobalQuantisation (1 Bar) and transport state.
+    _LAUNCH_QUANT_NONE: int = 0
+    # How long to wait for Live to confirm the async create_audio_clip
+    # populated the cue slot before we fire it. ~1.5s covers a cold sample
+    # decode without hanging the request.
+    _CUE_CREATE_CONFIRM_TIMEOUT: float = 1.5
 
     def reset_deck_columns(self) -> None:
         """Forget the cached deck-column indices AND the per-cell load map.
@@ -825,6 +849,34 @@ class AbletonBridge:
         if reply_track != track or reply_slot != slot:
             return None
         return reply_name or None
+
+    def _clip_slot_has_clip(
+        self, track: int, slot: int, *, timeout: float = 0.2
+    ) -> bool | None:
+        """One-shot 'does this slot hold a clip?' query.
+
+        Returns ``True`` / ``False`` from Live, or ``None`` on timeout (Live
+        silent, or the running AbletonOSC fork doesn't expose has_clip).
+        Verifies the reply matches the requested (track, slot) so a delayed
+        reply for a different slot doesn't bleed in — same guard as
+        ``_get_clip_name``."""
+        addr = "/live/clip_slot/get/has_clip"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_clip_slot_has_clip(track, slot)
+        except OSError:
+            return None
+        if not evt.wait(timeout):
+            return None
+        result = self._reply_values.get(addr)
+        if not isinstance(result, tuple) or len(result) < 3:
+            return None
+        reply_track, reply_slot, reply_has = result
+        if reply_track != track or reply_slot != slot:
+            return None
+        return bool(reply_has)
 
     def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
         """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
@@ -1881,9 +1933,13 @@ class AbletonBridge:
     ) -> dict[str, Any]:
         """Audition ``audio_path`` through the Cue track (headphones only).
 
-        Stops any in-progress preview first, then drops the new clip into
-        the Cue track's slot and fires it. The clip is replaced on every
-        call (rather than reused) so the user can rapidly cycle through
+        Stops any in-progress preview first, drops the new clip into the Cue
+        track's slot, WAITS for Live to confirm the (async) clip create
+        finished, then fires it. The wait closes the create→fire race that
+        left the clip loaded-but-never-playing; the fire is forced to instant
+        launch (launch_quantization=None) so the preview is snappy regardless
+        of the template's 1-bar global quantization. The clip is replaced on
+        every call (rather than reused) so the user can rapidly cycle through
         previews without accumulated state.
 
         Returns ``{"ok": bool, "cue_track_idx": int, "slot": int, "audio_path": str,
@@ -1933,9 +1989,44 @@ class AbletonBridge:
             pass
 
         try:
+            # 1. Drop the sample in. AbletonOSC's create_audio_clip is async
+            #    — Live hasn't finished building the clip when this returns.
             self.client.create_audio_clip(cue_idx, self._CUE_SLOT, str(path))
+            # 2. Name it + force instant launch BEFORE the existence poll so
+            #    the slot is fully populated by the time we confirm + fire.
+            #    launch_quantization=None makes the preview fire immediately
+            #    instead of waiting for the global 1-bar quantize when the
+            #    transport is running. Best-effort: a fork without the handler
+            #    just leaves the clip on global quant (≤1-bar delay).
             if label:
                 self.client.set_clip_name(cue_idx, self._CUE_SLOT, label)
+            try:
+                self.client.set_clip_launch_quantization(
+                    cue_idx, self._CUE_SLOT, self._LAUNCH_QUANT_NONE
+                )
+            except OSError:  # pragma: no cover - best-effort
+                pass
+            # 3. WAIT for Live to confirm the clip exists, THEN fire. Without
+            #    this, fire_clip races the async create and no-ops on an empty
+            #    slot — the clip loads but never plays (the bug).
+            confirmed = self._wait_for_cue_clip(
+                cue_idx, timeout=self._CUE_CREATE_CONFIRM_TIMEOUT
+            )
+            if confirmed is False:
+                # Live answered has_clip but the slot is still empty after the
+                # timeout — fire anyway (best-effort) and flag it.
+                warnings.append(
+                    "Cue clip not confirmed present before firing "
+                    "(create may have failed or is slow); fired best-effort."
+                )
+            elif confirmed is None:
+                # No has_clip reply at all (Live silent or fork lacks the
+                # handler). Can't confirm; fire best-effort with a note.
+                warnings.append(
+                    "Could not confirm cue clip existence (has_clip query "
+                    "unanswered); fired best-effort — preview may not play if "
+                    "the clip wasn't ready."
+                )
             self.client.fire_clip(cue_idx, self._CUE_SLOT)
         except OSError as exc:
             warnings.append(f"OSC send failed: {exc}")
@@ -1956,6 +2047,31 @@ class AbletonBridge:
             "label": label,
             "warnings": warnings,
         }
+
+    def _wait_for_cue_clip(
+        self, cue_idx: int, *, timeout: float
+    ) -> bool | None:
+        """Poll ``has_clip`` on the cue slot until Live confirms a clip is
+        present, bounded by ``timeout``.
+
+        Returns:
+        - ``True``  — Live confirmed the clip exists (safe to fire).
+        - ``False`` — Live answered but the slot is still empty after timeout.
+        - ``None``  — no has_clip reply at all (Live silent / fork lacks the
+          handler); the caller fires best-effort.
+        """
+        deadline = time.monotonic() + timeout
+        saw_any_reply = False
+        while time.monotonic() < deadline:
+            has = self._clip_slot_has_clip(
+                cue_idx, self._CUE_SLOT, timeout=min(0.2, timeout)
+            )
+            if has is None:
+                continue  # no reply yet; keep polling until the deadline
+            saw_any_reply = True
+            if has:
+                return True
+        return False if saw_any_reply else None
 
     def stop_preview(self) -> dict[str, Any]:
         """Stop the current preview and clear the Cue track's slot.

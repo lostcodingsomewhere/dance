@@ -254,6 +254,28 @@ class AbletonOSCClient:
         Reply args: (track, slot, name) or no reply if the slot is empty."""
         self._send("/live/clip/get/name", track, slot)
 
+    def get_clip_slot_has_clip(self, track: int, slot: int) -> None:
+        """Ask Live whether a clip slot currently holds a clip.
+
+        Reply addressed to ``/live/clip_slot/get/has_clip`` with args
+        ``(track, slot, 0|1)``. Used to confirm an async
+        ``create_audio_clip`` actually finished populating the slot before we
+        ``fire_clip`` it — otherwise the fire races the create and no-ops on
+        an empty slot (the preview-never-plays bug)."""
+        self._send("/live/clip_slot/get/has_clip", track, slot)
+
+    def set_clip_launch_quantization(self, track: int, slot: int, value: int) -> None:
+        """Set a clip's launch quantization (overrides the global setting).
+
+        Live's ``Clip.launch_quantization`` enum: ``0`` = ``Global``? No —
+        ``0`` is *None* (fire immediately, no quantization); higher values map
+        to 8 Bars … 1/32. We use ``0`` on the Cue/preview clip so previews
+        fire instantly regardless of the template's GlobalQuantisation (1 Bar)
+        and whether the transport is running. Requires AbletonOSC's
+        ``/live/clip/set/launch_quantization`` handler; best-effort if the
+        running fork doesn't expose it."""
+        self._send("/live/clip/set/launch_quantization", track, slot, int(value))
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------

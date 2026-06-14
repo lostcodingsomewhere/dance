@@ -45,12 +45,32 @@ class _FakeLive:
     consistent with what the bridge just did — which is what the robust
     create helper (count-delta confirmation + name verification) requires.
 
-    Run it as a context manager; it returns the (send_port, listen_port,
-    received) tuple. ``received`` is the list of every OSC message the fake
-    saw, for command-shape assertions.
+    It also models clip slots: ``create_audio_clip`` marks a (track, slot) as
+    holding a clip, ``delete_clip`` clears it, and ``get_clip_slot_has_clip``
+    replies accordingly. To reproduce the async create→fire race, the clip
+    only becomes "present" after ``has_clip_delay`` has_clip queries have been
+    answered (so a test can assert the bridge WAITED before firing).
+
+    Knobs:
+    - ``has_clip_delay``: number of has_clip queries returning False before
+      the clip flips to present (models Live finishing the async create).
+    - ``answer_has_clip``: when False, the fake never replies to has_clip at
+      all (models a fork lacking the handler → bridge fires best-effort).
+    - ``clip_never_appears``: when True, the clip is created but has_clip
+      keeps returning False forever (models a failed/too-slow create).
+
+    Run it as a context manager. ``received`` is the list of every OSC
+    message the fake saw, for command-shape assertions.
     """
 
-    def __init__(self, initial_names: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        initial_names: list[str] | None = None,
+        *,
+        has_clip_delay: int = 0,
+        answer_has_clip: bool = True,
+        clip_never_appears: bool = False,
+    ) -> None:
         self.names: list[str] = list(initial_names or [])
         self.received: list[tuple[str, tuple[Any, ...]]] = []
         self.send_port = _free_port()
@@ -58,6 +78,13 @@ class _FakeLive:
         self._listener = AbletonOSCListener(port=self.send_port)
         self._reply = udp_client.SimpleUDPClient("127.0.0.1", self.listen_port)
         self._lock = __import__("threading").Lock()
+        # (track, slot) -> number of has_clip queries still owed a False reply
+        # before the clip is considered present. Created via create_audio_clip.
+        self._pending_clip: dict[tuple[int, int], int] = {}
+        self._present_clip: set[tuple[int, int]] = set()
+        self._has_clip_delay = has_clip_delay
+        self._answer_has_clip = answer_has_clip
+        self._clip_never_appears = clip_never_appears
 
     def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
         with self._lock:
@@ -81,6 +108,30 @@ class _FakeLive:
             elif addr == "/live/song/get/track_names":
                 self._reply.send_message(
                     "/live/song/get/track_names", list(self.names)
+                )
+            elif addr == "/live/clip_slot/create_audio_clip":
+                key = (int(args[0]), int(args[1]))
+                self._present_clip.discard(key)
+                self._pending_clip[key] = self._has_clip_delay
+            elif addr == "/live/clip_slot/delete_clip":
+                key = (int(args[0]), int(args[1]))
+                self._present_clip.discard(key)
+                self._pending_clip.pop(key, None)
+            elif addr == "/live/clip_slot/get/has_clip":
+                if not self._answer_has_clip:
+                    return  # model a fork without the has_clip handler
+                key = (int(args[0]), int(args[1]))
+                present = key in self._present_clip
+                if not present and key in self._pending_clip and not self._clip_never_appears:
+                    if self._pending_clip[key] <= 0:
+                        self._present_clip.add(key)
+                        self._pending_clip.pop(key, None)
+                        present = True
+                    else:
+                        self._pending_clip[key] -= 1
+                self._reply.send_message(
+                    "/live/clip_slot/get/has_clip",
+                    [key[0], key[1], 1 if present else 0],
                 )
 
     def __enter__(self) -> _FakeLive:
@@ -206,6 +257,28 @@ def test_client_sends_to_correct_address():
         assert by_addr["/live/song/set/tempo"] == (128.5,)
         assert by_addr["/live/clip_slot/fire"] == (2, 4)
         assert by_addr["/live/track/set/volume"] == (1, 0.75)
+    finally:
+        listener.stop()
+
+
+def test_client_has_clip_and_launch_quant_addresses():
+    """get_clip_slot_has_clip + set_clip_launch_quantization emit the right
+    addresses/args (used by the preview create→fire race fix)."""
+    port = _free_port()
+    received: list[tuple[str, tuple[Any, ...]]] = []
+    listener = AbletonOSCListener(port=port)
+    listener.on_any(lambda addr, args: received.append((addr, args)))
+    listener.start()
+    try:
+        client = AbletonOSCClient(port=port)
+        client.get_clip_slot_has_clip(10, 0)
+        client.set_clip_launch_quantization(10, 0, 0)
+        assert _wait_for(lambda: len(received) >= 2)
+        by_addr = {a: args for a, args in received}
+        assert by_addr["/live/clip_slot/get/has_clip"] == (10, 0)
+        assert by_addr["/live/clip/set/launch_quantization"] == (10, 0, 0)
+        # launch_quant value must be a plain int for OSC.
+        assert type(by_addr["/live/clip/set/launch_quantization"][2]) is int
     finally:
         listener.stop()
 
@@ -1193,6 +1266,134 @@ def test_preview_does_not_fire_into_known_deck_index(tmp_path):
             assert _wait_for(lambda: bool(live.args_for("/live/clip_slot/fire")))
             for t, _slot in live.args_for("/live/clip_slot/fire"):
                 assert t not in deck_indices, f"preview fired into deck idx {t}"
+        finally:
+            bridge.stop()
+
+
+# ---------------------------------------------------------------------------
+# Follow-up bug — create_audio_clip is async; preview must WAIT for the clip
+# to exist before firing, else fire no-ops on an empty slot (clip loads but
+# never plays). Also: force instant launch so previews aren't 1-bar-quantized.
+# ---------------------------------------------------------------------------
+
+
+def test_preview_waits_for_clip_to_exist_then_fires(tmp_path):
+    """The fire_clip must be sent only AFTER Live confirms the cue clip
+    exists. With has_clip_delay>0 the clip isn't present on the first query,
+    so a correct bridge polls has_clip until it flips True, THEN fires."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+    # Clip only appears after 2 has_clip queries return False — models Live's
+    # async create finishing a beat later.
+    with _FakeLive(
+        initial_names=list(_PREFIXED_DECK_NAMES), has_clip_delay=2
+    ) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio), label="PREVIEW y")
+            assert result["ok"] is True
+            assert result["warnings"] == []  # confirmed cleanly, no warning
+            cue_idx = result["cue_track_idx"]
+            assert cue_idx == 10
+
+            # The fire was sent, and it came AFTER at least one has_clip query
+            # (i.e. the bridge waited — did not fire blindly right after
+            # create_audio_clip). Poll for the fire (recorded on the fake's
+            # listener thread, may lag the synchronous return).
+            assert _wait_for(
+                lambda: "/live/clip_slot/fire" in [a for a, _ in live.received]
+            )
+            order = [a for a, _ in live.received]
+            fire_pos = order.index("/live/clip_slot/fire")
+            create_pos = order.index("/live/clip_slot/create_audio_clip")
+            has_clip_positions = [
+                i for i, a in enumerate(order) if a == "/live/clip_slot/get/has_clip"
+            ]
+            assert has_clip_positions, "bridge never queried has_clip before firing"
+            # create → has_clip(s) → fire, in that order.
+            assert create_pos < has_clip_positions[0] < fire_pos
+            # Fired on the cue slot specifically.
+            assert (cue_idx, bridge._CUE_SLOT) in live.args_for("/live/clip_slot/fire")
+        finally:
+            bridge.stop()
+
+
+def test_preview_sets_instant_launch_quant_before_fire(tmp_path):
+    """The cue clip's launch_quantization is set to None (0) BEFORE the fire,
+    so previews fire instantly instead of waiting for the 1-bar global
+    quantize."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio))
+            cue_idx = result["cue_track_idx"]
+            # launch_quantization sent with value 0 (None) on the cue slot.
+            assert _wait_for(
+                lambda: (cue_idx, bridge._CUE_SLOT, 0)
+                in live.args_for("/live/clip/set/launch_quantization")
+            )
+            # It was set BEFORE the fire.
+            assert _wait_for(
+                lambda: "/live/clip_slot/fire" in [a for a, _ in live.received]
+            )
+            order = [a for a, _ in live.received]
+            lq_pos = order.index("/live/clip/set/launch_quantization")
+            fire_pos = order.index("/live/clip_slot/fire")
+            assert lq_pos < fire_pos
+        finally:
+            bridge.stop()
+
+
+def test_preview_times_out_then_best_effort_fires_with_warning(tmp_path):
+    """If the clip never appears (failed/slow create) but Live IS answering
+    has_clip with False, the bridge fires best-effort after the timeout and
+    appends a warning — it does not hang forever or silently skip the fire."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+    with _FakeLive(
+        initial_names=list(_PREFIXED_DECK_NAMES), clip_never_appears=True
+    ) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        # Shrink the confirm timeout so the test is fast.
+        bridge._CUE_CREATE_CONFIRM_TIMEOUT = 0.4
+        try:
+            result = bridge.preview_audio(str(audio))
+            assert result["ok"] is True  # best-effort fire still "ok"
+            assert any("not confirmed present" in w for w in result["warnings"])
+            # Fire WAS still sent (best-effort) despite no confirmation.
+            assert _wait_for(
+                lambda: (result["cue_track_idx"], bridge._CUE_SLOT)
+                in live.args_for("/live/clip_slot/fire")
+            )
+        finally:
+            bridge.stop()
+
+
+def test_preview_best_effort_fires_when_has_clip_unanswered(tmp_path):
+    """If the running AbletonOSC fork doesn't answer has_clip at all, the
+    bridge can't confirm — it fires best-effort with a clear warning rather
+    than hanging or refusing."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+    with _FakeLive(
+        initial_names=list(_PREFIXED_DECK_NAMES), answer_has_clip=False
+    ) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        bridge._CUE_CREATE_CONFIRM_TIMEOUT = 0.4
+        try:
+            result = bridge.preview_audio(str(audio))
+            assert result["ok"] is True
+            assert any("Could not confirm" in w for w in result["warnings"])
+            assert _wait_for(
+                lambda: (result["cue_track_idx"], bridge._CUE_SLOT)
+                in live.args_for("/live/clip_slot/fire")
+            )
         finally:
             bridge.stop()
 
