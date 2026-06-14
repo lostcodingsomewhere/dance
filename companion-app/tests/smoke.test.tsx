@@ -49,12 +49,16 @@ describe("App smoke", () => {
 
   it("renders the top bar without crashing", async () => {
     renderApp();
-    // Three view tabs after the Set-Rail consolidation (Crate retired,
-    // brand chip dropped).
+    // Booth is the default view, so only its tab is a top-level tab; Set /
+    // Pipeline / Course collapse into a ··· overflow menu to keep the live
+    // surface uncluttered. They become reachable once the menu is opened.
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Booth" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Set" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Pipeline" })).toBeInTheDocument();
+    await act(async () => {
+      screen.getByTitle("Set, Pipeline, Course").click();
+    });
+    expect(screen.getByRole("button", { name: "Set" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pipeline" })).toBeInTheDocument();
   });
 
   it("set editor renders the empty-state when no active set exists", async () => {
@@ -68,8 +72,12 @@ describe("App smoke", () => {
       return jsonResponse([]);
     });
     renderApp();
+    // From Booth, the Set view lives behind the ··· overflow menu.
     await act(async () => {
-      screen.getByRole("tab", { name: "Set" }).click();
+      screen.getByTitle("Set, Pipeline, Course").click();
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Set" }).click();
     });
     await waitFor(() => {
       expect(
