@@ -202,6 +202,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
         self.listener.on("/live/clip_slot/get/has_clip", self._on_has_clip)
+        self.listener.on("/live/clip/get/is_playing", self._on_clip_is_playing)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
         self.listener.on("/live/track/get/solo", self._on_track_solo)
 
@@ -540,6 +541,20 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_clip_is_playing(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, 0|1) for /live/clip/get/is_playing.
+        # Stash (track, slot, bool) so preview_audio can confirm a fired
+        # preview actually started (vs a fire that raced the sample decode).
+        if len(args) >= 3:
+            self._reply_values[address] = (
+                int(args[0]),
+                int(args[1]),
+                bool(args[2]),
+            )
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     # ------------------------------------------------------------------
     # Request/reply helpers
     # ------------------------------------------------------------------
@@ -757,6 +772,12 @@ class AbletonBridge:
     # populated the cue slot before we fire it. ~1.5s covers a cold sample
     # decode without hanging the request.
     _CUE_CREATE_CONFIRM_TIMEOUT: float = 1.5
+    # After firing, how long to keep re-firing until Live reports the clip is
+    # actually playing. has_clip only confirms the clip OBJECT exists; a
+    # compressed sample (mp3/m4a) keeps decoding afterwards, so the first fire
+    # can land on a not-yet-loaded sample and play silence. WAV stems pass on
+    # the first poll; a full mp3 may need a couple of seconds to decode.
+    _CUE_PLAY_CONFIRM_TIMEOUT: float = 3.0
 
     def reset_deck_columns(self) -> None:
         """Forget the cached deck-column indices AND the per-cell load map.
@@ -877,6 +898,58 @@ class AbletonBridge:
         if reply_track != track or reply_slot != slot:
             return None
         return bool(reply_has)
+
+    def _clip_is_playing(
+        self, track: int, slot: int, *, timeout: float = 0.25
+    ) -> bool | None:
+        """One-shot 'is the clip in this slot currently playing?' query.
+
+        Returns ``True`` / ``False`` from Live, or ``None`` on timeout (Live
+        silent, or the fork doesn't expose is_playing). Verifies the reply
+        matches the requested (track, slot) so a stale reply can't bleed in."""
+        addr = "/live/clip/get/is_playing"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_clip_is_playing(track, slot)
+        except OSError:
+            return None
+        if not evt.wait(timeout):
+            return None
+        result = self._reply_values.get(addr)
+        if not isinstance(result, tuple) or len(result) < 3:
+            return None
+        reply_track, reply_slot, reply_playing = result
+        if reply_track != track or reply_slot != slot:
+            return None
+        return bool(reply_playing)
+
+    def _ensure_cue_playing(self, cue_idx: int, *, timeout: float) -> bool:
+        """Re-fire the cue clip until Live reports it's actually playing.
+
+        ``has_clip`` only confirms the clip OBJECT exists; a compressed sample
+        (mp3/m4a) keeps decoding afterwards, so the first fire can land on a
+        not-yet-loaded sample and play silence. We poll is_playing and re-fire
+        until it's truly playing (WAV stems pass on the first poll, so this is
+        a no-op for them). Returns whether we confirmed playback.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            playing = self._clip_is_playing(
+                cue_idx, self._CUE_SLOT, timeout=min(0.25, timeout)
+            )
+            if playing:
+                return True
+            # Not playing yet (sample may still be decoding) — re-fire. With
+            # launch_quantization=None this is instant; once it's playing we
+            # stop, so a playing clip is never restarted.
+            try:
+                self.client.fire_clip(cue_idx, self._CUE_SLOT)
+            except OSError:
+                break
+            time.sleep(0.2)
+        return False
 
     def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
         """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
@@ -2028,6 +2101,21 @@ class AbletonBridge:
                     "the clip wasn't ready."
                 )
             self.client.fire_clip(cue_idx, self._CUE_SLOT)
+            # 4. has_clip only confirms the clip OBJECT exists. A compressed
+            #    sample (the full-track mix is an .mp3/.m4a) keeps decoding
+            #    after that, so this first fire can land on a not-yet-loaded
+            #    sample and play silence — the "song/mix preview doesn't fire"
+            #    bug. Re-fire until Live reports the clip is actually playing.
+            #    WAV stems are already playing, so this returns immediately.
+            played = self._ensure_cue_playing(
+                cue_idx, timeout=self._CUE_PLAY_CONFIRM_TIMEOUT
+            )
+            if played is False:
+                warnings.append(
+                    "Preview clip did not report playing within "
+                    f"{self._CUE_PLAY_CONFIRM_TIMEOUT:.0f}s (sample may still "
+                    "be decoding, or the fork doesn't expose is_playing)."
+                )
         except OSError as exc:
             warnings.append(f"OSC send failed: {exc}")
             return {
