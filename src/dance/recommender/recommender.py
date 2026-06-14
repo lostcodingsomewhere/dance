@@ -1,13 +1,19 @@
 """
 Query the recommendation graph.
 
-Given seed track IDs and a configurable mix of edge kinds, return ranked
-candidate tracks. Each result carries a list of ``reasons`` (one per edge
-that contributed) so callers can explain the suggestion in the UI.
+Given seed track IDs, return ranked candidate tracks using live scoring via
+the shared core in :mod:`dance.recommender.scoring`.  The candidate pool is
+the ``EMBEDDING_NEIGHBOR`` edges materialised by :mod:`dance.recommender.graph_builder`;
+key/BPM compatibility is computed at query time from the seed journey so no
+harmonic/tempo edges need to be stored.
 
 Also exposes :meth:`Recommender.recommend_by_text` — CLAP is a joint
 audio/text model so an arbitrary natural-language query ("punchy techy with
 vocals") can rank tracks directly without going through tags.
+
+The per-column live recommender (the Booth backbone) scores entirely through
+the shared core in :mod:`dance.recommender.scoring` and the journey context in
+:mod:`dance.recommender.journey` — no compatibility maths is reimplemented here.
 """
 
 from __future__ import annotations
@@ -18,7 +24,6 @@ from dataclasses import dataclass, field
 import numpy as np
 from sqlalchemy.orm import Session
 
-from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
     EdgeKind,
@@ -28,17 +33,8 @@ from dance.core.database import (
     TrackEmbedding,
 )
 from dance.core.serialization import decode_embedding
-from dance.pipeline.utils.camelot import get_compatible_keys
-
-
-DEFAULT_WEIGHTS: dict[EdgeKind, float] = {
-    EdgeKind.HARMONIC_COMPAT: 1.0,
-    EdgeKind.TEMPO_COMPAT: 1.0,
-    EdgeKind.EMBEDDING_NEIGHBOR: 1.0,
-    EdgeKind.TAG_OVERLAP: 1.0,
-    EdgeKind.MANUALLY_PAIRED: 1.0,
-    EdgeKind.PLAYLIST_NEIGHBOR: 1.0,
-}
+from dance.recommender import scoring
+from dance.recommender.journey import JourneyState, journey_from_combo, journey_from_tracks
 
 
 @dataclass
@@ -79,60 +75,89 @@ class Recommender:
         self,
         seeds: list[int],
         k: int = 10,
-        kinds: list[EdgeKind] | None = None,
-        weights: dict[EdgeKind, float] | None = None,
         exclude: list[int] | None = None,
     ) -> list[RecommendationResult]:
+        """Return the top-``k`` candidates for ``seeds`` using live scoring.
+
+        Candidate pool: tracks reachable via ``EMBEDDING_NEIGHBOR`` edges from
+        any seed.  Each candidate is scored with the shared
+        :func:`~dance.recommender.scoring.combine` function, using a journey
+        built from the seeds (embedding + key + BPM).  Seeds and ``exclude``
+        tracks are omitted from results.
+        """
         if not seeds:
             return []
-
-        active_kinds: list[EdgeKind] = (
-            list(kinds) if kinds is not None else list(DEFAULT_WEIGHTS)
-        )
-        kind_values = [k_.value for k_ in active_kinds]
-        weight_map: dict[str, float] = {
-            k_.value: (weights or {}).get(k_, DEFAULT_WEIGHTS.get(k_, 1.0))
-            for k_ in active_kinds
-        }
 
         excluded: set[int] = set(exclude or [])
         seed_set: set[int] = set(seeds)
 
-        # Aggregate per candidate target.
-        scores: dict[int, float] = {}
-        reasons: dict[int, list[dict]] = {}
-
+        # 1. Candidate pool from the materialized embedding-neighbor edges.
         edges = (
             self.session.query(TrackEdge)
             .filter(
                 TrackEdge.from_track_id.in_(list(seed_set)),
-                TrackEdge.kind.in_(kind_values),
+                TrackEdge.kind == EdgeKind.EMBEDDING_NEIGHBOR.value,
+            )
+            .all()
+        )
+        cand_ids: set[int] = set()
+        for edge in edges:
+            target = int(edge.to_track_id)
+            if target not in seed_set and target not in excluded:
+                cand_ids.add(target)
+
+        if not cand_ids:
+            return []
+
+        # 2. Build the journey context from the ordered seeds.
+        journey = journey_from_tracks(self.session, list(seeds), window=len(seeds))
+
+        # 3. Load embeddings + analysis for every candidate in one query.
+        embed_rows = (
+            self.session.query(TrackEmbedding)
+            .filter(
+                TrackEmbedding.track_id.in_(cand_ids),
+                TrackEmbedding.stem_file_id.is_(None),
+            )
+            .all()
+        )
+        analysis_rows = (
+            self.session.query(AudioAnalysis)
+            .filter(
+                AudioAnalysis.track_id.in_(cand_ids),
+                AudioAnalysis.stem_file_id.is_(None),
             )
             .all()
         )
 
-        for edge in edges:
-            target = int(edge.to_track_id)
-            if target in seed_set or target in excluded:
-                continue
-            kind_weight = weight_map.get(edge.kind, 0.0)
-            if kind_weight == 0.0:
-                continue
-            contribution = float(edge.weight) * kind_weight
-            scores[target] = scores.get(target, 0.0) + contribution
-            reasons.setdefault(target, []).append(
-                {
-                    "kind": edge.kind,
-                    "from_seed": int(edge.from_track_id),
-                    "weight": float(edge.weight),
-                }
-            )
+        embeds: dict[int, np.ndarray | None] = {
+            int(r.track_id): _decode(r.embedding, r.dim) for r in embed_rows
+        }
+        analysis_by_tid: dict[int, AudioAnalysis] = {
+            int(r.track_id): r for r in analysis_rows
+        }
 
-        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
-        return [
-            RecommendationResult(track_id=tid, score=score, reasons=reasons[tid])
-            for tid, score in ranked
-        ]
+        # 4. Score each candidate through the shared core.
+        _profile = scoring.Profile("seed", {"embedding": 0.5, "key": 0.25, "bpm": 0.25})
+        results: list[RecommendationResult] = []
+        for tid in cand_ids:
+            vec = embeds.get(tid)
+            row = analysis_by_tid.get(tid)
+            key = str(row.key_camelot) if row and row.key_camelot else None
+            bpm = float(row.bpm) if row and row.bpm is not None else None
+            features: dict[str, float | None] = {
+                "embedding": journey.vibe_score(vec),
+                "key": scoring.key_score(key, journey.target_keys),
+                "bpm": scoring.bpm_score(bpm, journey.target_bpm),
+            }
+            score, breakdown = scoring.combine(features, _profile)
+            reasons = [
+                {"kind": name, "value": round(v, 3)} for name, v in breakdown.items()
+            ]
+            results.append(RecommendationResult(track_id=tid, score=score, reasons=reasons))
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:k]
 
     # ------------------------------------------------------------------
 
@@ -228,57 +253,42 @@ def recommend(
 # Per-column recommender — the live-remixing rec stream backbone.
 # ---------------------------------------------------------------------------
 
-# Scoring weights for combining the three signals. Tuned by feel; keep the
-# sum at 1.0 so a perfect candidate scores ~1.0.
-_W_EMBED = 0.5
-_W_KEY = 0.3
-_W_BPM = 0.2
+# Soft penalty applied to a candidate whose source track was played recently
+# (it's in the journey's trailing window). Discourages re-introducing the same
+# song without hard-excluding it.
+_REPEAT_PENALTY = 0.5
 
 
-def _bpm_score(candidate_bpm: float | None, target_bpm: float | None) -> float:
-    """Linear falloff: 1.0 at exact match, 0.0 at ±20 BPM or more.
-
-    Both stems and full tracks store their *original* recording BPM. Live
-    warps to master tempo, but warps farther than ~6% start sounding
-    artifacted, so closer-original-BPM ≈ better-sounding swap.
-    """
-    if candidate_bpm is None or target_bpm is None:
-        return 0.0
-    delta = abs(float(candidate_bpm) - float(target_bpm))
-    return max(0.0, 1.0 - delta / 20.0)
-
-
-def _key_score(
-    candidate_key: str | None,
-    target_keys: list[str],
-) -> float:
-    """1.0 if candidate matches any target exactly, 0.6 if Camelot-compat,
-    0.0 otherwise. ``target_keys`` is the bag of keys currently in the combo
-    (one per stem, or one overall for the mix column)."""
-    if not candidate_key or not target_keys:
-        return 0.0
-    candidate = candidate_key.upper()
-    compat: set[str] = set()
-    for t in target_keys:
-        if t:
-            compat.update(k.upper() for k in get_compatible_keys(t))
-    if candidate in {k.upper() for k in target_keys if k}:
-        return 1.0
-    if candidate in compat:
-        return 0.6
-    return 0.0
+@dataclass
+class _Cand:
+    stem_file_id: int | None
+    track_id: int
+    embedding: np.ndarray | None
+    bpm: float | None
+    key: str | None
+    bpm_confidence: float | None = None
+    key_confidence: float | None = None
+    kick_density: float | None = None
+    presence: float | None = None
+    brightness: float | None = None
+    warmth: float | None = None
 
 
-def _normalize(vec: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vec)) or 1.0
-    return vec / norm
+@dataclass
+class _ComboTargets:
+    """Timbral aggregates of the active combo — the micro-scale targets the
+    journey object doesn't carry (it owns vibe/key/BPM/energy)."""
+
+    kick_density: float | None = None
+    presence: float | None = None
+    brightness: float | None = None
+    warmth: float | None = None
 
 
 class _ColumnRecommenderImpl:
-    """Stateful helper that loads the data once per request and scores.
-
-    Pulled out of Recommender.recommend_by_column to keep that method short.
-    """
+    """Stateful helper that loads the data once per request and scores via the
+    shared core. Pulled out of :meth:`Recommender.recommend_by_column` to keep
+    that wrapper short."""
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -291,72 +301,46 @@ class _ColumnRecommenderImpl:
         master_bpm: float | None,
         k: int,
         exclude_track_ids: list[int],
+        trailing_track_ids: list[int] | None,
     ) -> list[ColumnRecResult]:
         if column not in VALID_COLUMNS:
             raise ValueError(f"unknown column {column!r}; valid: {VALID_COLUMNS}")
 
         excluded = set(exclude_track_ids)
 
-        # 1. Aggregate combo embedding (averaged + normalized).
-        combo_vec = self._combo_embedding(combo_stem_ids)
-        combo_keys, combo_bpms = self._combo_keys_and_bpms(combo_stem_ids)
-        target_bpm = master_bpm
-        if target_bpm is None and combo_bpms:
-            target_bpm = sum(combo_bpms) / len(combo_bpms)
+        # 1. Build the journey context (vibe/key/BPM + trend + anti-repetition)
+        #    from the active combo plus the trailing live set.
+        journey = journey_from_combo(
+            self.session,
+            combo_stem_ids,
+            master_bpm=master_bpm,
+            trailing_track_ids=trailing_track_ids,
+        )
+        targets = self._combo_targets(combo_stem_ids)
+        profile = scoring.profile_for_column(column)
 
         # 2. Pull candidates for this column.
         if column == _MIX_COLUMN:
             candidates = self._mix_candidates(excluded)
         else:
             candidates = self._stem_candidates(column, excluded)
-
         if not candidates:
             return []
 
-        # 3. Score each candidate.
+        # 3. Score each candidate through the shared core.
         results: list[ColumnRecResult] = []
         for cand in candidates:
-            breakdown: dict[str, float] = {}
-            reasons: list[str] = []
-
-            # Embedding similarity (if we have a combo to compare against).
-            embed_s = 0.0
-            if combo_vec is not None and cand.embedding is not None:
-                embed_s = float(np.dot(cand.embedding, combo_vec))
-                # Map cosine [-1, 1] into [0, 1] so it composes with the
-                # other scores cleanly; negatives mean "dissimilar".
-                embed_s = max(0.0, (embed_s + 1.0) / 2.0)
-                breakdown["embedding"] = embed_s
-
-            # Key compat.
-            key_s = _key_score(cand.key, combo_keys)
-            breakdown["key"] = key_s
-            if key_s >= 1.0:
-                reasons.append("same key")
-            elif key_s >= 0.6:
-                reasons.append("harmonic-compat key")
-
-            # BPM compat.
-            bpm_s = _bpm_score(cand.bpm, target_bpm)
-            breakdown["bpm"] = bpm_s
-            if bpm_s >= 0.95 and target_bpm is not None:
-                reasons.append("matched BPM")
-            elif bpm_s >= 0.7 and target_bpm is not None:
-                reasons.append("close BPM")
-
-            # If no combo (empty), down-weight embedding to 0 and renormalize.
-            if combo_vec is None:
-                score = (key_s * _W_KEY + bpm_s * _W_BPM) / (_W_KEY + _W_BPM)
-            else:
-                score = embed_s * _W_EMBED + key_s * _W_KEY + bpm_s * _W_BPM
-
+            features = self._features(cand, journey, targets)
+            score, breakdown = scoring.combine(features, profile)
+            if cand.track_id in journey.used_source_ids:
+                score *= _REPEAT_PENALTY
             results.append(
                 ColumnRecResult(
                     track_id=cand.track_id,
                     stem_file_id=cand.stem_file_id,
                     score=score,
                     score_breakdown=breakdown,
-                    reasons=reasons,
+                    reasons=_reasons(breakdown, column),
                 )
             )
 
@@ -364,57 +348,59 @@ class _ColumnRecommenderImpl:
         return results[:k]
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Scoring
     # ------------------------------------------------------------------
 
-    def _combo_embedding(self, combo_stem_ids: list[int]) -> np.ndarray | None:
-        """Average + normalize the embeddings of the active combo stems.
+    def _features(
+        self, cand: _Cand, journey: JourneyState, targets: _ComboTargets
+    ) -> dict[str, float | None]:
+        """Per-candidate feature dict consumed by :func:`scoring.combine`.
 
-        Returns None if no embeddings are available (empty combo or none of
-        the active stems have embeddings yet).
+        Key/BPM are confidence-gated so shaky analysis contributes less.
+        ``combine`` ignores any feature the column profile doesn't weight, so we
+        can compute the full set unconditionally.
         """
-        if not combo_stem_ids:
-            return None
-        rows = (
-            self.session.query(TrackEmbedding)
-            .filter(TrackEmbedding.stem_file_id.in_(combo_stem_ids))
-            .all()
-        )
-        if not rows:
-            return None
-        vecs = []
-        for row in rows:
-            v = decode_embedding(row.embedding, int(row.dim))
-            vecs.append(_normalize(v.astype(np.float32, copy=False)))
-        avg = np.mean(np.stack(vecs, axis=0), axis=0)
-        return _normalize(avg)
+        return {
+            "embedding": journey.vibe_score(cand.embedding),
+            "key": scoring.confidence_gate(
+                scoring.key_score(cand.key, journey.target_keys), cand.key_confidence
+            ),
+            "bpm": scoring.confidence_gate(
+                scoring.bpm_score(cand.bpm, journey.target_bpm), cand.bpm_confidence
+            ),
+            "kick_density": scoring.kick_density_score(cand.kick_density, targets.kick_density),
+            "presence": scoring.presence_score(cand.presence, targets.presence),
+            "timbre": scoring.timbre_score(
+                (cand.brightness, cand.warmth), (targets.brightness, targets.warmth)
+            ),
+        }
 
-    def _combo_keys_and_bpms(
-        self, combo_stem_ids: list[int]
-    ) -> tuple[list[str], list[float]]:
+    # ------------------------------------------------------------------
+    # Loaders
+    # ------------------------------------------------------------------
+
+    def _combo_targets(self, combo_stem_ids: list[int]) -> _ComboTargets:
+        """Mean timbral signals across the active combo stems."""
         if not combo_stem_ids:
-            return [], []
+            return _ComboTargets()
         rows = (
-            self.session.query(AudioAnalysis)
+            self.session.query(
+                AudioAnalysis.kick_density,
+                AudioAnalysis.presence_ratio,
+                AudioAnalysis.brightness,
+                AudioAnalysis.warmth,
+            )
             .filter(AudioAnalysis.stem_file_id.in_(combo_stem_ids))
             .all()
         )
-        keys: list[str] = []
-        bpms: list[float] = []
-        for r in rows:
-            # Stem analyses store dominant_pitch_camelot, not key_camelot.
-            pitch = getattr(r, "dominant_pitch_camelot", None) or getattr(
-                r, "key_camelot", None
-            )
-            if pitch:
-                keys.append(str(pitch))
-            if r.bpm is not None:
-                bpms.append(float(r.bpm))
-        return keys, bpms
+        return _ComboTargets(
+            kick_density=_mean([r[0] for r in rows]),
+            presence=_mean([r[1] for r in rows]),
+            brightness=_mean([r[2] for r in rows]),
+            warmth=_mean([r[3] for r in rows]),
+        )
 
-    def _stem_candidates(
-        self, column: str, excluded: set[int]
-    ) -> list["_Cand"]:
+    def _stem_candidates(self, column: str, excluded: set[int]) -> list[_Cand]:
         rows = (
             self.session.query(
                 StemFile.id,
@@ -422,45 +408,67 @@ class _ColumnRecommenderImpl:
                 TrackEmbedding.embedding,
                 TrackEmbedding.dim,
                 AudioAnalysis.bpm,
+                AudioAnalysis.bpm_confidence,
                 AudioAnalysis.dominant_pitch_camelot,
+                AudioAnalysis.dominant_pitch_confidence,
+                AudioAnalysis.kick_density,
+                AudioAnalysis.presence_ratio,
+                AudioAnalysis.brightness,
+                AudioAnalysis.warmth,
             )
-            .outerjoin(
-                TrackEmbedding, TrackEmbedding.stem_file_id == StemFile.id
-            )
-            .outerjoin(
-                AudioAnalysis, AudioAnalysis.stem_file_id == StemFile.id
-            )
+            .outerjoin(TrackEmbedding, TrackEmbedding.stem_file_id == StemFile.id)
+            .outerjoin(AudioAnalysis, AudioAnalysis.stem_file_id == StemFile.id)
             .filter(StemFile.kind == column)
             .all()
         )
         out: list[_Cand] = []
-        for stem_id, track_id, embed_blob, dim, bpm, key in rows:
+        for row in rows:
+            (
+                stem_id,
+                track_id,
+                embed_blob,
+                dim,
+                bpm,
+                bpm_conf,
+                key,
+                key_conf,
+                kick_density,
+                presence,
+                brightness,
+                warmth,
+            ) = row
             if int(track_id) in excluded:
                 continue
-            vec: np.ndarray | None = None
-            if embed_blob and dim:
-                vec = _normalize(
-                    decode_embedding(embed_blob, int(dim)).astype(np.float32, copy=False)
-                )
             out.append(
                 _Cand(
                     stem_file_id=int(stem_id),
                     track_id=int(track_id),
-                    embedding=vec,
-                    bpm=float(bpm) if bpm is not None else None,
+                    embedding=_decode(embed_blob, dim),
+                    bpm=_f(bpm),
                     key=str(key) if key else None,
+                    bpm_confidence=_f(bpm_conf),
+                    key_confidence=_f(key_conf),
+                    kick_density=_f(kick_density),
+                    presence=_f(presence),
+                    brightness=_f(brightness),
+                    warmth=_f(warmth),
                 )
             )
         return out
 
-    def _mix_candidates(self, excluded: set[int]) -> list["_Cand"]:
+    def _mix_candidates(self, excluded: set[int]) -> list[_Cand]:
         rows = (
             self.session.query(
                 Track.id,
                 TrackEmbedding.embedding,
                 TrackEmbedding.dim,
                 AudioAnalysis.bpm,
+                AudioAnalysis.bpm_confidence,
                 AudioAnalysis.key_camelot,
+                AudioAnalysis.key_confidence,
+                AudioAnalysis.presence_ratio,
+                AudioAnalysis.brightness,
+                AudioAnalysis.warmth,
             )
             .outerjoin(
                 TrackEmbedding,
@@ -475,33 +483,83 @@ class _ColumnRecommenderImpl:
             .all()
         )
         out: list[_Cand] = []
-        for track_id, embed_blob, dim, bpm, key in rows:
+        for row in rows:
+            (
+                track_id,
+                embed_blob,
+                dim,
+                bpm,
+                bpm_conf,
+                key,
+                key_conf,
+                presence,
+                brightness,
+                warmth,
+            ) = row
             if int(track_id) in excluded:
                 continue
-            vec: np.ndarray | None = None
-            if embed_blob and dim:
-                vec = _normalize(
-                    decode_embedding(embed_blob, int(dim)).astype(np.float32, copy=False)
-                )
             out.append(
                 _Cand(
                     stem_file_id=None,
                     track_id=int(track_id),
-                    embedding=vec,
-                    bpm=float(bpm) if bpm is not None else None,
+                    embedding=_decode(embed_blob, dim),
+                    bpm=_f(bpm),
                     key=str(key) if key else None,
+                    bpm_confidence=_f(bpm_conf),
+                    key_confidence=_f(key_conf),
+                    presence=_f(presence),
+                    brightness=_f(brightness),
+                    warmth=_f(warmth),
                 )
             )
         return out
 
 
-@dataclass
-class _Cand:
-    stem_file_id: int | None
-    track_id: int
-    embedding: np.ndarray | None
-    bpm: float | None
-    key: str | None
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _reasons(breakdown: dict[str, float], column: str) -> list[str]:
+    """Human-readable explanations derived from the score breakdown."""
+    out: list[str] = []
+    embed = breakdown.get("embedding")
+    if embed is not None and embed >= 0.8:
+        out.append("vibe match")
+    key = breakdown.get("key")
+    if key is not None and key >= 1.0:
+        out.append("same key")
+    elif key is not None and key >= 0.6:
+        out.append("harmonic-compat key")
+    bpm = breakdown.get("bpm")
+    if bpm is not None and bpm >= 0.95:
+        out.append("matched BPM")
+    elif bpm is not None and bpm >= 0.7:
+        out.append("close BPM")
+    kick = breakdown.get("kick_density")
+    if kick is not None and kick >= 0.8:
+        out.append("tight drums")
+    timbre = breakdown.get("timbre")
+    if timbre is not None and timbre >= 0.8:
+        out.append("similar texture")
+    return out
+
+
+def _decode(blob, dim) -> np.ndarray | None:
+    if not blob or not dim:
+        return None
+    v = decode_embedding(blob, int(dim)).astype(np.float32, copy=False)
+    norm = float(np.linalg.norm(v)) or 1.0
+    return v / norm
+
+
+def _f(value) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _mean(values: list) -> float | None:
+    present = [float(v) for v in values if v is not None]
+    return sum(present) / len(present) if present else None
 
 
 def recommend_by_column(
@@ -512,10 +570,14 @@ def recommend_by_column(
     master_bpm: float | None = None,
     k: int = 5,
     exclude_track_ids: list[int] | None = None,
+    trailing_track_ids: list[int] | None = None,
 ) -> list[ColumnRecResult]:
     """Top-K candidate stems (or tracks for ``column='mix'``) for this column,
-    re-scored against the currently-active combo. Stateless — load + score
-    + sort in one call.
+    re-scored against the active combo through the shared scoring core.
+
+    ``trailing_track_ids`` is the recent live-set sequence; when supplied the
+    recommender gains trend-aware vibe and a soft anti-repetition penalty.
+    Stateless — load + score + sort in one call.
     """
     impl = _ColumnRecommenderImpl(session)
     return impl.run(
@@ -524,11 +586,11 @@ def recommend_by_column(
         master_bpm=master_bpm,
         k=k,
         exclude_track_ids=list(exclude_track_ids or []),
+        trailing_track_ids=list(trailing_track_ids) if trailing_track_ids else None,
     )
 
 
 __all__ = [
-    "DEFAULT_WEIGHTS",
     "ColumnRecResult",
     "RecommendationResult",
     "Recommender",

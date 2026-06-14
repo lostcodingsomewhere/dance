@@ -16,11 +16,8 @@ from dance.core.database import (
     now_utc,
 )
 from dance.core.serialization import encode_embedding
-from dance.recommender.tail import (
-    _energy_score,
-    _project_energy,
-    tail_recs_for_set,
-)
+from dance.recommender.scoring import energy_score, project_energy
+from dance.recommender.tail import tail_recs_for_set
 
 # ---------------------------------------------------------------------------
 # Pure-function unit tests
@@ -28,36 +25,37 @@ from dance.recommender.tail import (
 
 
 def test_project_energy_flat_returns_flat():
-    assert _project_energy([5, 5, 5, 5]) == pytest.approx(5.0)
+    assert project_energy([5, 5, 5, 5]) == pytest.approx(5.0)
 
 
 def test_project_energy_upward_slope_extrapolates():
     # 3, 4, 5, 6 → slope=1, next = 7
-    assert _project_energy([3, 4, 5, 6]) == pytest.approx(7.0)
+    assert project_energy([3, 4, 5, 6]) == pytest.approx(7.0)
 
 
 def test_project_energy_clamps_to_range():
     # 8, 9, 10, 10 → projection could go above 10; clamp.
-    assert _project_energy([8, 9, 10, 10]) <= 10.0
+    assert project_energy([8, 9, 10, 10]) <= 10.0
 
 
 def test_project_energy_handles_empty_and_single():
-    assert _project_energy([]) is None
-    assert _project_energy([7]) == pytest.approx(7.0)
+    assert project_energy([]) is None
+    assert project_energy([7]) == pytest.approx(7.0)
 
 
 def test_energy_score_at_target_is_one():
-    assert _energy_score(6, 6.0) == pytest.approx(1.0)
+    assert energy_score(6, 6.0) == pytest.approx(1.0)
 
 
 def test_energy_score_falls_off_at_three_floors():
-    assert _energy_score(3, 6.0) == pytest.approx(0.0)
-    assert _energy_score(6, 3.0) == pytest.approx(0.0)
+    assert energy_score(3, 6.0) == pytest.approx(0.0)
+    assert energy_score(6, 3.0) == pytest.approx(0.0)
 
 
-def test_energy_score_neutral_when_missing():
-    assert _energy_score(None, 5.0) == 0.5
-    assert _energy_score(5, None) == 0.5
+def test_energy_score_none_when_missing():
+    # The shared core returns None (not a neutral 0.5) so combine drops it.
+    assert energy_score(None, 5.0) is None
+    assert energy_score(5, None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +242,51 @@ def test_tail_recs_respects_window_size(session, make_track):
     results = tail_recs_for_set(session, set_id=s.id, k=10, window=2)
     by_id = {r.track_id: r for r in results}
     assert by_id[cand_recent_bpm.id].score > by_id[cand_old_bpm.id].score
+
+
+def test_tail_recs_transition_fit_breaks_ties(session, make_track):
+    """Two candidates tied on vibe/key/BPM/energy; the one with a clean intro
+    (structurally mixable after the set's last outro) should win on
+    transition_fit."""
+    from dance.core.database import Region, RegionType, SectionLabel
+
+    def _add_section(track_id, label, bars):
+        session.add(
+            Region(
+                track_id=track_id,
+                stem_file_id=None,
+                position_ms=0,
+                region_type=RegionType.SECTION.value,
+                section_label=label,
+                length_bars=bars,
+            )
+        )
+
+    fixed = np.random.default_rng(2).standard_normal(8).astype(np.float32)
+
+    last = make_track(title="last")
+    _add_analysis(session, last.id, bpm=124, key="8A", energy=6)
+    _add_embedding(session, last.id, fixed)
+    _add_section(last.id, SectionLabel.OUTRO.value, 32)  # long clean outro to mix out of
+
+    mixable = make_track(title="mixable")
+    abrupt = make_track(title="abrupt")
+    _add_analysis(session, mixable.id, bpm=124, key="8A", energy=6)
+    _add_analysis(session, abrupt.id, bpm=124, key="8A", energy=6)
+    _add_embedding(session, mixable.id, fixed)
+    _add_embedding(session, abrupt.id, fixed)
+    _add_section(mixable.id, SectionLabel.INTRO.value, 32)  # long clean intro
+    _add_section(abrupt.id, SectionLabel.INTRO.value, 2)  # no usable intro
+
+    s = _make_set(session, [last])
+    session.commit()
+
+    by_id = {r.track_id: r for r in tail_recs_for_set(session, set_id=s.id)}
+    assert (
+        by_id[mixable.id].score_breakdown["transition_fit"]
+        > by_id[abrupt.id].score_breakdown["transition_fit"]
+    )
+    assert by_id[mixable.id].score > by_id[abrupt.id].score
 
 
 # Endpoint integration tests for /sets/{id}/tail-recs live in tests/test_api.py

@@ -29,6 +29,7 @@ from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
     Beat,
+    EdgeKind,
     Phrase,
     Region,
     RegionType,
@@ -198,10 +199,15 @@ def test_full_pipeline_on_synthetic_audio(e2e_settings, e2e_session, two_synth_t
     assert embedding_count == 10
 
     # Recommendation graph
+    # Recommendation graph — post-collapse, only embedding-neighbor edges are
+    # materialized (key/BPM/energy/structure are now scored live at query time).
     builder = GraphBuilder(e2e_session, e2e_settings)
     edge_counts = builder.build()
-    # At minimum we expect tempo_compat (128 and 130 are within 3 BPM).
-    assert edge_counts["tempo_compat"] >= 2, edge_counts  # bidirectional
+    # The builder completes and returns only the embedding-neighbor key. (Fake
+    # embeddings use model "fake-clap"; settings.clap_model is the real name, so
+    # the cosine matrix finds no matching rows — 0 edges is the correct outcome.)
+    assert EdgeKind.EMBEDDING_NEIGHBOR.value in edge_counts, edge_counts
+    assert set(edge_counts.keys()) == {EdgeKind.EMBEDDING_NEIGHBOR.value}
 
     # Idempotency: running the pipeline again does not produce errors
     # (every stage's input_state will be empty so this is essentially a no-op).
