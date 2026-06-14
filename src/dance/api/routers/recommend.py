@@ -203,6 +203,7 @@ def recommend_by_column_route(
         master_bpm=body.master_bpm,
         k=body.k,
         exclude_track_ids=body.exclude_track_ids,
+        trailing_track_ids=body.trailing_track_ids,
     )
 
     recs_out: list[ColumnRecOut] = []

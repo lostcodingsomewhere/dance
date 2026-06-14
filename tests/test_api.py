@@ -3293,3 +3293,110 @@ def test_health_deps_missing_yt_dlp_makes_ok_false(client: TestClient, monkeypat
     assert body["ok"] is False
     yt = next(c for c in body["checks"] if c["key"] == "yt_dlp")
     assert yt["status"] == "missing"
+
+
+# ---------------------------------------------------------------------------
+# Plan — per-role queues (/sets/{id}/plan, /plan-recs)
+# ---------------------------------------------------------------------------
+
+
+def _seed_plan_track(session, make_track, *, title, key="8A", bpm=124.0, energy=6, vec=None):
+    from dance.core.database import StemFile, TrackEmbedding
+    from dance.core.serialization import encode_embedding
+    import numpy as np
+
+    t = make_track(title=title)
+    session.add(
+        AudioAnalysis(
+            track_id=t.id, stem_file_id=None, bpm=bpm, key_camelot=key,
+            floor_energy=energy, analyzed_at=now_utc(),
+        )
+    )
+    for kind in ("drums", "bass", "vocals", "other"):
+        stem = StemFile(track_id=t.id, kind=kind, path=f"/tmp/{t.id}-{kind}.wav")
+        session.add(stem)
+        session.flush()
+        if vec is not None:
+            v = np.array(vec, dtype=np.float32)
+            session.add(
+                TrackEmbedding(
+                    track_id=t.id, stem_file_id=stem.id,
+                    model="laion/clap-htsat-unfused", dim=int(v.shape[0]),
+                    embedding=encode_embedding(v),
+                )
+            )
+    session.flush()
+    return t
+
+
+def test_plan_starts_empty(client: TestClient, session, make_track) -> None:
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    body = client.get(f"/api/v1/sets/{sid}/plan").json()
+    assert body["set_id"] == sid
+    assert body["queues"]["drums"] == []
+    assert set(body["queues"].keys()) == {"drums", "bass", "vocals", "other", "song"}
+
+
+def test_put_plan_persists_queues(client: TestClient, session, make_track) -> None:
+    a = _seed_plan_track(session, make_track, title="a")
+    b = _seed_plan_track(session, make_track, title="b")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+
+    r = client.put(
+        f"/api/v1/sets/{sid}/plan",
+        json={"queues": {"drums": [a.id, b.id], "vocals": [b.id]}},
+    )
+    assert r.status_code == 200, r.text
+    q = r.json()["queues"]
+    assert [i["track_id"] for i in q["drums"]] == [a.id, b.id]
+    assert q["drums"][0]["title"] == "a"
+    assert [i["track_id"] for i in q["vocals"]] == [b.id]
+    assert q["bass"] == []
+
+    # Persists across a fresh GET.
+    q2 = client.get(f"/api/v1/sets/{sid}/plan").json()["queues"]
+    assert [i["track_id"] for i in q2["drums"]] == [a.id, b.id]
+
+
+def test_plan_append_merges(client: TestClient, session, make_track) -> None:
+    a = _seed_plan_track(session, make_track, title="a")
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    # append twice — server-side merge de-dupes
+    client.post(f"/api/v1/sets/{sid}/plan/append", json={"role": "song", "track_id": a.id})
+    r = client.post(f"/api/v1/sets/{sid}/plan/append", json={"role": "song", "track_id": a.id})
+    assert r.status_code == 200, r.text
+    assert [i["track_id"] for i in r.json()["queues"]["song"]] == [a.id]
+
+
+def test_put_plan_bad_role(client: TestClient, session) -> None:
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    assert client.put(
+        f"/api/v1/sets/{sid}/plan", json={"queues": {"banana": [1]}}
+    ).status_code == 400
+
+
+def test_plan_recs_scored_against_plan(client: TestClient, session, make_track) -> None:
+    # drums queue has track a; ask vocals recs. near (aligned) should beat far;
+    # tracks already queued in vocals are excluded.
+    a = _seed_plan_track(session, make_track, title="a", key="8A", bpm=124, vec=[1.0, 0.0, 0.0])
+    near = _seed_plan_track(session, make_track, title="near", key="8A", bpm=124, vec=[1.0, 0.0, 0.0])
+    _seed_plan_track(session, make_track, title="far", key="2A", bpm=150, vec=[0.0, 1.0, 0.0])
+    session.commit()
+    sid = client.post("/api/v1/sets", json={"name": "S"}).json()["id"]
+    client.put(f"/api/v1/sets/{sid}/plan", json={"queues": {"drums": [a.id]}})
+
+    r = client.get(f"/api/v1/sets/{sid}/plan-recs?role=vocals&k=5")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["column"] == "vocals"
+    ids = [rec["track_id"] for rec in body["recs"]]
+    assert ids and ids[0] == near.id
+
+
+def test_plan_404_for_missing_set(client: TestClient) -> None:
+    assert client.get("/api/v1/sets/9999/plan").status_code == 404
+    assert client.get("/api/v1/sets/9999/plan-recs?role=drums").status_code == 404

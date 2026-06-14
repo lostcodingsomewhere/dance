@@ -8,7 +8,8 @@ import {
   searchTracks,
   spotifySearch,
 } from "../api";
-import { useActiveSet, useAddTrackToSet } from "../hooks/useSets";
+import { useActiveSet } from "../hooks/useSets";
+import { useAppendToPlan } from "../hooks/useSetPlan";
 import { formatDuration, formatDurationMs } from "../lib/format";
 import { store, useAppStore } from "../store";
 import type { Recommendation, SpotifyTrackHit, Track } from "../types";
@@ -448,7 +449,7 @@ function RowShell({
   filePath: string | null;
   activeSetId: number | null;
 }) {
-  const addToSet = useAddTrackToSet();
+  const addToPlan = useAppendToPlan();
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<string | null>(null);
 
@@ -489,7 +490,7 @@ function RowShell({
 
   function addToActiveSet() {
     if (!activeSetId) return;
-    addToSet.mutate({ setId: activeSetId, trackId });
+    addToPlan.mutate({ setId: activeSetId, role: "song", trackId });
   }
 
   return (
@@ -520,15 +521,15 @@ function RowShell({
       <button
         type="button"
         onClick={addToActiveSet}
-        disabled={!activeSetId || addToSet.isPending || inActiveSet}
+        disabled={!activeSetId || addToPlan.isPending || inActiveSet}
         title={
           activeSetId
-            ? "Add to active set (⌘⏎)"
-            : "No active set — open the rail (⌘\\) to start one"
+            ? "Add to the active set's plan — Song column (⌘⏎)"
+            : "No active set — make one in the Set view first"
         }
         className="min-h-[32px] px-2 rounded-md text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40"
       >
-        + Set
+        + Plan
       </button>
       <button
         type="button"
@@ -550,7 +551,7 @@ function SpotifyHitRow({
   activeSetId: number | null;
 }) {
   const qc = useQueryClient();
-  const addToSet = useAddTrackToSet();
+  const addToPlan = useAppendToPlan();
   const [state, setState] = useState<"idle" | "pending" | "done" | "error">(
     "idle",
   );
@@ -562,8 +563,9 @@ function SpotifyHitRow({
     try {
       const result = await ingestSpotifyTrack(hit);
       if (activeSetId) {
-        await addToSet.mutateAsync({
+        await addToPlan.mutateAsync({
           setId: activeSetId,
+          role: "song",
           trackId: result.track_id,
         });
       }
@@ -619,7 +621,7 @@ function SpotifyHitRow({
         disabled={state === "pending" || state === "done"}
         title={
           activeSetId
-            ? "Download + analyze + add to active set"
+            ? "Download + analyze + add to the plan (Song column)"
             : "Download + analyze (no active set to add to)"
         }
         className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-emerald-700/80 hover:bg-emerald-600 text-white disabled:bg-neutral-800 disabled:text-neutral-500"
@@ -627,7 +629,7 @@ function SpotifyHitRow({
         {state === "pending" && "⌛ adding…"}
         {state === "done" && "✓ added"}
         {state === "error" && "↻ retry"}
-        {state === "idle" && (activeSetId ? "+ Set" : "+ Library")}
+        {state === "idle" && (activeSetId ? "+ Plan" : "+ Library")}
       </button>
     </div>
   );

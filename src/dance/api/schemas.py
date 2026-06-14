@@ -191,6 +191,10 @@ class ColumnRecsRequest(BaseModel):
     master_bpm: float | None = None
     k: int = 5
     exclude_track_ids: list[int] = Field(default_factory=list)
+    # Recency-ordered track ids played so far this session — feeds the
+    # journey's trend-aware vibe + soft anti-repetition. Optional: when empty
+    # the recommender scores against the combo only (proximity, no trend).
+    trailing_track_ids: list[int] = Field(default_factory=list)
 
 
 class PreviewRequest(BaseModel):
@@ -363,6 +367,44 @@ class TailRecsResponse(_Base):
     set_id: int
     set_track_count: int
     recs: list[TailRecOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Plan — per-role queues inside the rec grid
+# ---------------------------------------------------------------------------
+
+
+class PlanItemOut(_Base):
+    """One queued pick in a role column, decorated for render."""
+
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    key_camelot: str | None = None
+    bpm: float | None = None
+    floor_energy: int | None = None
+
+
+class SetPlanOut(_Base):
+    """A set's plan: per-role queues of the stems you intend to bring in."""
+
+    set_id: int
+    queues: dict[str, list[PlanItemOut]] = Field(default_factory=dict)
+
+
+class SetPlanUpdateRequest(BaseModel):
+    """Replace the whole plan. ``queues`` maps role → ordered list of track ids
+    (the frontend edits locally and PUTs the result)."""
+
+    queues: dict[str, list[int]] = Field(default_factory=dict)
+
+
+class SetPlanAppendRequest(BaseModel):
+    """Append one track to a role's queue (server-side merge — safe without the
+    full plan loaded, e.g. from the ⌘K palette)."""
+
+    role: str
+    track_id: int
 
 
 # ---------------------------------------------------------------------------

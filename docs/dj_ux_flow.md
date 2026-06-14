@@ -45,20 +45,21 @@ What's happening: a combination of stems is playing (anywhere from 1 stem to all
 
 What's happening: the user decides to swap one stem (or layer in a new one). They're **shopping a single column.**
 
-Decision: "I want different/new [drums | bass | vocals | other | a full anchor song]." Then: scan that column's recs, pick a candidate, fire it. Live's clip-launch quantize handles the timing — the swap happens on the next phrase boundary (typically bar or beat-quantized).
+Decision: "I want different/new [drums | bass | vocals | other | a full anchor song]." Then: scan that role column's recs in the plan grid, pick a candidate, load it onto a deck (⤒A / ⤒B), fire it. Live's clip-launch quantize handles the timing — the swap happens on the next phrase boundary (typically bar or beat-quantized).
 
 This is the highest-frequency decision in the loop. In song-mode DJing the picker fires every 3–5 minutes; here, **swaps fire every 30–90 seconds**. Cognitive load per decision is lower (one stem, not a whole song) but the cadence is higher.
 
 | Need | Source |
 |---|---|
-| Per-column rec stream | Live-rescoring banner above each column |
-| Compat with current combo | Per-cell chips: key / BPM / energy fit vs combo |
-| Filter to a mood | Per-column vibe chips ("denser", "darker", "more vocal") |
-| Search escape hatch | ⌘K vibe search, auto-scoped to focused column |
-| Cue before firing | Per-rec ▶ preview button → cue bus (Scarlett 4i4 outs 3/4 → headphones, master unaffected) |
-| Fire it | Tap cell in grid OR launch from APC40 |
+| Per-role rec stream | The role column in the plan grid (RoleColumnsGrid, `mode="live"`): recs hang below your queued plan picks, live-rescored against the playing combo + trailing-journey trend |
+| Your planned next pick for the role | The plan zone on top of the same column — queued picks (emerald edge), if a set is active |
+| Compat with current combo | Per-card ScoreBreakdown chip row: embedding / key / BPM / energy / timbre / transition-fit |
+| Search escape hatch | ⌘K hybrid search (fuzzy + CLAP vibe); a chosen result appends to the Song column's plan queue |
+| Cue before firing | Per-card ▶ preview button → cue bus (Scarlett 4i4 outs 3/4 → headphones, master unaffected) |
+| Load it onto a deck | ⤒A / ⤒B on the card picks the deck at load time |
+| Fire it | Tap cell in SceneGrid OR launch from APC40 |
 
-**Eyes-on demand: medium-high.** Scanning rec banners, reading compat chips. Faster cycle than song-mode picking.
+**Eyes-on demand: medium-high.** Scanning a role column's recs, reading ScoreBreakdown chips. Faster cycle than song-mode picking.
 
 ### SET ARC — 10–60 min
 
@@ -68,6 +69,7 @@ What's happening: the user is shaping the trajectory across many swaps. Decision
 |---|---|
 | Energy curve over time | Compact sparkline inline in MasterStrip (always visible) |
 | Recent stem swaps | Recent-plays history in the MasterStrip's session chip |
+| What did I plan to bring in next? | The plan zone (queued picks) on top of each role column — the set's plan, mirrored live |
 | Have I leaned hard on one source? | "Used N× already" badge on tracks heavily mined (v2+) |
 | Set shape vs intent | Optional set-arc template overlay (v2+) |
 
@@ -82,26 +84,26 @@ Top-to-bottom layout (current; mirrors what's in `views/Booth.tsx`):
 | MasterStrip | Top bar (rendered by the app shell, above the Booth view) | BPM (click → genre-anchored slider with explicit Apply) · KEY · combo VU meter · energy arc · Live-bridge heartbeat · resync · vibe search · view tabs · session chip (play count + end-set) |
 | TwoDeckStrip | Just below MasterStrip — "what's playing right now?" | Two panels, one per deck (A / B). Each panel stacks its four playing stem waveforms (drums / bass / vocals / other) for that deck, with live playhead from Live's per-clip `playing_position`, faint colored section bands behind the peaks, unicode section icons (▲ buildup, ▼ drop, ◌ breakdown, ◇ bridge, ▷ intro, ◁ outro, ● verse, ★ chorus) at section starts with hover-tooltips, and click-to-scrub. The per-deck Mix/anchor reference shows as a header chip on its panel. (Replaced the earlier single-deck ComboStrip / MasterVisualizer surfaces.) |
 | Crossfader | Between the two deck panels and the grid | Mirrors the APC40 hardware A/B crossfader; drag on-screen to set. A on the left, B on the right — blends Deck A's stems against Deck B's. |
-| BoothColumnHeaders | Above the grid | Colored role chips (DRUMS · BASS · VOCALS · MELODY/other · SONG) with per-column Solo "S" buttons (cue/PFL → headphones). |
+| BoothColumnHeaders | Above the SceneGrid | 8 fader-order chips (DRUMS A · DRUMS B · BASS A · … · OTHER B), one per APC40 strip, A/B sharing a role hue. Per-chip Solo "S" button cues that deck through Live's Solo/PFL bus → headphones. Mix/anchor is not a column here — it's a per-deck chip in the TwoDeckStrip header. |
 | SceneGrid (8 cols × 4 rows, expandable to 8 rows) | The centerpiece | Canonical APC40 mirror in **fader order**: drums_a, drums_b, bass_a, bass_b, vocals_a, vocals_b, other_a, other_b. Tap a cell to fire one stem; tap a row label to fire/stop the whole scene (anchor mode). Tap a playing cell or row to stop it. Hover any loaded cell → small × in the top-right removes that one stem from the grid. |
 | CueStrip | Conditional, appears when previewing | The parallel-to-master cue surface. Shows what's auditioning in headphones (Scarlett 4i4 outs 3/4), with the source track's full waveform (same section bands + cue icons as TwoDeckStrip), ⏹ stop, and a "→ Load … to master" one-click commit. |
-| Per-column rec banners (5 role feeds across) | Below the cue strip | "What should I swap into each role next?" — live-rescored against the active combo. Five feeds (drums / bass / vocals / other / mix); each card's ⤒A / ⤒B buttons pick the deck at load time. Per card: ▶ stem preview · ♪ song preview · Load stem · Load song. |
+| RoleColumnsGrid — **the plan grid** (5 role columns) | The spine, below the cue strip | The one surface the app is built around. Five role columns — DRUMS · BASS · VOCALS · OTHER · SONG — each stacks your **queued plan picks on top** (the plan zone, emerald-edged, with × to remove) and **recommendations below**. In the Booth it renders `mode="live"`: recs tail what's playing (combo embedding + trailing-journey trend) and each card carries ⤒A / ⤒B to load that pick onto a deck. Every card has a ▶ cue preview and a ScoreBreakdown chip row. ＋ on a rec queues it into the plan; with no active set the plan zone is hidden and it's just the live recs. |
 
-The column-style strips share a 10-stem-column grid template (8 stem cells = 4 roles × 2 decks; the 5 rec-role feeds each span 2 cols so they sit above their A/B pair) so columns line up vertically through the whole booth view.
+The plan grid is a flat 5-column CSS grid (`grid-cols-5`) — one column per role, in the order drums · bass · vocals · other · song. It does **not** line up with the 8-column SceneGrid above it (that mirrors the APC40's 4 roles × 2 decks); the plan grid is role-keyed, deck-agnostic, and the deck is chosen per-load via ⤒A / ⤒B.
 
-There are no sidebars. Glanceable signals (energy arc, session/play count) live in the MasterStrip so the grid + banners own the center. The grid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8. (There is no PlayedStrip footer; play count + end-set moved into the MasterStrip's session chip.)
+There are no sidebars. Glanceable signals (energy arc, session/play count) live in the MasterStrip so the SceneGrid + plan grid own the center. The SceneGrid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8. (There is no PlayedStrip footer; play count + end-set moved into the MasterStrip's session chip.)
 
 ## What information must be co-located
 
 Some things must be visible in one glance, no tab-switching:
 
-- **Per-column rec banner + the column itself in the grid.** Picking a vocal means seeing both candidates and the cell it will land in.
+- **Per-role rec stream + that role's plan queue, in one column.** Each role column stacks your queued plan picks over its live recs, so picking a vocal means seeing both your planned move and fresh candidates in the same place.
 - **Current playing combo + all rec streams.** Recs are scored against the combo, so the combo has to be readable while shopping.
-- **Master BPM/key + per-cell compat chips.** Compatibility is a relationship; both sides visible.
+- **Master BPM/key + per-card ScoreBreakdown chips.** Compatibility is a relationship; both sides visible.
 
 Things that can be separated by a tab/keystroke:
 
-- Pre-set planning — the **Set** view (full-pane editor) and the **Set Rail** drawer (⌘\\ in Booth) cover this; library browse is folded into the Cmd-K palette.
+- Pre-set planning — the **Set** view renders the *same* plan grid (`mode="plan"`): same five role columns, but recs are scored against the rest of the plan + the plan's journey, and there's no deck-load (you're queuing, not firing). Library browse is folded into the ⌘K palette.
 - Pipeline / Ops / Settings (administrative). Pipeline doubles as the library inventory surface.
 - Session history beyond the current set.
 
@@ -109,10 +111,10 @@ Things that can be separated by a tab/keystroke:
 
 | Phase | Primary | Secondary | Background |
 |---|---|---|---|
-| NOW (combo grooving) | Ears + APC40 hands | Glance at grid for playing cells | — |
-| SHOPPING (deciding swap) | Focused column's rec banner + the column in grid | Current combo summary | Set arc / energy sparkline |
-| SWAP MOMENT (firing the cell) | Grid (tap target) or APC40 | Beat indicator | — |
-| LULL (combo locked in) | Set arc / SetRail (⌘\\) with tail-recs | Library browse via ⌘K for next-but-one | — |
+| NOW (combo grooving) | Ears + APC40 hands | Glance at SceneGrid for playing cells | — |
+| SHOPPING (deciding swap) | The focused role column in the plan grid (recs + your queued picks) | Current combo summary | Set arc / energy sparkline |
+| SWAP MOMENT (loading + firing) | ⤒A/⤒B on the rec card, then SceneGrid tap or APC40 | Beat indicator | — |
+| LULL (combo locked in) | Set arc / the plan zone (queued picks per role) | Library / vibe search via ⌘K for next-but-one | — |
 
 A well-tuned single-surface UI should support this pattern without forcing the user to remember where to look.
 
@@ -131,7 +133,9 @@ Non-negotiable for this user (see [`../HARDWARE.md`](../HARDWARE.md)):
 - **Swap** — firing a new cell in a column where one cell is already playing, replacing it.
 - **Layer** — firing a cell in a column that's currently silent.
 - **Anchor** — firing a whole row to play the original song combo. Recovery / fallback move.
-- **Stem role** — drums / bass / vocals / other (+ mix as the anchor reference). Each of the 4 stem roles occupies two grid columns — one per deck (A / B) — so the grid is 8 stem columns wide. Mix/anchor is shown as a per-deck header chip, not a grid column.
-- **Cell** — the intersection of a row (track) and column (stem role). One stem of one track.
-- **Rec stream** — the live-rescored list of candidate cells for one column, refreshed on combo change.
-- **Compat chip** — at-a-glance match indicator on a candidate cell — relative to the active combo, not relative to a single track.
+- **Stem role** — drums / bass / vocals / other (+ **song**, the full-track anchor; the recommender calls it `mix`). These five roles are the columns of the **plan grid**. In the 8-column SceneGrid each of the 4 stem roles also occupies two columns — one per deck (A / B) — with mix/anchor as a per-deck header chip.
+- **Cell** — the intersection of a row (track) and column (stem role) in the SceneGrid. One stem of one track.
+- **Plan grid** — the RoleColumnsGrid: five role columns, each stacking queued plan picks over recs. Renders `mode="live"` in the Booth (recs tail what's playing, ⤒A/⤒B deck-load) and `mode="plan"` in the Set view (recs scored against the rest of the plan, no deck-load).
+- **Plan / plan queue** — a Set's intent, stored as per-role queues `{role: [track_id, …]}` on `sets.plan`. The plan zone (top of each role column) shows your queued picks; ＋ on a rec or ⌘K (→ Song column) appends to it. **A set IS its plan.**
+- **Rec stream** — the per-role list of candidate stems below the plan zone, scored through the unified brain (combo/journey vibe + halftime BPM + key/timbre/transition-fit) and refreshed on combo change (live) or plan change (plan mode).
+- **ScoreBreakdown chip** — at-a-glance per-feature match row on a rec card (embedding / key / BPM / energy / timbre / transition-fit) — relative to the active combo (live) or the rest of the plan (plan mode), not to a single track.

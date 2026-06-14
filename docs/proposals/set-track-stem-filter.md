@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-06-14)** by the plan-grid model — `set_tracks` is legacy; the plan is per-role queues (`{role: [track_id]}`, roles = drums/bass/vocals/other/song), so stem-level intent is now the role column itself, not a per-slot filter. See [`./rec-brain-port.md`](./rec-brain-port.md) and the Sets section of [`../api.md`](../api.md).
+
 ## Proposal — Per-slot stem filter on `set_tracks`
 
 **Status:** approved 2026-05-23 (user picked "Option C" in conversation, implementing same day)

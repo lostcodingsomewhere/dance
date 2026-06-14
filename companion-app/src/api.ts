@@ -16,6 +16,7 @@ import type {
   Recommendation,
   RecommendRequest,
   Region,
+  SetPlan,
   SetSummary,
   SpotifySearchResponse,
   SpotifyTrackHit,
@@ -149,6 +150,47 @@ export function recommendByColumn(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+// Plan — per-role queues --------------------------------------------------
+
+export function getPlan(setId: number): Promise<SetPlan> {
+  return request<SetPlan>(`/sets/${setId}/plan`);
+}
+
+/** Replace the whole plan (role → ordered track ids). The client edits the
+ *  queues locally (add / remove / reorder) and PUTs the result. */
+export function putPlan(
+  setId: number,
+  queues: Record<string, number[]>,
+): Promise<SetPlan> {
+  return request<SetPlan>(`/sets/${setId}/plan`, {
+    method: "PUT",
+    body: JSON.stringify({ queues }),
+  });
+}
+
+/** Append one track to a role's queue (server-side merge — safe from ⌘K). */
+export function appendToPlan(
+  setId: number,
+  role: string,
+  trackId: number,
+): Promise<SetPlan> {
+  return request<SetPlan>(`/sets/${setId}/plan/append`, {
+    method: "POST",
+    body: JSON.stringify({ role, track_id: trackId }),
+  });
+}
+
+/** Recs for one role column, scored against the rest of the plan + journey. */
+export function getPlanRecs(
+  setId: number,
+  role: string,
+  k = 8,
+): Promise<ColumnRecsResponse> {
+  return request<ColumnRecsResponse>(
+    `/sets/${setId}/plan-recs${qs({ role, k })}`,
+  );
 }
 
 // Sessions ------------------------------------------------------------------

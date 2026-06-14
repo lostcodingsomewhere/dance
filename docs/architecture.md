@@ -7,9 +7,9 @@ Three loosely-coupled layers around a single SQLite DB.
 |  Python pipeline    |    |  FastAPI backend |    |  React companion  |
 |  src/dance/         |    |  src/dance/api/  |    |  companion-app/   |
 |                     |    |                  |    |                   |
-|  Spotify -> ingest  |    |  REST + WS       |    |  Now / Up Next /  |
-|  -> analyze ->      |--->|  reads SQLite,   |<-->|  Library / Set    |
-|  separate -> ...    |    |  proxies OSC     |    |  History          |
+|  Spotify -> ingest  |    |  REST + WS       |    |  Booth / Set /    |
+|  -> analyze ->      |--->|  reads SQLite,   |<-->|  Pipeline — one   |
+|  separate -> ...    |    |  proxies OSC     |    |  plan grid        |
 |  -> SQLite          |    |                  |    |                   |
 +---------------------+    +------------------+    +-------------------+
                                     ^
@@ -118,7 +118,8 @@ app.state.embedding_stage # Lazy-loaded CLAP for /recommend/text
 | Prefix             | File                                  | Notes |
 |--------------------|---------------------------------------|-------|
 | `/api/v1/tracks`   | `routers/tracks.py`                   | List, get, regions, stems, tag, .als export |
-| `/api/v1/recommend`| `routers/recommend.py`                | Graph + text recommend |
+| `/api/v1/recommend`| `routers/recommend.py`                | Graph + text recommend; `by-column` (live combo + `trailing_track_ids` journey) |
+| `/api/v1/sets`     | `routers/sets.py`                     | Set CRUD + the **plan** (`/plan`, `/plan/append`, `/plan-recs`); legacy `set_tracks` + `/tail-recs` |
 | `/api/v1/sessions` | `routers/sessions.py`                 | DJ session CRUD |
 | `/api/v1/ableton`  | `routers/ableton.py`                  | OSC passthrough + push-to-Live |
 | `/api/v1/files`    | `routers/files.py`                    | Reveal-in-Finder (allowlist-checked) |
@@ -132,30 +133,41 @@ All response shapes are in `src/dance/api/schemas.py`. See `docs/api.md` for the
 
 ## Layer 3 — React companion app
 
-`companion-app/`. Vite + React 18 + TypeScript + Tailwind. iPad-landscape first.
+`companion-app/`. Vite + React 18 + TypeScript + Tailwind. Built around **one surface — the plan grid** (`RoleColumnsGrid`): five role columns (drums · bass · vocals · other · song), each stacking the DJ's queued plan picks on top and recommendations below. The same grid renders in two modes:
+
+- **Booth** (`mode="live"`) — recs tail what's playing in Ableton (combo embedding + trailing-journey trend via `useColumnRecs`); each card has ⤒A/⤒B to load a pick onto a deck.
+- **Set view** (`mode="plan"`) — recs are scored against the rest of the plan + the plan's journey (`usePlanRecs` → `/sets/{id}/plan-recs`); no deck-load (planning, not firing).
+
+Both share the ▶ Cue preview and a ScoreBreakdown chip row. A *set is its plan* — built by queuing recs (＋), removing (×), or ⌘K (which appends to the Song column server-side). `MasterStrip` + `TwoDeckStrip` + `Crossfader` + `BoothColumnHeaders` + the 8-column `SceneGrid` (Ableton mirror) + `CueStrip` are the surrounding Booth surfaces.
 
 ### Deliberate non-choices
 
-- **No router.** Four views, switched via `useAppStore((s) => s.currentView)` (`src/store.ts`). View enum: `"now" | "next" | "library" | "session"`.
-- **No state library.** `src/store.ts` is ~75 lines of `useSyncExternalStore` over a module-level mutable. Holds: `pinnedSeeds`, `currentSessionId`, `currentView`.
+- **No router.** Three views, switched via `useAppStore((s) => s.currentView)` (`src/store.ts`). View enum (`types.ts`): `"booth" | "set" | "pipeline"`. ⌘K is the universal finder across all three.
+- **No state library.** `src/store.ts` is a small `useSyncExternalStore` over a module-level mutable. Holds: `currentView`, `currentSessionId`, `loadedDecks` (scene_index → deck, linking Push-to-Live calls to `playing_clips` from the WS), `commandBarOpen`, `previewing` (the auditioning Cue candidate), and `stemColumnOrder`. Persisted to localStorage.
 - **No CSS framework other than Tailwind utility classes.** Custom palette tokens live in `tailwind.config.js`.
 
 ### Layout
 
 ```
 src/
-  App.tsx              -- view switch
+  App.tsx              -- view switch (Booth / SetEditor / PipelineOps) + MasterStrip + CommandBar
   main.tsx             -- QueryClientProvider + Tailwind import
-  store.ts             -- 4-key app store
+  store.ts             -- ad-hoc app store (view, session, decks, preview, column order)
   api.ts               -- typed fetch wrappers (one per endpoint)
-  types.ts             -- mirrors api/schemas.py
-  components/          -- TrackCard, EnergyBar, KeyBadge, PinButton, LoadActions, TopBar
+  types.ts             -- mirrors api/schemas.py (PLAN_ROLES, PlanItem, ColumnRec, …)
+  lib/roles.ts         -- role labels/styles, fader-order (TWO_DECK_COLUMN_ORDER)
+  components/
+    RoleColumnsGrid / RoleColumn  -- the plan grid (queued picks + recs, both modes)
+    MasterStrip, TwoDeckStrip, Crossfader, BoothColumnHeaders, SceneGrid, CueStrip
+    CommandBar (⌘K), ScoreBreakdown, SetMenu, …
   hooks/
-    useTracks.ts       -- useTracks, useTrack, useStems (react-query)
-    useRecommend.ts    -- useRecommend(seeds, k)
-    useSession.ts      -- useCurrentSession, useCreateSession, useAddPlay, useEndSession
-    useAbletonState.ts -- subscribes to /ws, auto-reconnect with 2s backoff
-  views/               -- NowPlaying, UpNext, Library, SessionHistory
+    useSetPlan.ts      -- useSetPlan, usePlanMutations (add/remove), usePlanRecs
+    useColumnRecs.ts   -- live per-column recs (Booth), scored vs the playing combo
+    useSets.ts         -- useActiveSet, useCreateSet, useActivateSet
+    usePreview.ts      -- Cue/headphones audition (start/stop/state)
+    useAbletonState.ts -- subscribes to /ws, auto-reconnect with backoff
+    useDeckMap, useTransport, useTracks, useRecommend, useSession, …
+  views/               -- Booth, SetEditor, PipelineOps (+ PipelineBoard)
 ```
 
 ### Data flow
@@ -163,10 +175,11 @@ src/
 ```
 react-query --HTTP--> FastAPI --SQLAlchemy--> SQLite
 useAbletonState --WS--> WSManager <--callback-- AbletonBridge <--UDP-- AbletonOSC
-LoadActions --HTTP--> /api/v1/ableton/load-track --AbletonOSCClient.create_audio_track--> Live
+RoleColumn ⤒A/⤒B --HTTP--> /api/v1/ableton/load-track --create_audio_track--> Live   (Booth, mode="live")
+RoleColumn ＋ / ⌘K --HTTP--> PUT|POST /sets/{id}/plan[/append] --> sets.plan          (plan edits)
 ```
 
-The Ableton state flow is one-way push (Live -> bridge -> WS -> React). User actions go the other direction via the REST endpoints in `/api/v1/ableton/*`.
+The Ableton state flow is one-way push (Live -> bridge -> WS -> React). User actions go the other direction via the REST endpoints in `/api/v1/ableton/*` (deck loads) and `/sets/{id}/plan*` (plan edits).
 
 ## Schema overview
 
@@ -188,28 +201,44 @@ track_edges         -- pairwise recommendation graph
 sessions            -- DJ set, started_at -> ended_at (what actually played)
   |- session_plays  -- ordered by position_in_set
 
-sets                -- curated track plan (what's *planned*), at most one is_active
-  |- set_tracks     -- ordered by position (0-indexed, unique per set_id)
+sets                -- curated plan (what's *planned*), at most one is_active
+  |  plan            -- TEXT (JSON) per-role queues {role: [track_id,...]} —
+  |                     roles = drums/bass/vocals/other/song. A set IS its plan.
+  |- set_tracks      -- LEGACY ordered track list (0-indexed, unique per set_id);
+                        still in the schema but no longer driven by the UI
 ```
+
+A `Set`'s authoritative content is now its **`plan`** column: a JSON map of per-role queues (`{role: [track_id, …]}`, roles = the `PlanRole` enum: drums/bass/vocals/other/song, where `song` == the recommender's `mix`). Parsing/encoding/journey-context helpers are pure functions in `src/dance/core/set_queues.py`; the plan endpoints live on the sets router (`GET/PUT /sets/{id}/plan`, `POST /sets/{id}/plan/append`, `GET /sets/{id}/plan-recs?role=`). Added additively by Alembic revision `b7d4e2f1a9c3` — no other schema change. The older `set_tracks` table (ordered list + the `/sets/{id}/tail-recs` endpoint) is **legacy**: still present and migrated, but the React UI drives the plan grid off `plan`, not `set_tracks`.
 
 Key invariants:
 
 - `audio_analysis` uses partial unique indexes (`database.py:_create_partial_unique_indexes`) — one full-mix row per track, one row per stem.
 - `sets` has a partial unique index on `is_active WHERE is_active` — only one active set at a time, enforced at the DB layer (same raw-DDL pattern as `audio_analysis`).
-- `set_tracks` has a `UNIQUE(set_id, position)` — reorder uses sentinel-renumber to avoid mid-flush collisions (`api/routers/sets.py:_renumber_for_move`).
+- `set_tracks` (legacy) has a `UNIQUE(set_id, position)` — reorder uses sentinel-renumber to avoid mid-flush collisions (`api/routers/sets.py:_renumber_for_move`).
 - `track_edges` has no self-loops (CHECK constraint).
-- Cascade deletes everywhere: drop a `Track` and stems/analysis/regions/embeddings/tags/edges all go with it. Drop a `Set` and its `set_tracks` go.
-- `Set` and `DjSession` are decoupled — a set is reused across sessions; a session may or may not follow a set. Tail-recs can optionally exclude tracks already played in the current open session (`exclude_session_plays=true`).
+- Cascade deletes everywhere: drop a `Track` and stems/analysis/regions/embeddings/tags/edges all go with it. Drop a `Set` and its `set_tracks` go (the `plan` column travels with the row).
+- `Set` and `DjSession` are decoupled — a set is reused across sessions; a session may or may not follow a set. Legacy tail-recs can optionally exclude tracks already played in the current open session (`exclude_session_plays=true`).
 
 For SQL DDL, read `src/dance/core/database.py` — copying it here would just bit-rot.
 
 ## Recommender layer
 
-`src/dance/recommender/`. Two halves:
+`src/dance/recommender/`. One **shared brain** under three entry points, so the Booth, the planner, and the seed graph can never drift apart (they used to — the graph caught half/double-time BPM matches the live scorers silently missed).
 
-- `graph_builder.py:47` — `GraphBuilder(session, settings).build(track_ids=None)`. Library-level operation (not a stage). Reads `audio_analysis`, `track_tags`, `track_embeddings`; writes `track_edges`. One private builder per kind (`_build_harmonic`, `_build_tempo`, `_build_embedding`, `_build_tag_overlap`); each kind is `DELETE WHERE kind=X (AND touches tracks)` then `INSERT`. Symmetric kinds materialize both directions.
-- `recommender.py:43` — `Recommender(session).recommend(seeds=[1,2], k=10, kinds=[...], weights={...}, exclude=[...])`. SQL on `track_edges`: aggregate per candidate by summing `weight * kind_weight`. Returns `RecommendationResult(track_id, score, reasons=[{kind, from_seed, weight}, ...])`.
-- `recommender.py:110` — `recommend_by_text(query, text_encoder, k)`. CLAP joint embedding: encode query, cosine-rank all full-mix embeddings, top-K. Bypasses the graph entirely.
+The brain:
+
+- `scoring.py` — the feature scorers and the blender. Each signal (`embed_score`, `key_score`, `bpm_score` with ±8 BPM tolerance + half/double-time folding, `energy_score`, `kick_density_score`, `presence_score`, `timbre_score`) maps to `[0, 1]` and is `None`-safe. A `Profile` is a weight vector over `FEATURES`; `combine()` does the weighted blend and **renormalizes over only the features actually present**, so a missing signal down-weights gracefully. Per-context profiles live in `PROFILES` (`column:drums` drops key and leans on `kick_density`, `column:vocals` leans on key, etc.).
+- `journey.py` — the time-shaped context. `JourneyState` captures the set's *trajectory* (vibe target, vibe **trend** vector, target keys/BPM, projected energy, anti-repetition set). The vibe axis is **trend-aware**: the target is pushed forward along the direction the set has been moving (`normalize(target + β·trend)`), so recs continue the journey instead of repeating it. Two builders: `journey_from_tracks` (planner — from the ordered plan/set so far) and `journey_from_combo` (Booth — from the active stem combo + trailing live tracks).
+- `structure.py` — `transition_fit`: a `[0, 1]` mix-compatibility signal from intro/outro SECTION regions ("how cleanly can B come in over A?"). Fed into `combine` as the `transition_fit` feature.
+
+The three entry points:
+
+- `recommender.py` — `recommend_by_column(session, column, combo_stem_ids, *, k, exclude_track_ids, trailing_track_ids)`: top-K candidate stems (or tracks for `column='mix'`) re-scored against the active combo through the shared brain. `trailing_track_ids` supplies the journey context (trend-aware vibe + soft anti-repetition). Powers the live Booth recs **and** the Set view's plan-scored recs (the sets router passes the plan's trailing sequence as `trailing_track_ids`). Returns `ColumnRecResult(track_id, stem_file_id, score, score_breakdown, reasons)`.
+- `recommender.py` — `Recommender(session).recommend(seeds=[1,2], k=10, kinds=[...], weights={...}, exclude=[...])`. SQL on `track_edges`: aggregate per candidate by summing `weight * kind_weight`. Returns `RecommendationResult(track_id, score, reasons=[{kind, from_seed, weight}, ...])`.
+- `recommender.py` — `recommend_by_text(query, text_encoder, k)`. CLAP joint embedding: encode query, cosine-rank all full-mix embeddings, top-K. Bypasses the graph entirely (backs the vibe half of ⌘K).
+- `tail.py` — `tail_recs_for_set` (legacy): arc-fit candidates to append to a Set, scored over the trailing window via the shared brain. Backs the legacy `/sets/{id}/tail-recs` endpoint; not used by the current UI.
+
+`graph_builder.py:47` — `GraphBuilder(session, settings).build(track_ids=None)`. Library-level operation (not a stage). Reads `audio_analysis`, `track_tags`, `track_embeddings`; writes `track_edges`. One private builder per kind (`_build_harmonic`, `_build_tempo`, `_build_embedding`, `_build_tag_overlap`); each kind is `DELETE WHERE kind=X (AND touches tracks)` then `INSERT`. Symmetric kinds materialize both directions. Feeds the seed-graph `recommend()` above.
 
 ## OSC bridge
 

@@ -155,6 +155,21 @@ class EdgeKind(str, Enum):
     PLAYLIST_NEIGHBOR = "playlist_neighbor"
 
 
+class PlanRole(str, Enum):
+    """The role columns of a Set plan — mirrors the live Booth rec grid.
+
+    A plan is a per-role queue of source tracks the DJ intends to bring in for
+    that role. ``song`` is the full-track anchor column (the analyzer/
+    recommender call it ``mix``).
+    """
+
+    DRUMS = "drums"
+    BASS = "bass"
+    VOCALS = "vocals"
+    OTHER = "other"
+    SONG = "song"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -654,6 +669,12 @@ class Set(Base):
     name = Column(Text, nullable=False)
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=False, nullable=False)
+    # The plan: per-role queues of source track ids the DJ intends to bring in.
+    # JSON-as-Text, ``{role: [track_id, ...]}`` (roles = PlanRole values). NULL =
+    # empty plan. The plan lives *inside* the Booth rec grid — your queued picks
+    # on top of each role column, live recs below. JSON-in-Text follows the
+    # project convention (``TrackEdge.meta``, ``SetTrack.stem_kinds``).
+    plan = Column(Text, nullable=True)
     created_at = Column(DateTime, default=now_utc, nullable=False)
     updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 

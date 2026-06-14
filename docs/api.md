@@ -73,7 +73,7 @@ Notes:
 
 `/recommend/text` accepts a free-text `query` ("punchy techy with vocals") and ranks by CLAP cosine. First call lazy-loads the CLAP model — slow (~5-10 s); subsequent calls are cached on `app.state.embedding_stage`. Returns 503 if the model fails to load.
 
-`/recommend/by-column` is the live-remixing rec stream: takes a `column` (`drums` / `bass` / `vocals` / `other` / `mix`) plus the active combo's `combo_stem_ids` + `master_bpm` and returns top-K candidates filtered by stem kind, scored against the combo via per-stem embedding cosine + Camelot key compat + BPM proximity. Returns 400 for unknown column. Used by the FE per-column banners — one query per column, re-run on combo change.
+`/recommend/by-column` is the live-remixing rec stream: takes a `column` (`drums` / `bass` / `vocals` / `other` / `mix`) plus the active combo's `combo_stem_ids` + `master_bpm` and returns top-K candidates filtered by stem kind, scored against the combo via per-stem embedding cosine + Camelot key compat + BPM proximity. It also accepts `trailing_track_ids` — the recency-ordered sequence played so far this set — which feeds the journey's trend-aware vibe and soft anti-repetition; when empty it scores against the combo only. Returns 400 for unknown column. Powers the per-role columns of the rec grid (`RoleColumnsGrid`) in Booth (`mode="live"`) — one query per column, re-run on combo change. (`GET /sets/{id}/plan-recs` is the planning-mode sibling — same response shape, scored against the plan instead of Live.)
 
 ---
 
@@ -93,7 +93,7 @@ Notes:
 
 ## Sets — `src/dance/api/routers/sets.py`
 
-Persistent named track plans (the **Set Rail** backing store). Distinct from `DjSession`: a Set is the *intent* (planned), a Session is the *history* (what actually played). At most one Set is `is_active = true` at a time (enforced by a partial unique index in `_create_partial_unique_indexes`).
+A **Set is its plan**. The plan is per-role queues of source tracks the DJ intends to bring in — `{role: [track_id, ...]}`, roles = `drums`/`bass`/`vocals`/`other`/`song` (`song` == the recommender's `mix` column). It lives inside the rec grid (`RoleColumnsGrid`): each role column stacks queued picks on top, live recs below. Stored as JSON-as-Text on the `sets.plan` column (migration `b7d4e2f1a9c3`, additive). Distinct from `DjSession`: a Set is the *intent* (planned), a Session is the *history* (what actually played). At most one Set is `is_active = true` at a time (enforced by a partial unique index in `_create_partial_unique_indexes`).
 
 | Method | Path                                              | Body / Query                              | Response                | 4xx |
 |--------|---------------------------------------------------|-------------------------------------------|-------------------------|-----|
@@ -104,15 +104,24 @@ Persistent named track plans (the **Set Rail** backing store). Distinct from `Dj
 | PATCH  | `/api/v1/sets/{id}`                               | `SetUpdateRequest`                        | `SetOut`                | 404 |
 | DELETE | `/api/v1/sets/{id}`                               | -                                         | 204                     | 404 |
 | POST   | `/api/v1/sets/{id}/activate`                      | -                                         | `SetOut`                | 404 |
+| GET    | `/api/v1/sets/{id}/plan`                          | -                                         | `SetPlanOut`            | 404 |
+| PUT    | `/api/v1/sets/{id}/plan`                          | `SetPlanUpdateRequest`                    | `SetPlanOut`            | 400, 404 |
+| POST   | `/api/v1/sets/{id}/plan/append`                   | `SetPlanAppendRequest`                    | `SetPlanOut`            | 400, 404 |
+| GET    | `/api/v1/sets/{id}/plan-recs`                     | `role` (req), `k`                         | `ColumnRecsResponse`    | 400, 404 |
 | POST   | `/api/v1/sets/{id}/tracks`                        | `SetTrackAddRequest`                      | `SetOut`                | 400, 404 |
 | PATCH  | `/api/v1/sets/{id}/tracks/{track_id}`             | `SetTrackUpdateRequest`                   | `SetOut`                | 400, 404 |
 | DELETE | `/api/v1/sets/{id}/tracks/{track_id}`             | -                                         | `SetOut`                | 404 |
 | GET    | `/api/v1/sets/{id}/tail-recs`                     | `k, window, exclude_session_plays`        | `TailRecsResponse`      | 404 |
 
 - `activate` is atomic: deactivates other sets in the same transaction, then sets the target — the partial unique index never sees two active rows.
+- **Plan** (`SetPlanOut` = `{set_id, queues: {role: PlanItemOut[]}}`, every role key always present):
+  - `GET /plan` returns the decoded queues, each item decorated with title/artist/key/BPM/energy for render.
+  - `PUT /plan` replaces the whole plan; body `{queues: {role: [track_id, ...]}}`. The frontend edits locally (add / remove / reorder) and PUTs the result. Unknown roles → 400.
+  - `POST /plan/append` appends one track to a role's queue with a **server-side merge** — body `{role, track_id}` — so it's safe from ⌘K without the full plan loaded client-side. ⌘K appends to the `song` column. No-op if the track is already queued in that role. Unknown role → 400, unknown track → 404.
+  - `GET /plan-recs?role=…` returns a `ColumnRecsResponse` for one role column, scored against the **rest of the plan** (the tail of the *other* role queues, resolved to `stem_files.id`) plus the plan's journey (`plan_sequence`) so far. Tracks already queued in that role are excluded. Reuses the live per-column recommender. Plan-queue helpers live in [`src/dance/core/set_queues.py`](../src/dance/core/set_queues.py).
 - `POST /sets/{id}/tracks` appends to the end when `position` is null; otherwise inserts at that position and shifts the rest. Reorder via `PATCH .../tracks/{track_id}` with a `position` uses a sentinel-renumber to avoid violating `(set_id, position)` uniqueness mid-flush.
 - `DELETE .../tracks/{track_id}` compacts positions above the gap to stay contiguous `0..N-1`.
-- `tail-recs` ranks every other track by arc-fit against the trailing `window` tracks (default 5): weighted-average embedding, Camelot key compat, BPM band median, energy slope projection. Weights live in [`src/dance/recommender/tail.py`](../src/dance/recommender/tail.py) (`_W_EMBED/_W_KEY/_W_BPM/_W_ENERGY`). `exclude_session_plays=true` also drops tracks played in the currently-open `DjSession` so the rail doesn't re-suggest what's already on tonight.
+- **`set_tracks` and `tail-recs` are legacy** — the `set_tracks` table and the `/sets/{id}/tracks*` + `/sets/{id}/tail-recs` endpoints still exist in the backend but are no longer used by the UI. The plan-grid model (above) is what the Booth and Set views drive. `tail-recs` ranks every other track by arc-fit against the trailing `window` tracks (default 5): weighted-average embedding, Camelot key compat, BPM band median, energy slope projection. Weights live in [`src/dance/recommender/tail.py`](../src/dance/recommender/tail.py) (`_W_EMBED/_W_KEY/_W_BPM/_W_ENERGY`). `exclude_session_plays=true` also drops tracks played in the currently-open `DjSession`.
 
 ---
 
