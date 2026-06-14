@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # Demucs
     demucs_model: str = Field(default="htdemucs_ft")
     demucs_device: str = Field(default="auto")
+    # Separation quality knobs. ``shifts`` > 0 averages N randomly time-shifted
+    # separations to cut artifacts — ≈ N× compute for a modest gain (on a lossy
+    # source the win is small; see the audio-quality A/B). ``bit_depth`` is the
+    # written stem's PCM subtype: PCM_24 preserves Demucs's float headroom,
+    # PCM_16 is smaller. Forward-looking — only NEW separations pick these up.
+    demucs_shifts: int = Field(default=2)
+    demucs_bit_depth: str = Field(default="PCM_24")
 
     # Recommender
     recommender_top_k: int = Field(default=20)
