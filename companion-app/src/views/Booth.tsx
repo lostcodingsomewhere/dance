@@ -32,9 +32,11 @@ import { useAutoSession } from "../hooks/useAutoSession";
  * bottom-of-screen real estate.
  *
  * BoothColumnHeaders → SceneGrid → the role-rec banner row all share the
- * same ``[2rem leading + repeat(8) stem cols] gap-1`` grid template, so
- * the 8 stem columns line up vertically and the labels at the top govern
- * everything beneath them.
+ * same ``grid-cols-8 gap-1`` grid template, so the 8 stem columns line up
+ * vertically — flush to the left edge, in APC40 fader order — and the
+ * labels at the top govern everything beneath them. There's no on-screen
+ * row-number / scene-launch column; the APC40's hardware scene-launch
+ * buttons fire whole scenes.
  *
  * Side effects:
  *   - Auto-creates a session on first Ableton play.
@@ -66,8 +68,7 @@ export function Booth() {
         <CueStrip />
         {/* Recs banner: 4 source-role feeds. Each card spans 2 of the 8
             grid cols below so it sits above its A/B pair. */}
-        <div className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1">
-          <div aria-hidden="true" />
+        <div className="grid grid-cols-8 gap-1">
           {recRoles.map((c) => (
             <div key={c} className="col-span-2">
               <ColumnRecBanner column={c} k={5} />

@@ -52,10 +52,9 @@ export function BoothColumnHeaders() {
 
   return (
     <div
-      className="grid grid-cols-[2rem_repeat(8,minmax(0,1fr))] gap-1"
+      className="grid grid-cols-8 gap-1"
       data-testid="booth-column-headers"
     >
-      <div aria-hidden="true" />
       {TWO_DECK_COLUMN_ORDER.map((deckKind, i) => (
         <ColumnHeaderChip
           key={deckKind}
