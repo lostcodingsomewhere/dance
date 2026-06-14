@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-06-14)** by the plan-grid model — the Set Rail (⌘\\) and its tail-recs no longer exist on screen; planning now happens in the `RoleColumnsGrid`. See [`./rec-brain-port.md`](./rec-brain-port.md) and the Sets section of [`../api.md`](../api.md).
+
 ## Set Rail consolidation — real-set verification handoff
 
 **Parent proposal:** [`./set-rail-and-search-consolidation.md`](./set-rail-and-search-consolidation.md)

@@ -1,112 +1,33 @@
 /**
- * Set editor — expanded version of the Set Rail.
- *
- * Two-pane:
- *   left  — ordered track list with reorder, per-track note editing, remove.
- *           Header lets you rename the active set, switch to another, create
- *           a new one, or delete the current one.
- *   right — discovery pane: tabs between Library (fuzzy search via
- *           ``/tracks/search``) and Tail recs (the rail's arc-fit
- *           suggestions). Both have one-tap "Add to set".
+ * Set editor — the plan. A set IS its plan: per-role queues (drums · bass ·
+ * vocals · other · song) of the stems you intend to bring in. This is the one
+ * place you author it: queue picks from the per-role recs (scored against the
+ * rest of the plan + the plan's journey) or ⌘K, then perform them in the
+ * Booth, where the very same RoleColumnsGrid renders live (recs tail what's
+ * playing) with ⤒A/⤒B deck-load.
  */
 
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { pushTrackToLive, searchTracks, updateSetTrackNote } from "../api";
-import {
-  useActiveSet,
-  useActivateSet,
-  useAddTrackToSet,
-  useCreateSet,
-  useMoveTrackInSet,
-  useRemoveTrackFromSet,
-  useTailRecs,
-} from "../hooks/useSets";
-import {
-  usePreviewState,
-  useStartPreview,
-  useStopPreview,
-} from "../hooks/usePreview";
-import { formatDuration } from "../lib/format";
-import { store } from "../store";
-import type { DanceSet, SetTrack, Track } from "../types";
-import { EnergyBar } from "../components/EnergyBar";
-import { KeyBadge } from "../components/KeyBadge";
+import type React from "react";
+
+import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
 import { SetMenu } from "../components/SetMenu";
-import { StemKindsChip } from "../components/StemKindsChip";
-import { isProcessing } from "../components/SetRail";
+import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
+import { store } from "../store";
+import type { DanceSet } from "../types";
 
 export function SetEditor() {
   const active = useActiveSet();
   const set = active.data;
 
-  if (active.isLoading) {
-    return <CenteredMsg>Loading…</CenteredMsg>;
-  }
-  if (!set) {
-    return <NoSetState />;
-  }
+  if (active.isLoading) return <CenteredMsg>Loading…</CenteredMsg>;
+  if (!set) return <NoSetState />;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <Header set={set} />
-      <div className="flex-1 grid grid-cols-[1fr_1fr] gap-4 px-6 py-4 min-h-0">
-        <LeftPane set={set} />
-        <RightPane set={set} />
+      <div className="flex-1 px-6 py-4 min-h-0 overflow-y-auto">
+        <RoleColumnsGrid setId={set.id} mode="plan" />
       </div>
-    </div>
-  );
-}
-
-function NoSetState() {
-  const create = useCreateSet();
-  const activate = useActivateSet();
-  const pending = create.isPending || activate.isPending;
-  function bootstrap() {
-    create.mutate(
-      { name: "My set" },
-      { onSuccess: (created) => activate.mutate(created.id) },
-    );
-  }
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center px-8 py-12 text-center gap-4">
-      <h1 className="text-xl font-medium text-neutral-100">
-        No active set yet
-      </h1>
-      <p className="text-sm text-neutral-500 max-w-lg leading-relaxed">
-        Sets persist across reloads and sessions. Name them, fill them via ⌘K,
-        and reload any of them as the active rail.
-      </p>
-      <button
-        type="button"
-        onClick={bootstrap}
-        disabled={pending}
-        className="h-9 px-4 rounded bg-violet-700 hover:bg-violet-600 text-white text-sm disabled:opacity-50"
-      >
-        {pending ? "…" : "+ create empty set"}
-      </button>
-    </div>
-  );
-}
-
-function CenteredMsg({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex-1 flex items-center justify-center text-sm text-neutral-500">
-      {children}
     </div>
   );
 }
@@ -125,524 +46,48 @@ function Header({ set }: { set: DanceSet }) {
         Set
       </span>
       <SetMenu set={set} variant="full" />
-      <span className="text-xs text-neutral-500 tabular-nums shrink-0">
-        {set.tracks.length} tracks
+      <span className="ml-auto text-[11px] text-neutral-500 shrink-0">
+        queue stems per role · ＋ from recs or ⌘K
       </span>
     </div>
   );
 }
 
-function LeftPane({ set }: { set: DanceSet }) {
-  const move = useMoveTrackInSet();
-  // 8px activation distance — buttons + the keep-text-selectable cells
-  // inside the row are click-targets, so we need a small drag threshold
-  // to disambiguate quick clicks from drags.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-  );
-
-  function onDragEnd(e: DragEndEvent) {
-    const { active, over } = e;
-    if (!over || active.id === over.id) return;
-    const newIdx = set.tracks.findIndex((t) => t.track_id === Number(over.id));
-    if (newIdx < 0) return;
-    move.mutate({
-      setId: set.id,
-      trackId: Number(active.id),
-      position: newIdx,
-    });
-  }
-
-  return (
-    <section className="flex flex-col min-h-0 border border-neutral-800 rounded-md">
-      <div className="px-3 py-2 border-b border-neutral-900 text-[10px] uppercase tracking-wider text-neutral-500">
-        Track list
-      </div>
-      <div className="flex-1 overflow-y-auto p-2">
-        {set.tracks.length === 0 ? (
-          <div className="text-xs text-neutral-500 italic px-1 py-3">
-            Empty set — pick from the right pane or open ⌘K to find tracks.
-          </div>
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={onDragEnd}
-          >
-            <SortableContext
-              items={set.tracks.map((t) => t.track_id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ol className="flex flex-col gap-1">
-                {set.tracks.map((t, i) => (
-                  <EditableTrackRow
-                    key={t.track_id}
-                    setId={set.id}
-                    track={t}
-                    index={i}
-                  />
-                ))}
-              </ol>
-            </SortableContext>
-          </DndContext>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function EditableTrackRow({
-  setId,
-  track,
-  index,
-}: {
-  setId: number;
-  track: SetTrack;
-  index: number;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: track.track_id });
-  const sortableStyle: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-  const remove = useRemoveTrackFromSet();
-  const startPreview = useStartPreview();
-  const stopPreview = useStopPreview();
-  const previewing = usePreviewState();
-  const isPreviewingThis = previewing?.trackId === track.track_id;
-  // Load-into-Live respects the per-slot stem_kinds filter so the editor's
-  // load action matches the rail's. Disabled while the track is still
-  // running through the pipeline (no stems on disk yet to push over OSC).
-  const forceLoad = useMutation({
-    mutationFn: () =>
-      pushTrackToLive(track.track_id, {
-        includeStems: true,
-        kinds: track.stem_kinds ?? undefined,
-      }),
-  });
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [noteDraft, setNoteDraft] = useState(track.note ?? "");
-
-  return (
-    <li
-      ref={setNodeRef}
-      style={sortableStyle}
-      {...attributes}
-      {...listeners}
-      className={`group relative rounded-md border border-neutral-800 bg-neutral-900/40 touch-none ${
-        isDragging ? "opacity-40 z-30" : "cursor-grab active:cursor-grabbing"
-      }`}
-    >
-      <div className="flex items-center gap-2 px-2 py-1.5">
-        {/* Drag affordance — the whole <li> is the drag source (via
-            {...listeners} above). This is just a visual hint. */}
-        <div
-          aria-hidden="true"
-          className="w-4 self-stretch flex items-center justify-center text-neutral-600 group-hover:text-neutral-300 select-none pointer-events-none"
-        >
-          ⋮⋮
-        </div>
-        <span className="font-mono text-[10px] text-neutral-500 tabular-nums w-6 text-right">
-          {index + 1}
-        </span>
-        <KeyBadge keyCamelot={track.key_camelot ?? null} size="sm" />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm text-neutral-100 truncate font-medium">
-            {track.title ?? `Track #${track.track_id}`}
-          </div>
-          <div className="text-xs text-neutral-500 truncate">
-            {track.artist ?? "—"}
-            {track.duration_seconds != null && (
-              <span
-                className="ml-2 font-mono text-neutral-600"
-                title="Track duration"
-              >
-                {formatDuration(track.duration_seconds)}
-              </span>
-            )}
-            {track.bpm != null && (
-              <span className="ml-2 font-mono">{track.bpm.toFixed(0)} BPM</span>
-            )}
-          </div>
-          {/* Inline note — visible at all times so plan annotations show
-              up at a glance without hovering or opening the editor. */}
-          {track.note && !noteOpen && (
-            <div
-              className="text-[11px] text-amber-200/80 italic truncate mt-0.5 flex items-baseline gap-1"
-              title={track.note}
-            >
-              <span aria-hidden="true">📝</span>
-              <span className="truncate">{track.note}</span>
-            </div>
-          )}
-        </div>
-        <EnergyBar energy={track.floor_energy ?? null} size="sm" />
-        <StemKindsChip
-          setId={setId}
-          trackId={track.track_id}
-          stemKinds={track.stem_kinds}
-          variant="full"
-        />
-        <button
-          type="button"
-          disabled={
-            isProcessing(track) ||
-            startPreview.isPending ||
-            stopPreview.isPending
-          }
-          onClick={() => {
-            if (isPreviewingThis) {
-              stopPreview.mutate();
-            } else {
-              startPreview.mutate({ trackId: track.track_id, column: "mix" });
-            }
-          }}
-          className={`px-2 h-6 text-xs font-medium rounded inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed ${
-            isPreviewingThis
-              ? "text-cyan-200 bg-cyan-500/30 hover:bg-cyan-500/40"
-              : "text-cyan-300 hover:text-cyan-100 hover:bg-cyan-500/20"
-          }`}
-          title={
-            isProcessing(track)
-              ? "Pipeline still running — preview enabled when complete"
-              : isPreviewingThis
-                ? "Stop preview (Cue Out → headphones)"
-                : "Cue preview in headphones (Scarlett outs 3/4) — master untouched"
-          }
-          aria-label={isPreviewingThis ? "stop cue preview" : "cue preview"}
-        >
-          {isPreviewingThis ? "■ Cue" : "▶ Cue"}
-        </button>
-        <button
-          type="button"
-          disabled={isProcessing(track) || forceLoad.isPending}
-          onClick={() => forceLoad.mutate()}
-          className="px-2 h-6 text-xs font-medium rounded text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/20 inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed"
-          title={
-            isProcessing(track)
-              ? "Pipeline still running — load enabled when complete"
-              : "Load stems into Live now"
-          }
-          aria-label="load into Live"
-        >
-          → Live
-        </button>
-        <button
-          type="button"
-          onClick={() => setNoteOpen((v) => !v)}
-          className={`w-6 h-6 rounded inline-flex items-center justify-center ${
-            track.note
-              ? "text-amber-300 hover:bg-amber-500/20"
-              : "text-neutral-500 hover:text-neutral-100 hover:bg-neutral-800"
-          }`}
-          title={track.note ? `Note: ${track.note}` : "Add a note"}
-        >
-          📝
-        </button>
-        <button
-          type="button"
-          disabled={remove.isPending}
-          onClick={() => remove.mutate({ setId, trackId: track.track_id })}
-          className="w-6 h-6 text-neutral-500 hover:text-rose-200 hover:bg-rose-500/20 rounded inline-flex items-center justify-center disabled:opacity-30"
-          title="Remove from set"
-        >
-          ×
-        </button>
-      </div>
-      {noteOpen && (
-        <NoteEditor
-          setId={setId}
-          trackId={track.track_id}
-          initial={noteDraft}
-          onSaved={(v) => {
-            setNoteDraft(v);
-            setNoteOpen(false);
-          }}
-          onCancel={() => setNoteOpen(false)}
-        />
-      )}
-    </li>
-  );
-}
-
-function NoteEditor({
-  setId,
-  trackId,
-  initial,
-  onSaved,
-  onCancel,
-}: {
-  setId: number;
-  trackId: number;
-  initial: string;
-  onSaved: (v: string) => void;
-  onCancel: () => void;
-}) {
-  const [v, setV] = useState(initial);
-
-  async function save() {
-    await updateSetTrackNote(setId, trackId, v);
-    onSaved(v);
-  }
-
-  return (
-    <div className="px-2 pb-2 flex items-center gap-2">
-      <input
-        autoFocus
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        placeholder='e.g. "cue at bar 33", "after the breakdown"'
-        className="flex-1 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs text-neutral-100 outline-none focus:border-neutral-700"
-        onKeyDown={(e) => {
-          if (e.key === "Enter") void save();
-          if (e.key === "Escape") onCancel();
-        }}
-      />
-      <button
-        type="button"
-        onClick={() => void save()}
-        className="text-xs px-2 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white"
-      >
-        Save
-      </button>
-    </div>
-  );
-}
-
-/**
- * Shared Cue/preview button — toggles between "▶ Cue" (start) and "■ Cue"
- * (stop) and uses the existing preview state hooks so only one row at a
- * time shows the active state. Used in the Library + Tail-recs panes
- * where rows are read-only (not part of a set yet) but the DJ still
- * wants to audition before committing.
- */
-function CuePreviewButton({ trackId }: { trackId: number }) {
-  const startPreview = useStartPreview();
-  const stopPreview = useStopPreview();
-  const previewing = usePreviewState();
-  const isPreviewingThis = previewing?.trackId === trackId;
-  return (
-    <button
-      type="button"
-      disabled={startPreview.isPending || stopPreview.isPending}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (isPreviewingThis) {
-          stopPreview.mutate();
-        } else {
-          startPreview.mutate({ trackId, column: "mix" });
-        }
-      }}
-      className={`text-xs px-2 py-1 rounded inline-flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed ${
-        isPreviewingThis
-          ? "text-cyan-200 bg-cyan-500/30 hover:bg-cyan-500/40"
-          : "text-cyan-300 hover:text-cyan-100 hover:bg-cyan-500/20"
-      }`}
-      title={
-        isPreviewingThis
-          ? "Stop preview (Cue Out → headphones)"
-          : "Cue preview in headphones (Scarlett outs 3/4) — master untouched"
-      }
-      aria-label={isPreviewingThis ? "stop cue preview" : "cue preview"}
-    >
-      {isPreviewingThis ? "■ Cue" : "▶ Cue"}
-    </button>
-  );
-}
-
-function RightPane({ set }: { set: DanceSet }) {
-  const [tab, setTab] = useState<"library" | "tail">("library");
-  return (
-    <section className="flex flex-col min-h-0 border border-neutral-800 rounded-md">
-      <div className="px-3 py-2 border-b border-neutral-900 flex items-center gap-2">
-        <PaneTab active={tab === "library"} onClick={() => setTab("library")}>
-          Library
-        </PaneTab>
-        <PaneTab active={tab === "tail"} onClick={() => setTab("tail")}>
-          Tail recs
-        </PaneTab>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2">
-        {tab === "library" ? (
-          <LibraryBrowse set={set} />
-        ) : (
-          <TailRecsPane set={set} />
-        )}
-      </div>
-    </section>
-  );
-}
-
-function PaneTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`text-[11px] uppercase tracking-wider px-2 py-1 rounded ${
-        active
-          ? "bg-neutral-800 text-neutral-100"
-          : "text-neutral-500 hover:text-neutral-200"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function LibraryBrowse({ set }: { set: DanceSet }) {
-  const [q, setQ] = useState("");
-  const fuzzy = useQuery({
-    queryKey: ["tracks", "search", q.toLowerCase()],
-    queryFn: () => searchTracks({ q, limit: 30 }),
-    staleTime: 5_000,
-  });
-  const inSet = new Set(set.tracks.map((t) => t.track_id));
-  return (
-    <div className="flex flex-col gap-2">
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search title or artist…"
-        className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-neutral-700"
-      />
-      {fuzzy.isLoading && (
-        <div className="text-xs text-neutral-600">…</div>
-      )}
-      {fuzzy.data?.length === 0 && (
-        <div className="text-xs text-neutral-600 italic">No matches.</div>
-      )}
-      <ol className="flex flex-col gap-1">
-        {fuzzy.data?.map((t) => (
-          <LibraryRow
-            key={t.id}
-            track={t}
-            setId={set.id}
-            alreadyInSet={inSet.has(t.id)}
-          />
-        ))}
-      </ol>
-    </div>
-  );
-}
-
-function LibraryRow({
-  track,
-  setId,
-  alreadyInSet,
-}: {
-  track: Track;
-  setId: number;
-  alreadyInSet: boolean;
-}) {
-  const add = useAddTrackToSet();
-  return (
-    <li className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60 border border-transparent hover:border-neutral-800">
-      <KeyBadge keyCamelot={track.analysis?.key_camelot ?? null} size="sm" />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm text-neutral-100 truncate font-medium">
-          {track.title ?? `Track #${track.id}`}
-        </div>
-        <div className="text-xs text-neutral-500 truncate">
-          {track.artist ?? "—"}
-          {track.duration_seconds != null && (
-            <span className="ml-2 font-mono text-neutral-600" title="Track duration">
-              {formatDuration(track.duration_seconds)}
-            </span>
-          )}
-          {track.analysis?.bpm != null && (
-            <span className="ml-2 font-mono">
-              {track.analysis.bpm.toFixed(0)} BPM
-            </span>
-          )}
-        </div>
-      </div>
-      <EnergyBar energy={track.analysis?.floor_energy ?? null} size="sm" />
-      <CuePreviewButton trackId={track.id} />
-      <button
-        type="button"
-        disabled={alreadyInSet || add.isPending}
-        onClick={() => add.mutate({ setId, trackId: track.id })}
-        className="text-xs px-2 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-30 disabled:bg-neutral-800"
-        title={alreadyInSet ? "Already in set" : "Add to set"}
-      >
-        {alreadyInSet ? "✓ in set" : "+ Set"}
-      </button>
-    </li>
-  );
-}
-
-function TailRecsPane({ set }: { set: DanceSet }) {
-  const recs = useTailRecs(set.id, { k: 20 });
-  const add = useAddTrackToSet();
-  if (set.tracks.length === 0) {
-    return (
-      <div className="text-xs text-neutral-500 italic px-1 py-3">
-        Add a few tracks first — tail recs score against the arc the set is
-        building.
-      </div>
+function NoSetState() {
+  const create = useCreateSet();
+  const activate = useActivateSet();
+  const pending = create.isPending || activate.isPending;
+  function bootstrap() {
+    create.mutate(
+      { name: "My set" },
+      { onSuccess: (created) => activate.mutate(created.id) },
     );
   }
   return (
-    <div>
-      {recs.isLoading && <div className="text-xs text-neutral-600">…</div>}
-      {recs.data?.recs.length === 0 && (
-        <div className="text-xs text-neutral-600 italic">
-          No candidates — try widening the library first.
-        </div>
-      )}
-      <ol className="flex flex-col gap-1">
-        {recs.data?.recs.map((r) => (
-          <li
-            key={r.track_id}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60 border border-transparent hover:border-neutral-800"
-          >
-            <span className="font-mono text-[10px] text-neutral-500 tabular-nums w-8 text-right">
-              {Math.round(r.score * 100)}
-            </span>
-            <KeyBadge keyCamelot={r.key_camelot ?? null} size="sm" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm text-neutral-100 truncate font-medium">
-                {r.track_title ?? `Track #${r.track_id}`}
-              </div>
-              <div className="text-xs text-neutral-500 truncate">
-                {r.track_artist ?? "—"}
-                {r.bpm != null && (
-                  <span className="ml-2 font-mono">{r.bpm.toFixed(0)}</span>
-                )}
-                {r.reasons.length > 0 && (
-                  <span className="ml-2 text-neutral-600">
-                    · {r.reasons.join(" · ")}
-                  </span>
-                )}
-              </div>
-            </div>
-            <EnergyBar energy={r.floor_energy ?? null} size="sm" />
-            <CuePreviewButton trackId={r.track_id} />
-            <button
-              type="button"
-              onClick={() => add.mutate({ setId: set.id, trackId: r.track_id })}
-              className="text-xs px-2 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white"
-            >
-              + Set
-            </button>
-          </li>
-        ))}
-      </ol>
+    <div className="flex-1 flex flex-col items-center justify-center px-8 py-12 text-center gap-4">
+      <h1 className="text-xl font-medium text-neutral-100">No active set yet</h1>
+      <p className="text-sm text-neutral-500 max-w-lg leading-relaxed">
+        A set is a plan — per-role queues of the stems you'll bring in (drums,
+        bass, vocals, other, song). Create one, then queue picks from the recs
+        or ⌘K. The same grid drives the Booth live, where you load picks onto a
+        deck.
+      </p>
+      <button
+        type="button"
+        onClick={bootstrap}
+        disabled={pending}
+        className="h-9 px-4 rounded bg-violet-700 hover:bg-violet-600 text-white text-sm disabled:opacity-50"
+      >
+        {pending ? "…" : "+ create empty set"}
+      </button>
+    </div>
+  );
+}
+
+function CenteredMsg({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex-1 flex items-center justify-center text-sm text-neutral-500">
+      {children}
     </div>
   );
 }

@@ -101,6 +101,66 @@ export interface ColumnRecsRequest {
   master_bpm?: number | null;
   k?: number;
   exclude_track_ids?: number[];
+  /** Recent live-set track ids (most-recent last). Gives the Booth recs
+   *  trend-aware vibe + soft anti-repetition via the journey. */
+  trailing_track_ids?: number[];
+}
+
+// ---------------------------------------------------------------------------
+// Score breakdown — shared metadata for rendering rec score_breakdown maps.
+// One source of truth so the rec cards render the same feature names, order,
+// colors, and labels.
+// ---------------------------------------------------------------------------
+
+export interface FeatureMeta {
+  key: string;
+  label: string; // full name (tooltip)
+  short: string; // 1–3 char chip glyph/abbrev
+  color: string; // tailwind text/ring classes for the chip
+}
+
+export const SCORE_FEATURES: FeatureMeta[] = [
+  { key: "embedding", label: "Vibe (CLAP embedding)", short: "VIB", color: "text-fuchsia-200 ring-fuchsia-500/30 bg-fuchsia-500/10" },
+  { key: "key", label: "Harmonic / key", short: "KEY", color: "text-emerald-200 ring-emerald-500/30 bg-emerald-500/10" },
+  { key: "bpm", label: "Tempo (BPM, halftime-aware)", short: "BPM", color: "text-sky-200 ring-sky-500/30 bg-sky-500/10" },
+  { key: "energy", label: "Energy arc fit", short: "NRG", color: "text-amber-200 ring-amber-500/30 bg-amber-500/10" },
+  { key: "kick_density", label: "Kick density (drums)", short: "KCK", color: "text-orange-200 ring-orange-500/30 bg-orange-500/10" },
+  { key: "presence", label: "Presence / busyness", short: "PRS", color: "text-teal-200 ring-teal-500/30 bg-teal-500/10" },
+  { key: "timbre", label: "Timbre (brightness/warmth)", short: "TMB", color: "text-rose-200 ring-rose-500/30 bg-rose-500/10" },
+  { key: "transition_fit", label: "Structural mixability (intro/outro)", short: "MIX", color: "text-violet-200 ring-violet-500/30 bg-violet-500/10" },
+];
+
+export const SCORE_FEATURE_BY_KEY: Record<string, FeatureMeta> =
+  Object.fromEntries(SCORE_FEATURES.map((f) => [f.key, f]));
+
+// ---------------------------------------------------------------------------
+// Plan — per-role queues inside the rec grid. Mirrors SetPlanOut on the
+// backend. Your queued picks on top of each role column, live recs below.
+// ---------------------------------------------------------------------------
+
+/** Role columns, left→right. ``song`` is the full-track anchor (== "mix"). */
+export const PLAN_ROLES = ["drums", "bass", "vocals", "other", "song"] as const;
+export type PlanRole = (typeof PLAN_ROLES)[number];
+
+/** One queued pick in a role column. */
+export interface PlanItem {
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  key_camelot: string | null;
+  bpm: number | null;
+  floor_energy: number | null;
+}
+
+export interface SetPlan {
+  set_id: number;
+  /** role → ordered queue of picks. Every role present (empty when unqueued). */
+  queues: Record<string, PlanItem[]>;
+}
+
+export interface SetPlanUpdateRequest {
+  /** role → ordered list of track ids. The client edits locally and PUTs. */
+  queues: Record<string, number[]>;
 }
 
 export interface PreviewRequest {

@@ -3,6 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import * as api from "../api";
 import { useAbletonState } from "./useAbletonState";
 import { useDeckMap } from "./useDeckMap";
+import { useCurrentSession } from "./useSession";
+
+/** How many recent plays to pass as journey context (trend + anti-repeat). */
+const TRAILING_WINDOW = 8;
 
 /**
  * Re-scoring per-column rec stream. The "active combo" is the bag of cells
@@ -27,6 +31,25 @@ import { useDeckMap } from "./useDeckMap";
 export function useColumnRecs(column: string, opts: { k?: number } = {}) {
   const ableton = useAbletonState();
   const deckMap = useDeckMap();
+  const session = useCurrentSession();
+
+  // Trailing journey: the last TRAILING_WINDOW played tracks, most-recent
+  // last, de-duplicated (keep only the latest occurrence). Feeds the
+  // recommender's trend-aware vibe + soft anti-repetition.
+  const trailingTrackIds = useMemo((): number[] => {
+    const plays = session.data?.plays;
+    if (!plays || plays.length === 0) return [];
+    const seen = new Set<number>();
+    const deduped: number[] = [];
+    for (let i = plays.length - 1; i >= 0; i--) {
+      const id = plays[i].track_id;
+      if (!seen.has(id)) {
+        seen.add(id);
+        deduped.unshift(id);
+      }
+    }
+    return deduped.slice(-TRAILING_WINDOW);
+  }, [session.data?.plays]);
 
   const combo = useMemo(() => {
     const columns = deckMap.data?.columns;
@@ -62,6 +85,7 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
       combo.excludeTracks.slice().sort(),
       Math.round(ableton.tempo ?? 0),
       opts.k ?? 5,
+      trailingTrackIds,
     ],
     queryFn: () =>
       api.recommendByColumn({
@@ -70,6 +94,7 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
         master_bpm: ableton.tempo ?? null,
         k: opts.k ?? 5,
         exclude_track_ids: combo.excludeTracks,
+        trailing_track_ids: trailingTrackIds.length > 0 ? trailingTrackIds : undefined,
       }),
     // Refetch on combo change; otherwise stale-cache for 30s.
     staleTime: 30_000,

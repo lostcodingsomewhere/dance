@@ -15,16 +15,21 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from dance.api.deps import get_session
+from dance.api.deps import fullmix_analysis, get_session
 from dance.api.schemas import (
+    ColumnRecsResponse,
     SetCreateRequest,
     SetOut,
+    SetPlanAppendRequest,
+    SetPlanOut,
+    SetPlanUpdateRequest,
     SetSummaryOut,
     SetTrackAddRequest,
     SetTrackUpdateRequest,
     SetUpdateRequest,
     TailRecsResponse,
 )
+from dance.core import set_queues as sq
 from dance.core.database import (
     AudioAnalysis,
     Set,
@@ -33,6 +38,7 @@ from dance.core.database import (
     Track,
     now_utc,
 )
+from dance.recommender.recommender import recommend_by_column
 from dance.recommender.tail import DEFAULT_WINDOW, tail_recs_for_set
 
 router = APIRouter(prefix="/sets", tags=["sets"])
@@ -481,3 +487,151 @@ def _count_func():
     from sqlalchemy import func
 
     return func.count(SetTrack.id)
+
+
+# ---------------------------------------------------------------------------
+# Plan — per-role queues inside the rec grid
+# ---------------------------------------------------------------------------
+
+
+def _validate_role(role: str) -> str:
+    if role not in sq.PLAN_ROLES:
+        raise HTTPException(
+            status_code=400, detail=f"role must be one of {list(sq.PLAN_ROLES)}"
+        )
+    return role
+
+
+def _plan_out(session: Session, s: Set) -> dict:
+    """Decorate a set's plan: per-role queues of items with display fields."""
+    queues = sq.parse_plan(s.plan)
+    all_ids: set[int] = {tid for q in queues.values() for tid in q}
+    tracks: dict[int, Track] = (
+        {int(t.id): t for t in session.query(Track).filter(Track.id.in_(all_ids))}
+        if all_ids
+        else {}
+    )
+    analyses: dict[int, AudioAnalysis] = (
+        {
+            int(a.track_id): a
+            for a in session.query(AudioAnalysis).filter(
+                AudioAnalysis.track_id.in_(all_ids),
+                AudioAnalysis.stem_file_id.is_(None),
+            )
+        }
+        if all_ids
+        else {}
+    )
+
+    def item(tid: int) -> dict:
+        t = tracks.get(tid)
+        a = analyses.get(tid)
+        return {
+            "track_id": tid,
+            "title": t.title if t else None,
+            "artist": t.artist if t else None,
+            "key_camelot": a.key_camelot if a else None,
+            "bpm": float(a.bpm) if a and a.bpm is not None else None,
+            "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
+        }
+
+    return {
+        "set_id": int(s.id),
+        "queues": {role: [item(tid) for tid in queues[role]] for role in sq.PLAN_ROLES},
+    }
+
+
+@router.get("/{set_id}/plan", response_model=SetPlanOut)
+def get_plan(set_id: int, session: Session = Depends(get_session)) -> dict:
+    """The set's plan — per-role queues of the stems you intend to bring in."""
+    s = _require_set(session, set_id)
+    return _plan_out(session, s)
+
+
+@router.put("/{set_id}/plan", response_model=SetPlanOut)
+def put_plan(
+    set_id: int,
+    body: SetPlanUpdateRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Replace the whole plan. ``queues`` maps role → ordered list of track ids;
+    the frontend edits locally (add / remove / reorder) and PUTs the result."""
+    s = _require_set(session, set_id)
+    queues: dict[str, list[int]] = {r: [] for r in sq.PLAN_ROLES}
+    for role, ids in (body.queues or {}).items():
+        queues[_validate_role(role)] = [int(t) for t in ids]
+    s.plan = sq.encode_plan(queues)
+    s.updated_at = now_utc()
+    session.commit()
+    session.refresh(s)
+    return _plan_out(session, s)
+
+
+@router.post("/{set_id}/plan/append", response_model=SetPlanOut)
+def append_to_plan(
+    set_id: int,
+    body: SetPlanAppendRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Append one track to a role's queue (server-side merge). Used by ⌘K so it
+    works without the whole plan loaded client-side."""
+    s = _require_set(session, set_id)
+    role = _validate_role(body.role)
+    if session.get(Track, body.track_id) is None:
+        raise HTTPException(status_code=404, detail="track not found")
+    queues = sq.parse_plan(s.plan)
+    if body.track_id not in queues[role]:
+        queues[role].append(body.track_id)
+    s.plan = sq.encode_plan(queues)
+    s.updated_at = now_utc()
+    session.commit()
+    session.refresh(s)
+    return _plan_out(session, s)
+
+
+@router.get("/{set_id}/plan-recs", response_model=ColumnRecsResponse)
+def get_plan_recs(
+    set_id: int,
+    role: str = Query(..., description="Role column to fill (drums/bass/vocals/other/song)"),
+    k: int = Query(8, ge=1, le=50),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Recommendations for one role column, scored against the rest of the plan
+    (the tail of the other role queues) and the plan's journey so far. Reuses
+    the live per-column recommender."""
+    s = _require_set(session, set_id)
+    _validate_role(role)
+    column = sq.role_to_column(role)
+    queues = sq.parse_plan(s.plan)
+
+    combo = sq.context_combo_stem_ids(session, queues, exclude_role=role)
+    trailing = sq.plan_sequence(queues)
+    exclude = list(set(queues.get(role, [])))  # don't re-recommend what's queued here
+
+    results = recommend_by_column(
+        session,
+        column=column,
+        combo_stem_ids=combo,
+        k=k,
+        exclude_track_ids=exclude,
+        trailing_track_ids=trailing,
+    )
+    recs_out: list[dict] = []
+    for r in results:
+        track = session.get(Track, r.track_id)
+        a = fullmix_analysis(session, r.track_id)
+        recs_out.append(
+            {
+                "track_id": r.track_id,
+                "stem_file_id": r.stem_file_id,
+                "track_title": track.title if track else None,
+                "track_artist": track.artist if track else None,
+                "bpm": float(a.bpm) if a and a.bpm is not None else None,
+                "key_camelot": a.key_camelot if a else None,
+                "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
+                "score": r.score,
+                "score_breakdown": r.score_breakdown,
+                "reasons": r.reasons,
+            }
+        )
+    return {"column": column, "combo_size": len(combo), "recs": recs_out}

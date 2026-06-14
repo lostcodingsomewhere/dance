@@ -970,18 +970,18 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <h2>3. Crossfader</h2>
         <p>A horizontal gradient bar between the two decks. Mirrors the APC40 hardware crossfader live. Drag the on-screen handle as a fallback. A on the left, B on the right — the gradient tells you which deck is dominant at any position.</p>
 
-        <h2>4. SceneGrid (10 columns, mirror layout)</h2>
-        <p>Below the decks is the canonical 10-column scene grid. Columns read left-to-right as: <code>DRUMS | BASS | VOCALS | MELODY | SONG</code> for Deck A, then mirrored back <code>SONG | MELODY | VOCALS | BASS | DRUMS</code> for Deck B. Each row is a scene. Every cell shows a small <span class="hl">A</span> or <span class="hl">B</span> badge so you always know which deck the slot belongs to. Tap any loaded cell to fire/stop it; tap the row label on the left to fire the whole scene (anchor mode).</p>
+        <h2>4. SceneGrid (8 columns, Ableton mirror)</h2>
+        <p>Below the decks is the 8-column scene grid — a live mirror of Ableton's session view. The 8 columns are the two decks' stems in APC40 fader order, flush to the left edge: <code>DRUMS A | DRUMS B | BASS A | BASS B | VOCALS A | VOCALS B | MELODY A | MELODY B</code>. (The whole-song "SONG" anchor isn't a grid column — it lives in each deck's header chip above.) Each row is a scene; the column headers (BoothColumnHeaders) govern everything beneath them. Tap any loaded cell to fire/stop it. There's no on-screen scene-number column — the APC40's hardware scene-launch buttons fire whole scenes.</p>
 
-        <p><strong>Anchor-fill (◇ button).</strong> When a row has exactly one stem loaded and you want the full song, hover that cell — a small <strong>◇</strong> button appears in the top-left. One click loads the matching 3 stems of the same source track into the rest of the row. Saves you the four-trip-to-rec-banner shuffle when you fall in love with a stem and want the whole song.</p>
+        <p><strong>Anchor-fill (◇ button).</strong> When a row has exactly one stem loaded and you want the full song, hover that cell — a small <strong>◇</strong> button appears in the top-left. One click loads the matching 3 stems of the same source track into the rest of the row. Saves you the four-trips-to-the-rec-column shuffle when you fall in love with a stem and want the whole song.</p>
 
         <p><strong>Shadow cells in the SONG column.</strong> When a row's 4 stem cells on one side share a source track but the SONG cell itself is empty, the SONG cell renders as a dashed <em>shadow</em> displaying the inferred track. Tells you "these stems belong together as a single song" without needing to click anything. Each shadow has a small × button to clear the entire side (4 stems + mix) in one gesture.</p>
 
-        <h2>5. CueStrip + Rec Banners</h2>
-        <p>The CueStrip shows what's currently being auditioned through your headphones (the Cue track). One-click <strong>Load to master</strong> commits it to a real deck row. Below: five rec banners, one per source role (drums / bass / vocals / melody / song). Each rec card has <strong>▶ ⤒A ⤒B</strong> buttons — preview, load to Deck A, load to Deck B. Stem cards also have a tiny <strong>↗</strong> that pins the track to the SONG rec list.</p>
+        <h2>5. CueStrip</h2>
+        <p>The CueStrip shows what's currently being auditioned through your headphones (the Cue track) — fired from any <strong>▶</strong> preview button. It's a prelisten readout: what you're hearing in the cans before you commit it to a deck.</p>
 
-        <h2>6. SetRail (⌘\\ to open)</h2>
-        <p>Slide-out panel on the right. Active set tracklist + tail recommendations scored against the trailing arc. More on this in Lesson 5.3.</p>
+        <h2>6. The Plan Grid (RoleColumnsGrid)</h2>
+        <p>The spine of the whole app, sitting at the bottom of the Booth. <strong>Five role columns</strong> — DRUMS · BASS · VOCALS · MELODY · SONG. Each column stacks two zones: your <strong>queued plan picks on top</strong> (◆ Plan, emerald left-edge — these are "yours"), and <strong>recommendations below</strong> (Recs). In the Booth the recs <em>tail what's playing</em> — they re-score live against your active stem combo and the trailing journey of the session so far. Every card has <strong>▶</strong> preview (Cue/headphones) and a score-breakdown chip row; rec cards have <strong>＋</strong> to queue the pick into the plan, and in the Booth each card also has <strong>⤒A / ⤒B</strong> to load that pick straight onto Deck A or Deck B. This is the exact same grid you build a set with in the Set view — see Lesson 5.3.</p>
 
         <div class="step-block">
           <div class="step-title">Explore the Booth View</div>
@@ -994,7 +994,7 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
             <li>Click a section or cue marker — the playhead jumps there (Live time-codes via OSC).</li>
             <li>Push the APC40 crossfader — the on-screen crossfader bar follows.</li>
             <li>Load a different song to Deck B (⤒B). Watch the Δ BPM chip appear in the MasterStrip if the BPMs differ.</li>
-            <li>Press ⌘\\ to open the SetRail. Close with ⌘\\ again.</li>
+            <li>Scroll down to the plan grid. Find a rec card under the SONG column and click <strong>⤒A</strong> — it loads onto Deck A. Click <strong>▶</strong> on another card to preview it in your headphones.</li>
           </ol>
         </div>
 
@@ -1004,7 +1004,7 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
             <li>You can name all six sections of the Booth and what each is for</li>
             <li>You understand the two-deck layout — A on the left, B on the right, crossfader between them</li>
             <li>You can hover and click section/cue markers on a deck waveform to jump positions</li>
-            <li>You can open and close the SetRail with ⌘\\</li>
+            <li>You can load a plan-grid rec onto a deck with ⤒A/⤒B and preview one with ▶</li>
           </ul>
         </div>
       `},
@@ -1026,8 +1026,8 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
           <li><strong>Embedding similarity</strong> — do the tracks <em>sound</em> similar? (CLAP AI model)</li>
           <li><strong>Tag overlap</strong> — do the tracks share vibe/genre tags (the CLAP zero-shot labels)?</li>
         </ul>
-        <p>When you fire a track, the companion app queries the graph: "given these seeds, what fits best right now?" The scored candidates appear in the per-column rec banners and in the SetRail tail recs.</p>
-        <p>One honest detail: the live per-column banner recs don't just read the static graph — they re-score the candidates against your <em>active stem combo</em> in real time, weighting combo-embedding (does it sound like what's currently playing?), key, and BPM. So the banner suggestions shift as you mute and fire stems, not just when you change tracks.</p>
+        <p>When you fire a track, the companion app queries the graph: "given these seeds, what fits best right now?" The scored candidates fill the <strong>Recs</strong> zone of each role column in the plan grid — both in the Booth (scored against what's playing) and in the Set view (scored against the rest of your plan).</p>
+        <p>One honest detail: the Booth recs don't just read the static graph — they re-score the candidates against your <em>active stem combo</em> in real time, plus the trailing journey of the set so far, weighting combo-embedding (does it sound like what's currently playing?), key, and BPM. So the suggestions in each column shift as you mute and fire stems, not just when you change tracks. Each rec card carries a small score-breakdown chip row so you can see <em>why</em> it scored well.</p>
 
         <h2>The Camelot Wheel</h2>
         <p>The Camelot wheel is a harmonic compatibility system. Every key gets a number (1–12) and a letter (A = minor, B = major). Tracks are compatible if they share the same number, or if they're adjacent on the wheel (±1).</p>
@@ -1039,30 +1039,30 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
   Adjacent:    8A → 9A  (up one — slightly brighter)
   Energy jump: 8A → 8B + adjacent  (intentional key lift)</div>
 
-        <p>Moving more than 1 step on the wheel is a key clash — it can sound jarring or creative depending on how you execute it. The companion app's rec banners show Camelot position for every suggested track. Check it before firing.</p>
+        <p>Moving more than 1 step on the wheel is a key clash — it can sound jarring or creative depending on how you execute it. Every rec card in the plan grid shows Camelot position. Check it before firing.</p>
 
         <h2>Using ⌘K Search</h2>
-        <p>Press <strong>⌘K</strong> anywhere in the app to open the command palette. Type an artist name, track title, or vibe (e.g., "dark bass" or "uplifting vocal"). Fuzzy search + CLAP semantic search run simultaneously. Results show Camelot position and estimated BPM. Click a result to load it into a deck column.</p>
+        <p>Press <strong>⌘K</strong> anywhere in the app to open the command palette. Type an artist name, track title, or vibe (e.g., "dark bass" or "uplifting vocal"). Fuzzy search + CLAP semantic search run simultaneously. Results show Camelot position and estimated BPM. Picking a result <strong>appends it to the SONG column</strong> of your active set's plan — a server-side merge, so it lands whether or not the plan was loaded on screen.</p>
 
         <h2>Co-Pilot, Not Autopilot — The Recs-Off Rep</h2>
-        <p>The danger of a good rec engine is that you stop building the mental map it was supposed to bootstrap. You react to the banner instead of hearing the next move yourself. So once a week, run one practice set with the rec banners <strong>collapsed</strong> (hide them) and steer by ear + the Camelot wheel alone.</p>
+        <p>The danger of a good rec engine is that you stop building the mental map it was supposed to bootstrap. You react to the column instead of hearing the next move yourself. So once a week, run one practice set steering by ear + the Camelot wheel alone — decide your next stem <em>before</em> you look at the Recs zone.</p>
         <div class="step-block">
           <div class="step-title">Recs-Off Rep (once a week)</div>
           <ol>
-            <li>Collapse the per-column rec banners so you can't see the suggestions.</li>
+            <li>Don't look at the Recs zone of the columns. Cover the bottom of the grid if you have to.</li>
             <li>Pick your next stem the hard way: read the current Camelot position, decide what's harmonically safe, and trust your ear for energy and vibe.</li>
             <li>Commit to your choice out loud (or note it).</li>
-            <li><em>Now</em> reveal the rec banner. Did the engine agree with you?</li>
+            <li><em>Now</em> look at the column's recs. Did the engine agree with you?</li>
           </ol>
-          <div class="note">Reframe mastery as "I predicted what the rec would say" — not "I reacted to the rec." The day your ear and the banner agree most of the time, you've internalized the map.</div>
+          <div class="note">Reframe mastery as "I predicted what the rec would say" — not "I reacted to the rec." The day your ear and the column agree most of the time, you've internalized the map.</div>
         </div>
 
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
             <li>You can read a Camelot position (e.g., "8A") and know what keys are safe to mix next</li>
-            <li>You understand that the rec banners are AI-scored from 4 graph signals, and that the live banners additionally re-score against your active stem combo</li>
-            <li>You've used ⌘K to search your library by vibe or title</li>
+            <li>You understand that the column recs are AI-scored from 4 graph signals, and that the Booth recs additionally re-score against your active stem combo and the set's trailing journey</li>
+            <li>You've used ⌘K to search your library by vibe or title (it queues into the SONG column)</li>
             <li>You've run at least one recs-off rep and predicted the engine's pick before revealing it</li>
           </ul>
         </div>
@@ -1078,32 +1078,34 @@ Total: ~2 minutes for a full stem-by-stem crossfade</div>
         <div class="expert-take"><p>Planning a set is not about locking in an order and following it — it's about knowing your library well enough to navigate it live. A plan gives you confidence; confidence gives you flow state.</p></div>
 
         <h2>What a "Set" Is in Dance</h2>
-        <p>A <strong>Set</strong> is a named, ordered list of tracks stored in the database. You can have multiple sets (different moods, different lengths, different occasions). At most one set is "active" at a time — the active set is what the companion app uses to score tail recs.</p>
+        <p>A <strong>Set</strong> is its <strong>plan</strong>: per-role queues of the stems you intend to bring in. The plan has five queues — DRUMS · BASS · VOCALS · MELODY · SONG — and a set is just those queues stored in the database. You can have multiple sets (different moods, different lengths, different occasions). At most one set is "active" at a time — the active set is what backs the ◆ Plan zone of every column, in both the Set view and the Booth.</p>
+        <p>You build it in exactly the place you perform it: the <strong>plan grid</strong>. In the Set view that grid runs in planning mode — recs scored against the rest of your plan, no deck-load. In the Booth the same grid runs live. One surface, two modes.</p>
 
         <h2>Create Your First Set</h2>
         <div class="step-block">
-          <div class="step-title">Build a 10-Track Set</div>
+          <div class="step-title">Build a Plan</div>
           <ol>
-            <li>Open the companion app. Click <strong>Set</strong> in the top nav (or press ⌘\\ to open the SetRail from Booth).</li>
-            <li>Click <strong>Create empty set</strong>. Name it something like "Practice Set 1".</li>
-            <li>Press <strong>⌘K</strong> to open the command palette. Search for a track you know well. Click it — it's added to the set.</li>
-            <li>The SetRail now shows tail recommendations based on that first track. Look at the suggestions — are the Camelot positions compatible? Pick one and add it.</li>
-            <li>Continue building: pick from the tail recs, or search with ⌘K, until you have 10 tracks.</li>
-            <li>Look at the set arc: does energy build and breathe? Are the keys mostly compatible (within 1-2 steps on the Camelot wheel)? Rearrange by drag-and-drop if needed.</li>
+            <li>Open the companion app. Click <strong>Set</strong> in the top nav.</li>
+            <li>If there's no active set, click <strong>＋ create empty set</strong>. It becomes the active set.</li>
+            <li>You're now looking at the plan grid: five role columns, each with a ◆ Plan zone (empty for now) on top and a Recs zone below.</li>
+            <li>Pick a column to start with — SONG is a natural anchor. Look at its Recs. Each card shows Camelot position, BPM, energy, and a score-breakdown chip. Click <strong>＋</strong> on a good one to queue it into that column's plan.</li>
+            <li>Once you've queued one pick, the recs in <em>every</em> column re-score against the rest of the plan (and the plan's journey). Queue picks across the roles — a few drums, a bassline or two, a vocal, a melody — building the stems you'll have on hand.</li>
+            <li>Or press <strong>⌘K</strong>, search a track you know, and pick it — it appends to the SONG column server-side.</li>
+            <li>Glance at the keys and energies across what you've queued: are they mostly compatible (within 1–2 steps on the Camelot wheel)? Remove anything that doesn't fit with the <strong>×</strong> on its plan card.</li>
           </ol>
-          <div class="note">Don't overthink the order. 10 tracks is a rough outline, not a script. During performance you'll deviate from it — and that's correct.</div>
+          <div class="note">Don't overthink it. A plan is a stocked shelf, not a script — it's the stems you want within reach, not an order you must follow. During performance you'll deviate, and that's correct.</div>
         </div>
 
-        <h2>The Set as a Map, Not a Script</h2>
-        <p>Your set plan is a <strong>map of your library</strong>, not a choreography you must follow. If track 6 isn't working with the room's energy, skip to track 7, or go off-plan entirely. The plan exists so that when you need the next track, you're not searching from scratch — you've already thought about some good options.</p>
+        <h2>The Plan as a Shelf, Not a Script</h2>
+        <p>Your plan is a <strong>stocked shelf of options</strong>, not a choreography you must follow. The queues exist so that when you need the next drum stem or the next vocal, you're not searching from scratch — you've already thought about some good candidates and queued them. When you perform, the same plan rides along in the Booth, and you load any pick onto a deck with <strong>⤒A / ⤒B</strong>.</p>
         <p>Pro DJs often say: "I plan 40% of my set and improvise the rest." You'll find your own ratio.</p>
 
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
-            <li>You've created a set with at least 10 tracks using the SetRail + ⌘K</li>
-            <li>You can read the tail recs and use them to pick the next track in a set</li>
-            <li>You understand the set is a map to navigate, not a script to follow</li>
+            <li>You've created an active set and queued picks across the role columns with ＋ (and via ⌘K into SONG)</li>
+            <li>You can read a column's recs and use them to queue the next stem for that role</li>
+            <li>You understand the plan is a per-role shelf to navigate, not a track-by-track script — and that the same grid drives the Booth live</li>
           </ul>
         </div>
       `},
@@ -1535,14 +1537,14 @@ CLOCK 3 — SET ARC       ← 30 minutes view
         <p>You have all of these controls via your faders. Bringing the bass fader up 6dB at the right moment is an energy spike. Removing the vocal stem is an energy micro-dip. These are your tools.</p>
 
         <h2>The AI Arc in Your App</h2>
-        <p>The companion app's tail recs are scored against your current set's trailing arc — if you've been playing high-energy tracks, it recommends similarly high-energy options. If you've been building from chill, it suggests the next step up. You can use this to navigate the arc algorithmically. Or override it when you feel the room needs something different. The AI is a co-pilot, not the captain.</p>
+        <p>The companion app's column recs are scored against your set's trailing journey — if you've been playing high-energy stems, each column recommends similarly high-energy options. If you've been building from chill, it suggests the next step up. You can use this to navigate the arc algorithmically. Or override it when you feel the room needs something different. The AI is a co-pilot, not the captain.</p>
 
         <div class="win-block">
           <div class="win-label">You Got It When</div>
           <ul>
             <li>You can sketch a 60-minute arc (intro / build / peak / sustain / release) on a napkin</li>
             <li>You understand which stem moves increase energy (add bass, add density) vs. decrease it (remove stems, filter)</li>
-            <li>You know that the tail recs in the app are scored against your arc — and that you can override them</li>
+            <li>You know that the column recs in the app are scored against your arc — and that you can override them</li>
           </ul>
         </div>
       `},

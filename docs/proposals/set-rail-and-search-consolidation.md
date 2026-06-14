@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-06-14)** by the plan-grid model — a Set is now its `plan` (per-role queues inside the `RoleColumnsGrid`); the slide-out Set Rail (⌘\\) and its tail-recs are retired. See [`./rec-brain-port.md`](./rec-brain-port.md) and the Sets section of [`../api.md`](../api.md).
+
 ## Proposal — Set Rail + Cmd-K consolidation (pre-set flow rethink)
 
 **Status:** approved 2026-05-23 — implementing Alt D, all 5 open questions locked to recommendations

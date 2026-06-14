@@ -127,6 +127,17 @@ Append to the top. Use this template:
 **Next time:** one thing to try
 ```
 
+### 2026-06-14 — Plan-grid port: a Set IS its plan (no DJing)
+
+**Played:** No DJing — the recommender "brain" landed on this branch and the whole set surface was rebuilt around it.
+**Worked:**
+- Collapsed everything onto **one surface**: the plan grid (`RoleColumnsGrid`). Five role columns — Drums · Bass · Vocals · Other · Song — each stacking my queued picks on top and recs below. The *same* grid renders in two modes: Booth (`mode="live"`, recs tail what's playing in Ableton, ⤒A/⤒B to load a pick onto a deck) and Set view (`mode="plan"`, recs scored against the rest of the plan, no deck-load). Shared ▶ preview + ScoreBreakdown row.
+- A **Set is now its plan**: a JSON `plan` column on `sets` (`{role: [track_id,...]}`, roles = drums/bass/vocals/other/song; "song" == the recommender's "mix"). Built by queuing from per-role recs (＋) or ⌘K (appends to the Song column, server-side merge). Migration `b7d4e2f1a9c3` — additive, no other schema change.
+- New backend on the sets router: `GET/PUT /sets/{id}/plan`, `POST /sets/{id}/plan/append`, `GET /sets/{id}/plan-recs?role=`. `/recommend/by-column` now also takes `trailing_track_ids` for journey context. Plan-queue helpers in `src/dance/core/set_queues.py`; the unified brain in `recommender/scoring.py` + `journey.py` + `structure.py` (trend-aware vibe, halftime-aware BPM ±8, kick_density/presence/timbre, transition_fit). See [`docs/proposals/rec-brain-port.md`](docs/proposals/rec-brain-port.md).
+- **Retired:** the SetRail slide-out (⌘\\) + tail-recs, the ColumnRecBanner per-column banners, the dnd-kit per-track SetTrack editor, and the scenes/storyboard set models. `set_tracks` + `/sets/{id}/tail-recs` still exist in the backend but are legacy (UI doesn't touch them). Marked the three Set-Rail proposals SUPERSEDED and updated the Sets section of `docs/api.md`.
+**Broke:** Nothing live — backend + UI rewire, no real set yet. Per workflow rule 2, the brain was verified on the real 353-track library (not just synthetic fixtures), but the *flow* of building a plan in the grid and firing it at the gear hasn't been touched in anger.
+**Next time:** Same as yesterday — stop editing and DJ. Build one real plan in the grid, load it into Live, and confirm ⤒A/⤒B + per-role recs feel right mid-mix.
+
 ### 2026-06-13 — Docs/course fix pass (drift cleanup, no DJing)
 
 **Played:** No DJing — documentation + course correction pass while a real pipeline run was in flight elsewhere.

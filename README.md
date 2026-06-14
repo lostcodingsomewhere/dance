@@ -7,7 +7,7 @@ Spotify playlist → analyzed tracks with **stems, cues, loops, tags, and graph 
 The repo has three pieces:
 1. **Python pipeline** (`src/dance/`) — the brain. Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST over the SQLite DB, plus a WebSocket for live Ableton state and an OSC passthrough that auto-loads stem clips into Live's session view (Live 12.0.5+).
-3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Three views: **Booth** (live performance — SceneGrid mirror, per-column rec banners, slide-out Set Rail with tail-recs), **Set** (full-pane editor for the active set + library browse), **Pipeline** (ingest + processing status + library inventory). One hybrid **⌘K** palette covers fuzzy artist/title search and CLAP vibe search in one surface.
+3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Everything centers on one surface, the **plan grid**: five role columns — Drums · Bass · Vocals · Other · Song — each stacking your queued plan picks on top and recommendations below. Three views: **Booth** (live performance — SceneGrid mirror + the plan grid in *live* mode, where recs tail what's playing in Ableton and each card has ⤒A/⤒B to load it onto a deck), **Set** (the same plan grid in *plan* mode — recs scored against the rest of the plan; ＋ to queue), **Pipeline** (ingest + processing status + library inventory). One hybrid **⌘K** palette covers fuzzy artist/title search and CLAP vibe search in one surface, appending picks to the Song column.
 
 ## Documentation
 
@@ -92,21 +92,22 @@ Ableton state is pushed over the WebSocket — install AbletonOSC first (see [do
 
 ## DJ flow
 
+Both views share **one surface** — the **plan grid** (`RoleColumnsGrid`): five role columns (Drums · Bass · Vocals · Other · Song; "song" is the full-track anchor) that stack your queued plan picks on top and recommendations below. The same unified rec brain scores both; only the context and the available actions differ.
+
 ### Before the set — plan in the Set view
 
 1. **Open the companion** at `http://localhost:5173`. First-time users with a legacy localStorage Stack get a one-shot prompt to import it as a named Set.
-2. **Open the Set Rail** (⌘\\ or the violet edge pill on the right). If no active set, create one. Sets are persistent and named — "Warehouse Sat", "Wedding 90min" — and you can switch between them from the Set editor view.
-3. **Fill the set via ⌘K**. The palette is hybrid: typing surfaces fuzzy artist/title matches in the **Tracks** section first, CLAP vibe matches in the **Vibe** section below (8+ char queries). BPM/key/energy chips narrow further. Each row has `+ Set` (add to the active set) and `Load` (push straight to Live).
-4. **Reorder, annotate** in the **Set** view (top nav). Per-track notes ("cue at bar 33"), arrow nudge for position, two-pane library + tail-recs on the right.
+2. **Create or switch sets** from the **Set** view (top nav). Sets are persistent and named — "Warehouse Sat", "Wedding 90min" — and a Set *is* its plan (a per-role queue stored on the set).
+3. **Queue picks per role.** Each role column shows recommendations scored against the rest of the plan and the plan's journey so far. Tap **＋** on a card to queue it onto that role's stack. Use ▶ to prelisten in headphones (cue) first; the ScoreBreakdown chips explain why a pick scored where it did.
+4. **Or fill via ⌘K.** The palette is hybrid: typing surfaces fuzzy artist/title matches in the **Tracks** section first, CLAP vibe matches in the **Vibe** section below (8+ char queries). BPM/key/energy chips narrow further. Selecting a result appends it to the **Song** column of the active plan.
 
 ### During the set — the Booth
 
 1. **SceneGrid** mirrors the APC40 — tap cells to fire, tap row labels to anchor, eyes here during a mix.
-2. **Per-column rec banners** below the grid show 3–5 candidates per stem column, live-rescored against the active combo. Tap **+** to soft-pin a stem candidate as a whole-song Mix-column rec.
-3. **Set Rail** (⌘\\) slides in to surface your planned set + tail-recs scored against the trailing arc (embedding window + key walk + BPM band + energy slope). It auto-collapses 3 s after a clip fires so the grid stays sovereign. Tap a rail track → soft-pin to Mix recs; shift-tap → force-load into Live.
-4. **Auto-logging** — when a clip fires that was loaded via the companion, the play is recorded to the current `DjSession`. End the set from the PlayedStrip footer.
+2. **The plan grid in live mode** sits below: your queued plan picks on top, plus recs that tail what's playing in Ableton (combo embedding + trailing-journey trend), live-rescored against the active stem combo. Tap **⤒A**/**⤒B** on a card to load that pick onto a deck; ▶ to prelisten on the cue bus.
+3. **Auto-logging** — when a clip fires that was loaded via the companion, the play is recorded to the current `DjSession`. Session play count + end-session live in the MasterStrip's SessionChip.
 
-The **MasterStrip** (top) shows live BPM, transport, energy arc, AbletonOSC heartbeat, ⌘K, and the three view tabs.
+The **MasterStrip** (top) shows live BPM, transport, energy arc, AbletonOSC heartbeat, ⌘K, and the three view tabs. Stacked-stem **TwoDeckStrip** waveforms (click + drag to seek), the **Crossfader**, **BoothColumnHeaders**, and the **CueStrip** round out the Booth.
 
 ## Commands
 
@@ -151,7 +152,11 @@ src/dance/
 ├── spotify/
 │   └── downloader.py       spotDL wrapper
 ├── recommender/
-│   └── graph_builder.py    Builds track_edges; exposes recommend()
+│   ├── graph_builder.py    Builds track_edges
+│   ├── recommender.py      Per-column recommend() entrypoint
+│   ├── scoring.py          Unified rec brain — per-role scoring
+│   ├── journey.py          Trend-aware "journey" vibe context
+│   └── structure.py        Transition-fit / section scoring
 └── alembic/                Schema migrations
 ```
 
