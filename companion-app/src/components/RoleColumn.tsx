@@ -82,13 +82,32 @@ function StemRow({
       }`}
       title={tooltip}
     >
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex items-center gap-1.5">
         <span className="font-mono text-[10px] text-neutral-500 tabular-nums shrink-0">
           {leading}
         </span>
-        <span className="truncate flex-1 text-neutral-50 text-sm font-medium leading-tight">
+        <span className="truncate flex-1 min-w-0 text-neutral-50 text-sm font-medium leading-tight">
           {title ?? `Track #${trackId}`}
         </span>
+        {/* Preview + add/remove sit top-right — compact and consistent in both
+            plan & live modes. The prominent deck-load (⤒A/⤒B) is a separate
+            row below in live mode only. */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={togglePreview}
+            disabled={startPreview.isPending || stopPreview.isPending}
+            className={`shrink-0 w-7 h-7 text-xs rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center ${
+              isPreviewing
+                ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
+                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+            }`}
+            title={isPreviewing ? "Stop preview" : "Preview in headphones (cue)"}
+          >
+            {isPreviewing ? "⏹" : "▶"}
+          </button>
+          {action}
+        </div>
       </div>
       <div className="text-[11px] text-neutral-400 truncate leading-tight">
         {artist ?? "—"}
@@ -101,48 +120,28 @@ function StemRow({
       {breakdown && Object.keys(breakdown).length > 0 && (
         <ScoreBreakdown breakdown={breakdown} size="sm" className="mt-1" />
       )}
-      <div
-        className={`mt-1 grid gap-1 ${
-          mode === "live" ? "grid-cols-[auto_1fr_1fr_auto]" : "grid-cols-[auto_1fr]"
-        }`}
-      >
-        <button
-          type="button"
-          onClick={togglePreview}
-          disabled={startPreview.isPending || stopPreview.isPending}
-          className={`shrink-0 w-7 h-7 text-xs rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center ${
-            isPreviewing
-              ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
-              : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
-          }`}
-          title={isPreviewing ? "Stop preview" : "Preview in headphones (cue)"}
-        >
-          {isPreviewing ? "⏹" : "▶"}
-        </button>
-        {mode === "live" && (
-          <>
-            <button
-              type="button"
-              disabled={load.isPending}
-              onClick={() => load.mutate("a")}
-              className="h-7 text-xs font-bold rounded bg-violet-700/70 hover:bg-violet-600 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
-              title="Load → Deck A"
-            >
-              {load.isPending ? "…" : <><span>⤒</span><span>A</span></>}
-            </button>
-            <button
-              type="button"
-              disabled={load.isPending}
-              onClick={() => load.mutate("b")}
-              className="h-7 text-xs font-bold rounded bg-violet-900/70 hover:bg-violet-800 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
-              title="Load → Deck B"
-            >
-              {load.isPending ? "…" : <><span>⤒</span><span>B</span></>}
-            </button>
-          </>
-        )}
-        {action}
-      </div>
+      {mode === "live" && (
+        <div className="mt-1 grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            disabled={load.isPending}
+            onClick={() => load.mutate("a")}
+            className="h-7 text-xs font-bold rounded bg-violet-700/70 hover:bg-violet-600 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
+            title="Load → Deck A"
+          >
+            {load.isPending ? "…" : <><span>⤒</span><span>A</span></>}
+          </button>
+          <button
+            type="button"
+            disabled={load.isPending}
+            onClick={() => load.mutate("b")}
+            className="h-7 text-xs font-bold rounded bg-violet-900/70 hover:bg-violet-800 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
+            title="Load → Deck B"
+          >
+            {load.isPending ? "…" : <><span>⤒</span><span>B</span></>}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
