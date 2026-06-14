@@ -37,6 +37,72 @@ def _wait_for(predicate, timeout=2.0, interval=0.02):
     return False
 
 
+class _FakeLive:
+    """A stateful fake Ableton that models the track-management subset the
+    bridge's create/adopt paths exercise. Unlike a static num_tracks stub it
+    actually grows/shrinks its track list on create/delete and reflects names
+    on rename, so ``get_num_tracks`` / ``get_track_names`` replies stay
+    consistent with what the bridge just did — which is what the robust
+    create helper (count-delta confirmation + name verification) requires.
+
+    Run it as a context manager; it returns the (send_port, listen_port,
+    received) tuple. ``received`` is the list of every OSC message the fake
+    saw, for command-shape assertions.
+    """
+
+    def __init__(self, initial_names: list[str] | None = None) -> None:
+        self.names: list[str] = list(initial_names or [])
+        self.received: list[tuple[str, tuple[Any, ...]]] = []
+        self.send_port = _free_port()
+        self.listen_port = _free_port()
+        self._listener = AbletonOSCListener(port=self.send_port)
+        self._reply = udp_client.SimpleUDPClient("127.0.0.1", self.listen_port)
+        self._lock = __import__("threading").Lock()
+
+    def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
+        with self._lock:
+            self.received.append((addr, args))
+            if addr == "/live/song/create_audio_track":
+                # AbletonOSC appends at the end for index -1 (the only form we
+                # send). Give it a Live-default name like "5-Audio".
+                self.names.append(f"{len(self.names) + 1}-Audio")
+            elif addr == "/live/song/delete_track":
+                idx = int(args[0])
+                if 0 <= idx < len(self.names):
+                    self.names.pop(idx)
+            elif addr == "/live/track/set/name":
+                idx, name = int(args[0]), str(args[1])
+                if 0 <= idx < len(self.names):
+                    self.names[idx] = name
+            elif addr == "/live/song/get/num_tracks":
+                self._reply.send_message(
+                    "/live/song/get/num_tracks", [len(self.names)]
+                )
+            elif addr == "/live/song/get/track_names":
+                self._reply.send_message(
+                    "/live/song/get/track_names", list(self.names)
+                )
+
+    def __enter__(self) -> _FakeLive:
+        self._listener.on_any(self._on_any)
+        self._listener.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._listener.stop()
+
+    def make_bridge(self) -> AbletonBridge:
+        return AbletonBridge(send_port=self.send_port, listen_port=self.listen_port)
+
+    def count(self, addr: str) -> int:
+        with self._lock:
+            return sum(1 for a, _ in self.received if a == addr)
+
+    def args_for(self, addr: str) -> list[tuple[Any, ...]]:
+        with self._lock:
+            return [args for a, args in self.received if a == addr]
+
+
 # ---------------------------------------------------------------------------
 # Listener
 # ---------------------------------------------------------------------------
@@ -422,91 +488,59 @@ def _stub_track(id: int = 1, title: str = "My Song", file_path: str = "/tmp/miss
 def test_bridge_push_track_to_live_creates_tracks_in_order():
     """Ten OSC create_audio_track calls — 8 stem decks (A/B × 4 roles) +
     mix_a + mix_b, in deck-pair order (stems first, mixes last so APC40's
-    default 8-strip view maps 1:1 to the stem decks)."""
-    listen_port = _free_port()
-    send_port = _free_port()
+    default 8-strip view maps 1:1 to the stem decks).
 
-    # Fake Live replies "10 existing tracks" so the new ones land at 10..14.
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-    received: list[tuple[str, tuple[Any, ...]]] = []
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.on_any(lambda addr, args: received.append((addr, args)))
-    fake_live_listener.start()
-
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        track = _stub_track(id=42, title="Test Track")
-        stems = [
-            _stub_stem("drums", "/tmp/d.wav"),
-            _stub_stem("bass", "/tmp/b.wav"),
-            _stub_stem("vocals", "/tmp/v.wav"),
-            _stub_stem("other", "/tmp/o.wav"),
-        ]
-        result = bridge.push_track_to_live(track, stems, include_stems=True)
-
-        # Indices should be the next 10 slots (10..19) in deck-pair order:
-        # 8 stem decks first (A/B per role), then mix_a + mix_b. APC40's
-        # default 8-strip view maps to the 8 stem decks; mixes live
-        # beyond, reachable via bank-shift.
-        assert result["scene_index"] == 0
-        assert result["track_indices"]["drums_a"] == 10
-        assert result["track_indices"]["drums_b"] == 11
-        assert result["track_indices"]["bass_a"] == 12
-        assert result["track_indices"]["bass_b"] == 13
-        assert result["track_indices"]["vocals_a"] == 14
-        assert result["track_indices"]["vocals_b"] == 15
-        assert result["track_indices"]["other_a"] == 16
-        assert result["track_indices"]["other_b"] == 17
-        assert result["track_indices"]["mix_a"] == 18
-        assert result["track_indices"]["mix_b"] == 19
-
-        # We expect 10 create_audio_track messages.
-        assert _wait_for(
-            lambda: sum(
-                1 for a, _ in received if a == "/live/song/create_audio_track"
-            )
-            >= 10
-        )
-        creates = [a for a, _ in received if a == "/live/song/create_audio_track"]
-        assert len(creates) == 10
-        # Wait for all 10 name messages — they race with create_audio_track
-        # and may not all be in the buffer when the count check passes.
-        assert _wait_for(
-            lambda: sum(
-                1 for addr, _ in received if addr == "/live/track/set/name"
-            )
-            >= 10
-        )
-        names = [
-            args[1] for addr, args in received if addr == "/live/track/set/name"
-        ]
-        # Names include each stem role × side and both mix references.
-        joined = " | ".join(names)
-        assert "Drums A" in joined and "Drums B" in joined
-        assert "Bass A" in joined and "Bass B" in joined
-        assert "Vocals A" in joined and "Vocals B" in joined
-        assert "Other A" in joined and "Other B" in joined
-        assert "Mix A" in joined and "Mix B" in joined
-        # Both mix tracks are muted on creation (reference / parachute,
-        # not double-summed audio). mix_a is at idx 18, mix_b at idx 19.
-        # Wait for the mute messages — they're sent during track creation,
-        # which races with the create_audio_track count check above.
-        def saw_both_mutes() -> bool:
-            mutes = [
-                args for addr, args in received
-                if addr == "/live/track/set/mute"
+    Uses a stateful fake Live (10 pre-existing tracks) so the robust
+    create helper's count-delta confirmation lands the new tracks at the
+    real appended indices 10..19."""
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            track = _stub_track(id=42, title="Test Track")
+            stems = [
+                _stub_stem("drums", "/tmp/d.wav"),
+                _stub_stem("bass", "/tmp/b.wav"),
+                _stub_stem("vocals", "/tmp/v.wav"),
+                _stub_stem("other", "/tmp/o.wav"),
             ]
-            return (18, 1) in mutes and (19, 1) in mutes
-        assert _wait_for(saw_both_mutes)
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+            result = bridge.push_track_to_live(track, stems, include_stems=True)
+
+            # Indices should be the next 10 slots (10..19) in deck-pair order:
+            # 8 stem decks first (A/B per role), then mix_a + mix_b. APC40's
+            # default 8-strip view maps to the 8 stem decks; mixes live
+            # beyond, reachable via bank-shift.
+            assert result["scene_index"] == 0
+            assert result["track_indices"]["drums_a"] == 10
+            assert result["track_indices"]["drums_b"] == 11
+            assert result["track_indices"]["bass_a"] == 12
+            assert result["track_indices"]["bass_b"] == 13
+            assert result["track_indices"]["vocals_a"] == 14
+            assert result["track_indices"]["vocals_b"] == 15
+            assert result["track_indices"]["other_a"] == 16
+            assert result["track_indices"]["other_b"] == 17
+            assert result["track_indices"]["mix_a"] == 18
+            assert result["track_indices"]["mix_b"] == 19
+
+            # Exactly 10 create_audio_track messages — no duplicates.
+            assert live.count("/live/song/create_audio_track") == 10
+            # All 10 deck tracks got named with the canonical "Deck …" form.
+            joined = " | ".join(str(a[1]) for a in live.args_for("/live/track/set/name"))
+            assert "Drums A" in joined and "Drums B" in joined
+            assert "Bass A" in joined and "Bass B" in joined
+            assert "Vocals A" in joined and "Vocals B" in joined
+            assert "Other A" in joined and "Other B" in joined
+            assert "Mix A" in joined and "Mix B" in joined
+            # Both mix tracks are muted on creation (reference / parachute,
+            # not double-summed audio). mix_a at idx 18, mix_b at idx 19.
+            # Poll: styling sends trail the synchronous return on the fake's
+            # listener thread.
+            assert _wait_for(
+                lambda: (18, 1) in live.args_for("/live/track/set/mute")
+                and (19, 1) in live.args_for("/live/track/set/mute")
+            )
+        finally:
+            bridge.stop()
 
 
 def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
@@ -514,252 +548,181 @@ def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
     cell. Without this the UI's SceneGrid renders the SONG column as empty
     after every load — looks broken, even though the stems were loaded.
     """
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-    received: list[tuple[str, tuple[Any, ...]]] = []
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.on_any(lambda a, args: received.append((a, args)))
-    fake_live_listener.start()
-
     # Real on-disk files so the existence guards pass.
     mix_path = tmp_path / "song.wav"
     mix_path.write_bytes(b"RIFF")
     drums_path = tmp_path / "drums.wav"
     drums_path.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        track = _stub_track(id=7, title="My Song", file_path=str(mix_path))
-        stems = [_stub_stem("drums", str(drums_path))]
-        bridge.push_track_to_live(track, stems, include_stems=True)
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            track = _stub_track(id=7, title="My Song", file_path=str(mix_path))
+            stems = [_stub_stem("drums", str(drums_path))]
+            bridge.push_track_to_live(track, stems, include_stems=True)
 
-        # mix_a is at idx 18 (8 stem decks + mix_a). _pick_side picks A
-        # for the empty row, so the source mix file lands on mix_a not
-        # mix_b. Re-scan ``received`` each poll so we see messages that
-        # arrive after the assert is set up.
-        def saw_mix_clip() -> bool:
-            return any(
-                addr == "/live/clip_slot/create_audio_clip"
-                and args[0] == 18
-                and args[2] == str(mix_path)
-                for addr, args in received
+            # mix_a is at idx 18 (8 stem decks + mix_a). _pick_side picks A
+            # for the empty row, so the source mix file lands on mix_a not
+            # mix_b. Poll: the fake records OSC on its listener thread, which
+            # can lag the synchronous push_track_to_live return.
+            assert _wait_for(
+                lambda: any(
+                    args[0] == 18 and args[2] == str(mix_path)
+                    for args in live.args_for("/live/clip_slot/create_audio_clip")
+                )
             )
-        assert _wait_for(saw_mix_clip)
-        # _deck_cells records the side-matching mix cell.
-        assert (0, "mix_a") in bridge._deck_cells
-        assert bridge._deck_cells[(0, "mix_a")] == 7
-        # mix_b stays empty — only one side gets the mix per load.
-        assert (0, "mix_b") not in bridge._deck_cells
-        # Drums landed on the A side (same side as the mix).
-        assert (0, "drums_a") in bridge._deck_cells
-        assert bridge._deck_cells[(0, "drums_a")] == 7
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+            # _deck_cells records the side-matching mix cell.
+            assert (0, "mix_a") in bridge._deck_cells
+            assert bridge._deck_cells[(0, "mix_a")] == 7
+            # mix_b stays empty — only one side gets the mix per load.
+            assert (0, "mix_b") not in bridge._deck_cells
+            # Drums landed on the A side (same side as the mix).
+            assert (0, "drums_a") in bridge._deck_cells
+            assert bridge._deck_cells[(0, "drums_a")] == 7
+        finally:
+            bridge.stop()
 
 
 def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):
     """Single-stem loads (kinds=['drums']) must NOT drop the mix file —
     the mix cell stays empty so we don't fight the user's remix in progress.
     """
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
     mix_path = tmp_path / "song.wav"
     mix_path.write_bytes(b"RIFF")
     drums_path = tmp_path / "drums.wav"
     drums_path.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        track = _stub_track(id=7, file_path=str(mix_path))
-        stems = [_stub_stem("drums", str(drums_path))]
-        bridge.push_track_to_live(track, stems, kinds=["drums"])
-        # No mix entry on either side — single-stem load doesn't touch
-        # mix_a or mix_b.
-        mix_cells = [k for k in bridge._deck_cells if k[1].startswith("mix")]
-        assert mix_cells == []
-        # The drums stem landed on the A side (empty row → 'a').
-        assert (0, "drums_a") in bridge._deck_cells
-        assert (0, "drums_b") not in bridge._deck_cells
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            track = _stub_track(id=7, file_path=str(mix_path))
+            stems = [_stub_stem("drums", str(drums_path))]
+            bridge.push_track_to_live(track, stems, kinds=["drums"])
+            # No mix entry on either side — single-stem load doesn't touch
+            # mix_a or mix_b.
+            mix_cells = [k for k in bridge._deck_cells if k[1].startswith("mix")]
+            assert mix_cells == []
+            # The drums stem landed on the A side (empty row → 'a').
+            assert (0, "drums_a") in bridge._deck_cells
+            assert (0, "drums_b") not in bridge._deck_cells
+        finally:
+            bridge.stop()
 
 
 def test_bridge_promote_forced_side_enqueues_not_clobbers(tmp_path):
     """Promoting a rec onto a side whose cell is already loaded (and maybe
     playing) must enqueue on the next free scene of THAT side — never
     overwrite the occupied cell. Reproduces the promote-clobber bug."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
     drums1 = tmp_path / "drums1.wav"
     drums1.write_bytes(b"RIFF")
     drums2 = tmp_path / "drums2.wav"
     drums2.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        # First drums stem live-loaded onto Deck A at scene 0 (now "playing").
-        r1 = bridge.push_track_to_live(
-            _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
-        )
-        assert r1["scene_index"] == 0
-        assert bridge._deck_cells[(0, "drums_a")] == 1
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            # First drums stem live-loaded onto Deck A at scene 0 (playing).
+            r1 = bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
+            )
+            assert r1["scene_index"] == 0
+            assert bridge._deck_cells[(0, "drums_a")] == 1
 
-        # Promote a different drums rec, forced onto Deck A again. Must land
-        # on scene 1, NOT overwrite the scene-0 drums_a cell.
-        r2 = bridge.push_track_to_live(
-            _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"], side="a"
-        )
-        assert r2["scene_index"] == 1
-        assert r2["stems_loaded"] == 1
-        # Scene-0 cell preserved (still track 1); new cell at scene 1.
-        assert bridge._deck_cells[(0, "drums_a")] == 1
-        assert bridge._deck_cells[(1, "drums_a")] == 2
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+            # Promote a different drums rec, forced onto Deck A again. Must land
+            # on scene 1, NOT overwrite the scene-0 drums_a cell.
+            r2 = bridge.push_track_to_live(
+                _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"], side="a"
+            )
+            assert r2["scene_index"] == 1
+            assert r2["stems_loaded"] == 1
+            # Scene-0 cell preserved (still track 1); new cell at scene 1.
+            assert bridge._deck_cells[(0, "drums_a")] == 1
+            assert bridge._deck_cells[(1, "drums_a")] == 2
+            # Idempotency: the second load must NOT spawn a fresh deck set —
+            # 10 creates total (just the one initial provisioning).
+            assert live.count("/live/song/create_audio_track") == 10
+        finally:
+            bridge.stop()
 
 
 def test_bridge_promote_auto_side_uses_free_side_at_scene_zero(tmp_path):
     """With Deck A busy at scene 0 and no forced side, a promote should fill
     the free B side at the SAME scene rather than overwriting A or skipping
     to a fresh scene."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
     drums1 = tmp_path / "drums1.wav"
     drums1.write_bytes(b"RIFF")
     drums2 = tmp_path / "drums2.wav"
     drums2.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        bridge.push_track_to_live(
-            _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
-        )
-        # No forced side: should pick the free B side at scene 0.
-        r2 = bridge.push_track_to_live(
-            _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"]
-        )
-        assert r2["scene_index"] == 0
-        assert bridge._deck_cells[(0, "drums_a")] == 1
-        assert bridge._deck_cells[(0, "drums_b")] == 2
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums1))], kinds=["drums"], side="a"
+            )
+            # No forced side: should pick the free B side at scene 0.
+            r2 = bridge.push_track_to_live(
+                _stub_track(id=2), [_stub_stem("drums", str(drums2))], kinds=["drums"]
+            )
+            assert r2["scene_index"] == 0
+            assert bridge._deck_cells[(0, "drums_a")] == 1
+            assert bridge._deck_cells[(0, "drums_b")] == 2
+        finally:
+            bridge.stop()
 
 
 def test_bridge_push_track_to_live_include_stems_false_loads_no_cells():
     """include_stems=False loads zero cells but still provisions the 10
     reusable deck columns (8 stem decks A/B × 4 roles + mix_a + mix_b)
     so future loads have somewhere to land."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-    received: list[tuple[str, tuple[Any, ...]]] = []
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [0])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.on_any(lambda a, args: received.append((a, args)))
-    fake_live_listener.start()
-
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        result = bridge.push_track_to_live(
-            _stub_track(), [], include_stems=False
-        )
-        # All 10 deck columns get provisioned on first call.
-        assert set(result["track_indices"].keys()) == {
-            "drums_a", "drums_b",
-            "bass_a", "bass_b",
-            "vocals_a", "vocals_b",
-            "other_a", "other_b",
-            "mix_a", "mix_b",
-        }
-        # But nothing actually loaded since kinds resolved to [].
-        assert result["stems_loaded"] == 0
-        assert _wait_for(
-            lambda: sum(
-                1 for a, _ in received if a == "/live/song/create_audio_track"
+    with _FakeLive(initial_names=[]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.push_track_to_live(
+                _stub_track(), [], include_stems=False
             )
-            == 10
-        )
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+            # All 10 deck columns get provisioned on first call.
+            assert set(result["track_indices"].keys()) == {
+                "drums_a", "drums_b",
+                "bass_a", "bass_b",
+                "vocals_a", "vocals_b",
+                "other_a", "other_b",
+                "mix_a", "mix_b",
+            }
+            # First call appends at 0..9 (empty session).
+            assert result["track_indices"]["drums_a"] == 0
+            assert result["track_indices"]["mix_b"] == 9
+            # But nothing actually loaded since kinds resolved to [].
+            assert result["stems_loaded"] == 0
+            assert live.count("/live/song/create_audio_track") == 10
+        finally:
+            bridge.stop()
 
 
 def test_bridge_push_track_to_live_records_warning_for_missing_stem_file():
     """If a stem path doesn't exist on disk, we don't crash — we warn."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [0])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        track = _stub_track(file_path="/definitely/does/not/exist.wav")
-        stems = [_stub_stem("drums", "/also/missing.wav")]
-        result = bridge.push_track_to_live(track, stems, include_stems=True)
-        warns = " ".join(result["warnings"])
-        assert "drums stem file missing" in warns
-        # The "bass/vocals/other" stems aren't supplied -> their own warnings.
-        assert "No bass stem" in warns
-        assert "No vocals stem" in warns
-        assert "No other stem" in warns
-        # The full-mix file is never loaded as a clip, so its existence is
-        # not checked here — that was an older song-mode assumption.
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+    with _FakeLive(initial_names=[]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            track = _stub_track(file_path="/definitely/does/not/exist.wav")
+            stems = [_stub_stem("drums", "/also/missing.wav")]
+            result = bridge.push_track_to_live(track, stems, include_stems=True)
+            warns = " ".join(result["warnings"])
+            assert "drums stem file missing" in warns
+            # The "bass/vocals/other" stems aren't supplied -> their own warnings.
+            assert "No bass stem" in warns
+            assert "No vocals stem" in warns
+            assert "No other stem" in warns
+            # The full-mix file is never loaded as a clip, so its existence is
+            # not checked here — that was an older song-mode assumption.
+        finally:
+            bridge.stop()
 
 
 def test_bridge_push_track_to_live_proceeds_when_live_unreachable():
@@ -875,44 +838,27 @@ def test_bridge_crossfade_matches_als_writer_semantics():
 def test_bridge_create_deck_columns_assigns_crossfade_per_side():
     """_create_deck_columns sends /live/track/set/crossfade_assign for each of
     the 10 deck tracks: A-side → 0, B-side → 2, mix follows its side."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-    received: list[tuple[str, tuple[Any, ...]]] = []
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [0])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.on_any(lambda a, args: received.append((a, args)))
-    fake_live_listener.start()
-
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        bridge.push_track_to_live(_stub_track(), [], include_stems=False)
-        assert _wait_for(
-            lambda: sum(
-                1 for a, _ in received if a == "/live/track/set/crossfade_assign"
+    with _FakeLive(initial_names=[]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(_stub_track(), [], include_stems=False)
+            assert _wait_for(
+                lambda: live.count("/live/track/set/crossfade_assign") >= 10
             )
-            >= 10
-        )
-        assigns = {
-            args[0]: args[1]
-            for a, args in received
-            if a == "/live/track/set/crossfade_assign"
-        }
-        # Indices 0..9 in _DECK_KINDS order; A-side at even, B-side at odd
-        # for the 8 stem decks, then mix_a (8) / mix_b (9).
-        # drums_a=0 → A, drums_b=1 → B, ... mix_a=8 → A, mix_b=9 → B.
-        assert assigns[0] == AbletonOSCClient.CROSSFADE_A   # drums_a
-        assert assigns[1] == AbletonOSCClient.CROSSFADE_B   # drums_b
-        assert assigns[8] == AbletonOSCClient.CROSSFADE_A   # mix_a
-        assert assigns[9] == AbletonOSCClient.CROSSFADE_B   # mix_b
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+            assigns = {
+                args[0]: args[1]
+                for args in live.args_for("/live/track/set/crossfade_assign")
+            }
+            # Indices 0..9 in _DECK_KINDS order; A-side at even, B-side at odd
+            # for the 8 stem decks, then mix_a (8) / mix_b (9).
+            # drums_a=0 → A, drums_b=1 → B, ... mix_a=8 → A, mix_b=9 → B.
+            assert assigns[0] == AbletonOSCClient.CROSSFADE_A   # drums_a
+            assert assigns[1] == AbletonOSCClient.CROSSFADE_B   # drums_b
+            assert assigns[8] == AbletonOSCClient.CROSSFADE_A   # mix_a
+            assert assigns[9] == AbletonOSCClient.CROSSFADE_B   # mix_b
+        finally:
+            bridge.stop()
 
 
 def test_bridge_soloed_kinds_derived_from_solo_pushes():
@@ -969,71 +915,49 @@ def test_bridge_soloed_kinds_stable_canonical_order():
 def test_bridge_deck_map_revision_bumps_on_load(tmp_path):
     """deck_map_revision increments on each push_track_to_live (a deck-cell
     mutation), so the FE knows to refetch the deck map."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
     drums = tmp_path / "drums.wav"
     drums.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        assert bridge.state.deck_map_revision == 0
-        bridge.push_track_to_live(
-            _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
-        )
-        rev_after_load = bridge.state.deck_map_revision
-        assert rev_after_load >= 1
-        # A second load bumps again.
-        bridge.push_track_to_live(
-            _stub_track(id=2), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
-        )
-        assert bridge.state.deck_map_revision > rev_after_load
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            assert bridge.state.deck_map_revision == 0
+            bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            rev_after_load = bridge.state.deck_map_revision
+            assert rev_after_load >= 1
+            # A second load bumps again.
+            bridge.push_track_to_live(
+                _stub_track(id=2), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            assert bridge.state.deck_map_revision > rev_after_load
+        finally:
+            bridge.stop()
 
 
 def test_bridge_deck_map_revision_bumps_on_delete_and_reset(tmp_path):
     """delete_cell and reset_deck_columns each bump the revision."""
-    listen_port = _free_port()
-    send_port = _free_port()
-    fake_live_listener = AbletonOSCListener(port=send_port)
-    reply_client = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-
-    def on_query(_addr, _args):
-        reply_client.send_message("/live/song/get/num_tracks", [10])
-
-    fake_live_listener.on("/live/song/get/num_tracks", on_query)
-    fake_live_listener.start()
-
     drums = tmp_path / "drums.wav"
     drums.write_bytes(b"RIFF")
 
-    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
-    bridge.start()
-    try:
-        bridge.push_track_to_live(
-            _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
-        )
-        rev = bridge.state.deck_map_revision
-        # drums_a deck track index is 10 (base 10 + drums_a at offset 0).
-        bridge.delete_cell(track_index=10, slot_index=0)
-        assert bridge.state.deck_map_revision == rev + 1
-        rev = bridge.state.deck_map_revision
-        bridge.reset_deck_columns()
-        assert bridge.state.deck_map_revision == rev + 1
-    finally:
-        bridge.stop()
-        fake_live_listener.stop()
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            rev = bridge.state.deck_map_revision
+            # drums_a deck track index is 10 (base 10 + drums_a at offset 0).
+            bridge.delete_cell(track_index=10, slot_index=0)
+            assert bridge.state.deck_map_revision == rev + 1
+            rev = bridge.state.deck_map_revision
+            bridge.reset_deck_columns()
+            assert bridge.state.deck_map_revision == rev + 1
+        finally:
+            bridge.stop()
 
 
 def test_bridge_deck_map_revision_bumps_on_adopt():
@@ -1064,3 +988,330 @@ def test_bridge_state_to_dict_includes_new_contract_fields():
     assert d["soloed_kinds"] == ["drums_a", "mix_b"]
     assert d["deck_map_revision"] == 7
     assert d["crossfader"] == -0.25
+
+
+# ---------------------------------------------------------------------------
+# Robust create helper — lookup-after-create, never trust a prediction.
+# Regression for the duplicate-deck + preview-leak bugs (both predicted an
+# index from get_num_tracks BEFORE create_audio_track, then named/routed at
+# the guessed index).
+# ---------------------------------------------------------------------------
+
+# Canonical prefixed deck names the bridge CREATES, in _DECK_KINDS order.
+_PREFIXED_DECK_NAMES = [
+    "Deck Drums A", "Deck Drums B",
+    "Deck Bass A", "Deck Bass B",
+    "Deck Vocals A", "Deck Vocals B",
+    "Deck Other A", "Deck Other B",
+    "Deck Mix A", "Deck Mix B",
+]
+_BARE_DECK_NAMES = [
+    "Drums A", "Drums B",
+    "Bass A", "Bass B",
+    "Vocals A", "Vocals B",
+    "Other A", "Other B",
+    "Mix A", "Mix B",
+]
+
+
+def test_create_helper_returns_real_appended_index():
+    """The robust helper reads the count, appends, confirms the +1 delta, and
+    returns the REAL appended index (== count-before), then names it there."""
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(5)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            idx = bridge._create_track_and_get_index("Cue", timeout=1.0)
+            assert idx == 5  # appended after the 5 pre-existing tracks
+            # It named the track at the real index, not a guess. Poll: the
+            # fake records the rename on its listener thread.
+            assert _wait_for(
+                lambda: (5, "Cue")
+                in [(a[0], a[1]) for a in live.args_for("/live/track/set/name")]
+            )
+            # The fake's track list reflects the rename at index 5.
+            assert _wait_for(lambda: len(live.names) > 5 and live.names[5] == "Cue")
+        finally:
+            bridge.stop()
+
+
+def test_create_helper_returns_none_on_timeout():
+    """If Live never confirms the count went up (silent / stuck), the helper
+    refuses to name a guessed index and returns None."""
+    # A non-stateful fake that answers num_tracks with a STUCK count and
+    # never grows on create — models a Live that dropped the create.
+    listen_port = _free_port()
+    send_port = _free_port()
+    fake = AbletonOSCListener(port=send_port)
+    reply = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
+    fake.on(
+        "/live/song/get/num_tracks",
+        lambda _a, _args: reply.send_message("/live/song/get/num_tracks", [3]),
+    )
+    fake.start()
+    bridge = AbletonBridge(send_port=send_port, listen_port=listen_port)
+    bridge.start()
+    try:
+        # Count is stuck at 3 forever → never reaches before+1 → None.
+        assert bridge._create_track_and_get_index("Cue", timeout=0.3) is None
+    finally:
+        bridge.stop()
+        fake.stop()
+
+
+def test_create_helper_returns_none_when_live_unreachable():
+    """No reply to num_tracks at all → helper returns None (can't even read
+    the starting count)."""
+    bridge = AbletonBridge(send_port=_free_port(), listen_port=_free_port())
+    bridge.start()
+    try:
+        assert bridge._create_track_and_get_index("Cue", timeout=0.1) is None
+    finally:
+        bridge.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 — preview must use a dedicated "Cue" track, never leak to a deck.
+# ---------------------------------------------------------------------------
+
+
+def test_preview_creates_and_routes_cue_track_at_real_index(tmp_path):
+    """With no "Cue" track present, preview creates one at the REAL appended
+    index, routes it to Ext. Out 3/4, and fires the clip THERE — not into a
+    guessed/deck index. Reproduces the preview-leak fix."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+
+    # Session already has the 10 deck tracks (so a naive prediction would
+    # collide with deck indices). Cue must land at index 10.
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio), label="PREVIEW x")
+            assert result["ok"] is True
+            cue_idx = result["cue_track_idx"]
+            assert cue_idx == 10  # appended after the 10 deck tracks
+            # The new track was named "Cue" at the real index.
+            assert _wait_for(lambda: len(live.names) > 10 and live.names[10] == "Cue")
+            # Output routed to the headphone cue bus (Ext. Out / 3/4).
+            assert _wait_for(
+                lambda: any(
+                    a == (10, "Ext. Out")
+                    for a in live.args_for("/live/track/set/output_routing_type")
+                )
+            )
+            assert _wait_for(
+                lambda: any(
+                    a == (10, "3/4")
+                    for a in live.args_for("/live/track/set/output_routing_channel")
+                )
+            )
+            # The clip was fired on the Cue track (idx 10), NEVER a deck index.
+            assert _wait_for(
+                lambda: (10, bridge._CUE_SLOT) in live.args_for("/live/clip_slot/fire")
+            )
+            fires = live.args_for("/live/clip_slot/fire")
+            deck_indices = set(range(10))  # the 10 deck tracks
+            assert not any(t in deck_indices for t, _slot in fires), (
+                f"preview fired into a deck track: {fires}"
+            )
+        finally:
+            bridge.stop()
+
+
+def test_preview_adopts_existing_cue_track_without_creating(tmp_path):
+    """If a track named exactly "Cue" already exists, preview ADOPTS it (no
+    create_audio_track) and fires there."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+
+    # Cue track already present at index 10, after the 10 decks.
+    names = list(_PREFIXED_DECK_NAMES) + ["Cue"]
+    with _FakeLive(initial_names=names) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio))
+            assert result["ok"] is True
+            assert result["cue_track_idx"] == 10
+            # Adoption → zero new tracks created for the cue.
+            assert live.count("/live/song/create_audio_track") == 0
+            # Fired on the adopted Cue track only.
+            assert _wait_for(
+                lambda: (10, bridge._CUE_SLOT) in live.args_for("/live/clip_slot/fire")
+            )
+            assert not any(
+                t < 10 for t, _slot in live.args_for("/live/clip_slot/fire")
+            )
+        finally:
+            bridge.stop()
+
+
+def test_preview_refuses_when_live_unreachable_no_random_fire(tmp_path):
+    """When Live can't be reached (no Cue track confirmable), preview returns
+    ok=False with a warning and fires NOTHING — never blasts a guessed index
+    onto the master."""
+    audio = tmp_path / "vocals.wav"
+    audio.write_bytes(b"RIFF")
+
+    received: list[tuple[str, tuple]] = []
+    # A fake on the bridge's send port that RECORDS commands but never
+    # replies, so num_tracks/track_names time out (Live "unreachable").
+    send_port = _free_port()
+    cmd_listener = AbletonOSCListener(port=send_port)
+    cmd_listener.on_any(lambda a, args: received.append((a, args)))
+    cmd_listener.start()
+    bridge = AbletonBridge(send_port=send_port, listen_port=_free_port())
+    bridge.start()
+    try:
+        result = bridge.preview_audio(str(audio))
+        assert result["ok"] is False
+        assert result["cue_track_idx"] is None
+        assert result["warnings"]
+        # No clip was ever fired — the whole point of the fix.
+        assert not any(a == "/live/clip_slot/fire" for a, _ in received)
+    finally:
+        bridge.stop()
+        cmd_listener.stop()
+
+
+def test_preview_does_not_fire_into_known_deck_index(tmp_path):
+    """End-to-end guard: across create + adopt, the preview clip is never
+    fired into any index the bridge knows to be a deck column."""
+    audio = tmp_path / "drums.wav"
+    audio.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            # Adopt the 10 deck columns so the bridge knows their indices.
+            cols = bridge.recover_deck_columns(timeout=1.0)
+            assert cols is not None
+            deck_indices = set(cols.values())
+            bridge.preview_audio(str(audio))
+            assert _wait_for(lambda: bool(live.args_for("/live/clip_slot/fire")))
+            for t, _slot in live.args_for("/live/clip_slot/fire"):
+                assert t not in deck_indices, f"preview fired into deck idx {t}"
+        finally:
+            bridge.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 — live-loading stems must ADOPT existing deck columns, never spawn a
+# duplicate set. Idempotency across re-loads + restarts + opened .als exports.
+# ---------------------------------------------------------------------------
+
+
+def test_load_adopts_existing_prefixed_decks_creates_zero_tracks(tmp_path):
+    """When all 10 "Deck …" columns already exist (prior load / restart), a
+    load REUSES them and creates ZERO new tracks."""
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            # Adopted the existing decks at their real indices 0..9.
+            assert result["track_indices"]["drums_a"] == 0
+            assert result["track_indices"]["mix_b"] == 9
+            # ZERO creates — the columns were adopted, not recreated.
+            assert live.count("/live/song/create_audio_track") == 0
+            # Total tracks unchanged (no duplicate "Deck …" set).
+            assert len(live.names) == 10
+            # Clip loaded into the adopted drums_a column (index 0).
+            assert _wait_for(
+                lambda: any(
+                    a[0] == 0 for a in live.args_for("/live/clip_slot/create_audio_clip")
+                )
+            )
+        finally:
+            bridge.stop()
+
+
+def test_load_adopts_existing_bare_als_decks_creates_zero_tracks(tmp_path):
+    """Opening a static .als export yields BARE deck names ("Drums A" … "Mix
+    B"). A load must adopt those too and create nothing."""
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_BARE_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            assert result["track_indices"]["drums_a"] == 0
+            assert result["track_indices"]["mix_b"] == 9
+            assert live.count("/live/song/create_audio_track") == 0
+            assert len(live.names) == 10
+        finally:
+            bridge.stop()
+
+
+def test_two_loads_do_not_duplicate_decks(tmp_path):
+    """A second load (and a fresh bridge against the same session, modelling a
+    backend restart) must NOT spawn a second set of "Deck …" tracks."""
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    # Start from a CLEAN session — the first load provisions the 10 decks.
+    with _FakeLive(initial_names=[]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=1), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            assert live.count("/live/song/create_audio_track") == 10
+            assert len(live.names) == 10
+            # Second load on the same bridge — cached columns reused, no creates.
+            bridge.push_track_to_live(
+                _stub_track(id=2), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            assert live.count("/live/song/create_audio_track") == 10  # still 10
+            assert len(live.names) == 10  # no duplicate set
+
+            # Simulate a backend restart: brand-new bridge, same Live session
+            # (the 10 deck tracks persist in `live.names`). Its first load
+            # must ADOPT, not recreate.
+            bridge.stop()
+            bridge2 = live.make_bridge()
+            bridge2.start()
+            bridge2.push_track_to_live(
+                _stub_track(id=3), [_stub_stem("drums", str(drums))], kinds=["drums"], side="a"
+            )
+            assert live.count("/live/song/create_audio_track") == 10  # STILL 10
+            assert len(live.names) == 10  # no second "Deck …" set
+            bridge2.stop()
+        finally:
+            pass
+
+
+def test_create_deck_columns_fills_only_missing_columns(tmp_path):
+    """Partial layout (some deck columns present, some missing) → adopt the
+    present ones, create ONLY the missing ones."""
+    # Only the 8 stem decks exist; both mix columns are missing.
+    partial = list(_PREFIXED_DECK_NAMES[:8])  # drums..other A/B, no mixes
+    with _FakeLive(initial_names=partial) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            cols = bridge._create_deck_columns(start_index=len(live.names))
+            # The 8 existing stem decks adopted at 0..7.
+            assert cols["drums_a"] == 0
+            assert cols["other_b"] == 7
+            # The 2 missing mix columns created → appended at 8 and 9.
+            assert cols["mix_a"] == 8
+            assert cols["mix_b"] == 9
+            # Exactly 2 creates (just the missing mix columns).
+            assert live.count("/live/song/create_audio_track") == 2
+            assert _wait_for(
+                lambda: len(live.names) > 9
+                and live.names[8] == "Deck Mix A"
+                and live.names[9] == "Deck Mix B"
+            )
+        finally:
+            bridge.stop()
