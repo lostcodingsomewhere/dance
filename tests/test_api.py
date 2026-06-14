@@ -62,6 +62,15 @@ class _FakeClient:
     def set_track_volume(self, track: int, volume: float) -> None:
         self.calls.append(("set_track_volume", (track, volume)))
 
+    def set_clip_loop_start(self, track: int, slot: int, beats: float) -> None:
+        self.calls.append(("set_clip_loop_start", (track, slot, beats)))
+
+    def set_clip_start_marker(self, track: int, slot: int, beats: float) -> None:
+        self.calls.append(("set_clip_start_marker", (track, slot, beats)))
+
+    def set_clip_launch_quantization(self, track: int, slot: int, value: int) -> None:
+        self.calls.append(("set_clip_launch_quantization", (track, slot, value)))
+
 
 class FakeAbletonBridge:
     """Stand-in for AbletonBridge — no sockets, no threads."""
@@ -510,6 +519,40 @@ def test_ableton_endpoints_call_client(client: TestClient, fake_bridge: FakeAble
     assert fake_bridge.client.calls[2] == ("set_tempo", (124.0,))
     assert fake_bridge.client.calls[3] == ("fire_clip", (2, 1))
     assert fake_bridge.client.calls[4] == ("set_track_volume", (3, 0.8))
+
+
+def test_seek_clip_sets_instant_launch_quant_before_fire(
+    client: TestClient, fake_bridge: FakeAbletonBridge
+) -> None:
+    """Click-to-seek must jump instantly: the endpoint sets loop_start +
+    start_marker, forces launch_quantization=None (0), THEN re-fires — so the
+    fire isn't bar-quantized. Regression for the up-to-1-bar seek lag."""
+    r = client.post("/api/v1/ableton/transport/seek/4/2?position=12.5")
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "track_index": 4,
+        "slot_index": 2,
+        "position": 12.5,
+    }
+
+    names = [c[0] for c in fake_bridge.client.calls]
+    # All four OSC sends happened, with the markers + the instant-launch
+    # override preceding the fire.
+    assert "set_clip_launch_quantization" in names
+    assert "fire_clip" in names
+    lq_pos = names.index("set_clip_launch_quantization")
+    fire_pos = names.index("fire_clip")
+    assert lq_pos < fire_pos, "launch_quantization must be set BEFORE the fire"
+    # launch_quantization sent with value 0 (None) on the seeked clip.
+    assert fake_bridge.client.calls[lq_pos] == (
+        "set_clip_launch_quantization",
+        (4, 2, 0),
+    )
+    # Markers precede the fire too (the re-fire must read the new position).
+    assert names.index("set_clip_loop_start") < fire_pos
+    assert names.index("set_clip_start_marker") < fire_pos
+    assert fake_bridge.client.calls[-1] == ("fire_clip", (4, 2))
 
 
 def test_load_track_404_when_missing(client: TestClient) -> None:
