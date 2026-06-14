@@ -2060,6 +2060,12 @@ class AbletonBridge:
             self.client.delete_clip(cue_idx, self._CUE_SLOT)
         except OSError:  # pragma: no cover - best-effort
             pass
+        # Drop any stale cue playhead from a prior preview (a late
+        # playing_position frame can land just after stop_preview's unsubscribe
+        # and linger). Clearing here means the new preview starts with NO
+        # playhead — it fills in from the first real position frame — instead of
+        # flashing the previous preview's last position.
+        self.state.playing_positions.pop(cue_idx, None)
 
         try:
             # 1. Drop the sample in. AbletonOSC's create_audio_clip is async
@@ -2116,6 +2122,19 @@ class AbletonBridge:
                     f"{self._CUE_PLAY_CONFIRM_TIMEOUT:.0f}s (sample may still "
                     "be decoding, or the fork doesn't expose is_playing)."
                 )
+            # 5. Subscribe the cue clip's playing_position so the companion's
+            #    preview waveform gets a REAL playhead (track_index → beats,
+            #    pushed by Live while it plays, landing in
+            #    AbletonState.playing_positions via _on_playing_position).
+            #    Without this the cue track is never in playing_positions, so
+            #    the FE falls back to the master transport beat — which has no
+            #    relationship to where this independently-fired, looping clip
+            #    actually is, hence the frozen/wrong preview playhead. The deck
+            #    columns get the same subscription in _subscribe_deck_columns.
+            try:
+                self.client.start_listen_clip_position(cue_idx, self._CUE_SLOT)
+            except OSError:  # pragma: no cover - best-effort
+                pass
         except OSError as exc:
             warnings.append(f"OSC send failed: {exc}")
             return {
@@ -2178,4 +2197,15 @@ class AbletonBridge:
             self.client.delete_clip(self._cue_track_idx, self._CUE_SLOT)
         except OSError:  # pragma: no cover - best-effort
             pass
+        # Stop the playing_position push and drop the cue's stale playhead so
+        # the FE clears it immediately (mirrors _on_playing_clip's unsubscribe
+        # for deck columns).
+        try:
+            self.client.stop_listen_clip_position(
+                self._cue_track_idx, self._CUE_SLOT
+            )
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        if self.state.playing_positions.pop(self._cue_track_idx, None) is not None:
+            self._broadcast()
         return {"ok": True, "cleared": True}
