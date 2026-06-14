@@ -376,63 +376,101 @@ def test_get_track_stems(client: TestClient, session, make_track) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _add_embedding_neighbor_edge(session, from_id: int, to_id: int, weight: float = 0.9) -> None:
+    """Insert a single EMBEDDING_NEIGHBOR edge (one direction).
+
+    Post graph-collapse, the seed recommender draws its candidate pool from
+    EMBEDDING_NEIGHBOR edges only, then scores each candidate live.
+    """
+    import json
+
+    cosine = weight * 2.0 - 1.0  # invert the (cos+1)/2 mapping
+    session.add(
+        TrackEdge(
+            from_track_id=from_id,
+            to_track_id=to_id,
+            kind=EdgeKind.EMBEDDING_NEIGHBOR.value,
+            weight=weight,
+            meta=json.dumps({"cosine": cosine}),
+            computed_at=now_utc(),
+        )
+    )
+
+
 def test_recommend_single_seed(client: TestClient, session, make_track) -> None:
+    """The candidate with higher cosine embedding similarity ranks first."""
+    import numpy as np
+
+    from dance.core.database import TrackEmbedding
+    from dance.core.serialization import encode_embedding
+
     seed = make_track(title="seed")
     near = make_track(title="near")
     far = make_track(title="far")
-    session.add_all(
-        [
-            TrackEdge(
-                from_track_id=seed.id,
-                to_track_id=near.id,
-                kind=EdgeKind.HARMONIC_COMPAT.value,
-                weight=0.9,
-                computed_at=now_utc(),
-            ),
-            TrackEdge(
-                from_track_id=seed.id,
-                to_track_id=far.id,
-                kind=EdgeKind.HARMONIC_COMPAT.value,
-                weight=0.3,
-                computed_at=now_utc(),
-            ),
-        ]
-    )
+
+    # Add embeddings so the live scorer has vibe scores.
+    def _emb(tid, vec):
+        session.add(
+            TrackEmbedding(
+                track_id=tid,
+                stem_file_id=None,
+                model="test",
+                model_version=None,
+                dim=len(vec),
+                embedding=encode_embedding(np.array(vec, dtype=np.float32)),
+            )
+        )
+
+    _emb(seed.id, [1.0, 0.0, 0.0])
+    _emb(near.id, [0.99, 0.1, 0.0])  # close to seed
+    _emb(far.id, [-1.0, 0.0, 0.0])  # far from seed
+
+    # Embedding-neighbor edges (the candidate pool).
+    _add_embedding_neighbor_edge(session, seed.id, near.id, weight=0.99)
+    _add_embedding_neighbor_edge(session, seed.id, far.id, weight=0.01)
     session.commit()
 
     r = client.post("/api/v1/recommend", json={"seeds": [seed.id], "k": 5})
     assert r.status_code == 200
     rows = r.json()
-    assert [row["track_id"] for row in rows] == [near.id, far.id]
-    assert rows[0]["score"] > rows[1]["score"]
+    # near and far both surface; near must rank higher.
+    ids = [row["track_id"] for row in rows]
+    assert near.id in ids
+    assert far.id in ids
+    near_score = next(row["score"] for row in rows if row["track_id"] == near.id)
+    far_score = next(row["score"] for row in rows if row["track_id"] == far.id)
+    assert near_score > far_score
 
 
 def test_recommend_excludes_seeds_and_exclude(client: TestClient, session, make_track) -> None:
+    """Seeds and explicitly excluded tracks must not appear in results."""
+    import numpy as np
+
+    from dance.core.database import TrackEmbedding
+    from dance.core.serialization import encode_embedding
+
     seed = make_track(title="seed")
     other = make_track(title="other")
     skip = make_track(title="skip")
-    session.add_all(
-        [
-            # seed -> other
-            TrackEdge(
-                from_track_id=seed.id,
-                to_track_id=other.id,
-                kind=EdgeKind.TAG_OVERLAP.value,
-                weight=0.5,
-                computed_at=now_utc(),
-            ),
-            # seed -> skip
-            TrackEdge(
-                from_track_id=seed.id,
-                to_track_id=skip.id,
-                kind=EdgeKind.TAG_OVERLAP.value,
-                weight=0.5,
-                computed_at=now_utc(),
-            ),
-            # seed -> seed-like self should never appear (CHECK constraint;
-            # we simulate by using a separate "fake-self" edge from seed to seed via different edge — not allowed.)
-        ]
-    )
+
+    def _emb(tid, vec):
+        session.add(
+            TrackEmbedding(
+                track_id=tid,
+                stem_file_id=None,
+                model="test",
+                model_version=None,
+                dim=len(vec),
+                embedding=encode_embedding(np.array(vec, dtype=np.float32)),
+            )
+        )
+
+    _emb(seed.id, [1.0, 0.0])
+    _emb(other.id, [0.9, 0.1])
+    _emb(skip.id, [0.9, 0.1])
+
+    _add_embedding_neighbor_edge(session, seed.id, other.id)
+    _add_embedding_neighbor_edge(session, seed.id, skip.id)
     session.commit()
 
     r = client.post(

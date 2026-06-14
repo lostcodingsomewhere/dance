@@ -18,7 +18,7 @@ from dance.api.schemas import (
     TextRecommendRequest,
 )
 from dance.config import Settings
-from dance.core.database import EdgeKind, Track
+from dance.core.database import Track
 from dance.recommender.recommender import (
     VALID_COLUMNS,
     Recommender,
@@ -31,41 +31,15 @@ _clap_lock = threading.Lock()
 router = APIRouter(prefix="/recommend", tags=["recommend"])
 
 
-def _parse_kinds(values: list[str] | None) -> list[EdgeKind] | None:
-    if values is None:
-        return None
-    try:
-        return [EdgeKind(v) for v in values]
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid edge kind: {exc}") from exc
-
-
-def _parse_weights(values: dict[str, float] | None) -> dict[EdgeKind, float] | None:
-    if values is None:
-        return None
-    try:
-        return {EdgeKind(k): float(v) for k, v in values.items()}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid edge kind: {exc}") from exc
-
-
 def _run_recommend(
     session: Session,
     *,
     seeds: list[int],
     k: int,
-    kinds: list[str] | None,
-    weights: dict[str, float] | None,
     exclude: list[int] | None,
 ) -> list[dict]:
     rec = Recommender(session)
-    results = rec.recommend(
-        seeds=seeds,
-        k=k,
-        kinds=_parse_kinds(kinds),
-        weights=_parse_weights(weights),
-        exclude=exclude,
-    )
+    results = rec.recommend(seeds=seeds, k=k, exclude=exclude)
     out: list[dict] = []
     for r in results:
         track = session.get(Track, r.track_id)
@@ -95,8 +69,6 @@ def post_recommend(
         session,
         seeds=body.seeds,
         k=body.k,
-        kinds=body.kinds,
-        weights=body.weights,
         exclude=body.exclude,
     )
 
@@ -111,8 +83,6 @@ def recommend_by_seed(
         session,
         seeds=[track_id],
         k=k,
-        kinds=None,
-        weights=None,
         exclude=None,
     )
 
