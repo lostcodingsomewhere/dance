@@ -14,7 +14,7 @@ import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
 
 /**
- * Cue strip — the parallel surface to ComboStrip for *what's in headphones*.
+ * Cue strip — the parallel surface to TwoDeckStrip for *what's in headphones*.
  *
  * Materializes only when something is being auditioned through the Cue
  * track (Scarlett 4i4 outs 3/4 → headphones). Shows the source-track

@@ -67,7 +67,7 @@ const SECTION_ACCENT: Record<
  * `preserveAspectRatio="none"`. Color defaults to `currentColor` so a Tailwind
  * `text-*` class on the wrapper inherits down to the bars.
  *
- * Used by ComboStrip (playing stems) and CueStrip (cueing stems) — same
+ * Used by TwoDeckStrip (playing stems) and CueStrip (cueing stems) — same
  * primitive, different colors per context.
  */
 export function Waveform({

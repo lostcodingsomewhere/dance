@@ -56,7 +56,7 @@ interface AppState {
    * the user can drag column headers around to reorder. Persisted to
    * localStorage so the layout sticks across reloads. Reordering is
    * purely cosmetic — the underlying Ableton track indices don't move;
-   * we just iterate this list when rendering SceneGrid / ComboStrip /
+   * we just iterate this list when rendering SceneGrid / TwoDeckStrip /
    * BoothColumnHeaders / rec banners.
    */
   stemColumnOrder: string[];

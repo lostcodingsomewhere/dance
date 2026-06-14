@@ -308,7 +308,7 @@ export interface LoadedDeck {
 // Mirrors src/dance/api/schemas.py::DeckCellOut + DeckMapOut. The bridge
 // is the source of truth for which cells (scene × stem-kind) are loaded
 // from which source tracks. The FE polls /ableton/decks to render the
-// SceneGrid + ComboStrip.
+// SceneGrid + TwoDeckStrip.
 export interface DeckCell {
   scene_index: number;
   kind: string; // "drums" | "bass" | "vocals" | "other"

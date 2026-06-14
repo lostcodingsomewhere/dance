@@ -20,8 +20,8 @@ export function useTrackWaveform(
 }
 
 /**
- * Fetch a stem's waveform peaks. Used by ComboStrip's per-role cards (one
- * waveform per playing stem) so cells reveal what's actually playing.
+ * Fetch a stem's waveform peaks. Used by TwoDeckStrip's deck panels (the
+ * stacked per-stem waveforms) so each side reveals what's actually playing.
  */
 export function useStemWaveform(
   stemFileId: number | null | undefined,

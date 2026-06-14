@@ -12,8 +12,8 @@ import type { DeckCell } from "../types";
 import { Waveform } from "./Waveform";
 
 /**
- * Two-deck "now playing" strip — replaces the old per-role ComboStrip
- * with a Traktor-style layout: one big deck panel per side (A on top,
+ * Two-deck "now playing" strip — replaces the old per-role combo-strip
+ * layout with a Traktor-style layout: one big deck panel per side (A on top,
  * B below), each showing the anchored song's metadata header plus a
  * stacked stem waveform.
  *
@@ -751,8 +751,8 @@ function DeckWaveform({
 }) {
   // Pull the mix's full-track waveform if available; falls back to a
   // single stem's waveform when no mix cell exists yet (partial loads).
-  // Reuses the same hooks as ComboStrip — both are stable across renders
-  // and no-op when their ids are null.
+  // Reuses the shared waveform hooks (useTrackWaveform / useStemWaveform)
+  // — both are stable across renders and no-op when their ids are null.
   const mixCell = sceneIdx != null
     ? cellAt.get(`${sceneIdx}|mix_${side}`)
     : undefined;

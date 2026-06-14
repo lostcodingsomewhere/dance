@@ -1,7 +1,7 @@
 /**
  * Time/number formatting helpers shared across companion-app views.
  *
- * Kept in one place so SceneGrid, ComboStrip, CueStrip, SetRail, SetEditor,
+ * Kept in one place so SceneGrid, TwoDeckStrip, CueStrip, SetRail, SetEditor,
  * CommandBar, etc. render times consistently. Before this lived here, the
  * mm:ss formatting was inlined in CommandBar.tsx and nowhere else — so
  * stem/song rows everywhere else had no duration display at all.

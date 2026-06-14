@@ -54,8 +54,8 @@ export function Booth() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <main className="flex-1 flex flex-col min-h-0 gap-2 px-4 py-3 overflow-y-auto">
-        {/* Two-deck Traktor-style "now playing" — replaces ComboStrip.
-            One stacked-stem waveform per deck side. */}
+        {/* Two-deck Traktor-style "now playing" — replaces the old
+            combo strip. One stacked-stem waveform per deck side. */}
         <TwoDeckStrip />
         {/* Crossfader bar — mirrors APC40 hardware crossfader, also
             drag-to-set on screen. Sits visually between the two deck
