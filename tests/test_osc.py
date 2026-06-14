@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import socket
 import time
+from pathlib import Path
 from typing import Any
 
 from pythonosc import udp_client
@@ -1449,6 +1450,22 @@ def test_preview_refires_until_clip_actually_plays(tmp_path):
             bridge.stop()
 
 
+def test_cue_play_timeout_is_longer_for_compressed_sources():
+    """A cold mp3 decodes lazily after the clip object exists, so it needs a
+    longer play-confirm ceiling than an instant PCM stem — otherwise the
+    re-fire loop gives up and a song/mix preview sits frozen at 0. PCM
+    (wav/aiff) keeps the short ceiling so a genuine failure surfaces fast."""
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        short = bridge._CUE_PLAY_CONFIRM_TIMEOUT
+        long = bridge._CUE_PLAY_CONFIRM_TIMEOUT_COMPRESSED
+        assert long > short
+        for pcm in ["drums.wav", "x.AIFF", "stem.aif"]:
+            assert bridge._cue_play_timeout_for(Path(pcm)) == short
+        for comp in ["song.mp3", "x.m4a", "x.flac", "x.ogg", "x.opus", "x.aac"]:
+            assert bridge._cue_play_timeout_for(Path(comp)) == long
+
+
 def test_preview_subscribes_cue_clip_position_for_playhead(tmp_path):
     """After a preview fires, the bridge subscribes the cue clip's
     playing_position so the companion's preview waveform gets a REAL playhead
@@ -1463,6 +1480,17 @@ def test_preview_subscribes_cue_clip_position_for_playhead(tmp_path):
             result = bridge.preview_audio(str(audio), label="PREVIEW song")
             assert result["ok"] is True
             cue_idx = result["cue_track_idx"]
+
+            # The preview clip is unwarped (so long mp3s fire fast + audition at
+            # native tempo); position + seek are then in seconds, not beats.
+            assert _wait_for(
+                lambda: any(
+                    int(a[0]) == cue_idx
+                    and int(a[1]) == bridge._CUE_SLOT
+                    and int(a[2]) == 0
+                    for a in live.args_for("/live/clip/set/warping")
+                )
+            )
 
             # The cue slot's playing_position was subscribed.
             assert _wait_for(
