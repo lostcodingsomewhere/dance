@@ -302,50 +302,59 @@ function RecsList({
 }
 
 /**
- * One role column: a clearly-labelled PLAN zone (your queued picks, emerald
- * edge) on top, then a RECS zone below. Same column in the Set page (plan-
- * scored recs, no deck-load) and the Booth (live recs + deck-load).
+ * A role column is rendered as three horizontal BANDS across the grid (see
+ * RoleColumnsGrid): the header, the PLAN band (your queued picks), and the RECS
+ * band (recommendations). Splitting them into bands lets the plan zones share
+ * one stretched row — so an empty "nothing queued" lines up with a filled card
+ * next to it — while each recs list keeps its own height (a column with fewer
+ * recs doesn't leave dead space). It also gives a natural seam between
+ * "added" (plan) and "recommended" (recs).
  */
-export function RoleColumn({
+
+/** The role's colored title cell. */
+export function ColumnHeader({ role }: { role: PlanRole }) {
+  const styles = ROLE_STYLES[visRole(role)];
+  return (
+    <div className={`rounded px-2 py-1 text-[10px] font-semibold uppercase text-center border ${styles.header}`}>
+      {roleLabel(visRole(role))}
+    </div>
+  );
+}
+
+/** PLAN band for one role — your queued picks (emerald edge), or the empty
+ * placeholder. ``flex-1`` lets the zone fill the band's stretched height so
+ * every column's plan zone is the same height. */
+export function PlanBand({
   setId,
   role,
   mode,
-  sharedRows,
+}: {
+  setId: number;
+  role: PlanRole;
+  mode: Mode;
+}) {
+  const plan = useSetPlan(setId);
+  const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
+  return (
+    <div className="flex h-full flex-col gap-1 min-w-0">
+      <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
+      <PlanZone setId={setId} role={role} mode={mode} queue={queue} className="flex-1" />
+    </div>
+  );
+}
+
+/** RECS band for one role — live (booth) or plan-scored (set) recommendations. */
+export function RecsBand({
+  setId,
+  role,
+  mode,
 }: {
   setId: number | null;
   role: PlanRole;
   mode: Mode;
-  /** How many leading rows this column shares (via subgrid) with its
-   * siblings so their sections line up: header,[plan-label,plan-zone,]
-   * recs-label. The recs list lands in the implicit row after. */
-  sharedRows: number;
 }) {
-  const plan = useSetPlan(setId);
-  const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
-  const styles = ROLE_STYLES[visRole(role)];
-
   return (
-    <div
-      className="grid grid-rows-subgrid min-w-0"
-      style={{ gridRow: `span ${sharedRows}` }}
-    >
-      <div className={`rounded px-2 py-1 text-[10px] font-semibold uppercase text-center border ${styles.header}`}>
-        {roleLabel(visRole(role))}
-      </div>
-
-      {/* PLAN — your queued picks. The plan-zone row track is shared across
-          columns, so the empty placeholder stretches to match the tallest
-          queued column (see RoleColumnsGrid). */}
-      {setId != null && (
-        <>
-          <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
-          <PlanZone setId={setId} role={role} mode={mode} queue={queue} />
-        </>
-      )}
-
-      {/* RECS — live (booth, scored vs what's playing) or plan-scored (set) —
-          same card as the plan picks above. This list sits in the per-column
-          implicit row, so a column with more recs doesn't stretch the others. */}
+    <div className="flex flex-col gap-1 min-w-0">
       <ZoneLabel>Recs</ZoneLabel>
       {mode === "live" ? (
         <LiveRecsZone setId={setId} role={role} />
@@ -361,22 +370,28 @@ function PlanZone({
   role,
   mode,
   queue,
+  className,
 }: {
   setId: number;
   role: PlanRole;
   mode: Mode;
   queue: PlanItem[];
+  /** Passed ``flex-1`` so the zone grows to fill a stretched plan band —
+   * that's what makes the empty placeholder match the tallest queued column. */
+  className?: string;
 }) {
   const { removeFromRole } = usePlanMutations(setId);
   if (queue.length === 0) {
     return (
-      <div className="flex min-h-[3rem] items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700">
+      <div
+        className={`flex min-h-[3rem] items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700 ${className ?? ""}`}
+      >
         nothing queued
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-1">
+    <div className={`flex flex-col gap-1 ${className ?? ""}`}>
       {queue.map((item, i) => (
         <QueueCard
           key={`${item.track_id}-${i}`}
