@@ -7,7 +7,7 @@ import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { formatDuration, formatRemaining } from "../lib/format";
-import { ratioToBeats, snapRatioToSection } from "../lib/seek";
+import { ratioToBeats } from "../lib/seek";
 import type { DeckCell } from "../types";
 import { Waveform } from "./Waveform";
 
@@ -805,11 +805,12 @@ function DeckWaveform({
       || !clipBpm
       || clipBpm <= 0
     ) return;
-    const snapped = snapRatioToSection(ratio, regions.data, duration);
+    // Raw ratio — the click lands exactly where the DJ points (no
+    // section snapping).
     onSeek(
       playheadTrackIdx,
       sceneIdx,
-      ratioToBeats(snapped, duration, clipBpm),
+      ratioToBeats(ratio, duration, clipBpm),
     );
   }
 

@@ -113,11 +113,10 @@ describe("SceneGrid", () => {
   it("renders 3 rows by default once deck columns exist, with an expand toggle", () => {
     state.columns = DECK_COLUMNS;
     renderGrid();
-    // Default-collapsed: rows 1..3 visible, 4..8 hidden behind expand toggle.
-    for (let i = 1; i <= 3; i++) {
-      expect(screen.getByRole("button", { name: String(i) })).toBeInTheDocument();
-    }
-    expect(screen.queryByRole("button", { name: "4" })).not.toBeInTheDocument();
+    // 8 columns × 3 visible rows = 24 empty cells by default; rows 4..8
+    // hidden behind the expand toggle. There's no on-screen scene-number
+    // column anymore (scene launch lives on the APC40's hardware buttons).
+    expect(screen.getAllByLabelText(/\(empty\)/i).length).toBe(24);
     expect(
       screen.getByRole("button", { name: /show all 8 rows/i }),
     ).toBeInTheDocument();
@@ -129,12 +128,11 @@ describe("SceneGrid", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /show all 8 rows/i }),
     );
-    for (let i = 1; i <= 8; i++) {
-      expect(screen.getByRole("button", { name: String(i) })).toBeInTheDocument();
-    }
+    // 8 columns × 8 rows = 64 empty cells once fully expanded.
+    expect(screen.getAllByLabelText(/\(empty\)/i).length).toBe(64);
   });
 
-  it("shows the loaded track title on each A-side half-cell of an anchor row + once in the SONG shadow", () => {
+  it("shows the loaded track title on each A-side cell of an anchor row", () => {
     state.columns = DECK_COLUMNS;
     fillRow(0, {
       track_id: 42,
@@ -146,28 +144,13 @@ describe("SceneGrid", () => {
     }, "a");
     renderGrid();
     const titles = screen.getAllByText(/Test Track/i);
-    // 4 A-side half-cells (drums_a/bass_a/vocals_a/other_a) + 1 SONG
-    // shadow cell that infers the anchor track = 5 total.
-    expect(titles.length).toBe(5);
+    // 4 A-side cells (drums_a/bass_a/vocals_a/other_a). The SONG/mix
+    // column (and its inferred shadow cell) was removed in the 8-column
+    // layout, so the title shows exactly 4 times.
+    expect(titles.length).toBe(4);
   });
 
-  it("fires the whole scene when its row label is clicked", () => {
-    state.columns = DECK_COLUMNS;
-    fillRow(2, {
-      track_id: 7,
-      title: "Anchor Track",
-      artist: "Tester",
-      bpm: 124,
-      key_camelot: "5A",
-      floor_energy: 5,
-    });
-    renderGrid();
-    // Scene 2 is the 3rd row, button text "3".
-    fireEvent.click(screen.getByRole("button", { name: "3" }));
-    expect(fireSceneMutate).toHaveBeenCalledWith(2);
-  });
-
-  it("fires only the matching half-cell when a loaded cell is clicked", () => {
+  it("fires only the matching cell when a loaded cell is clicked", () => {
     state.columns = DECK_COLUMNS;
     // Single-stem load: drums on A-side of scene 0.
     state.cells.push({

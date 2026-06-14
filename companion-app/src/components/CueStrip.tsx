@@ -7,7 +7,7 @@ import { useRegions } from "../hooks/useRegions";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { useSeekClip } from "../hooks/useTransport";
 import { formatDuration, formatRemaining } from "../lib/format";
-import { ratioToBeats, snapRatioToSection } from "../lib/seek";
+import { ratioToBeats } from "../lib/seek";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
 import { RoleIcon } from "./RoleIcon";
@@ -157,15 +157,12 @@ export function CueStrip() {
             duration &&
             tempo
               ? (ratio) => {
-                  const snapped = snapRatioToSection(
-                    ratio,
-                    regions.data,
-                    duration,
-                  );
+                  // Raw ratio — the click lands exactly where the DJ
+                  // points (no section snapping).
                   seek.mutate({
                     track: previewing.cueTrackIdx!,
                     slot: previewing.slot!,
-                    positionBeats: ratioToBeats(snapped, duration, tempo),
+                    positionBeats: ratioToBeats(ratio, duration, tempo),
                   });
                 }
               : undefined

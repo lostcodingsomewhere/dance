@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type React from "react";
 import type { Region } from "../types";
 import { snapRatioToSection } from "../lib/seek";
@@ -130,6 +130,8 @@ export function Waveform({
           })
       : [];
 
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   // React-managed hover tooltip for markers. The native `title` attribute
   // has a ~1s browser delay and renders inconsistently; this is instant
@@ -141,28 +143,94 @@ export function Waveform({
     | null
   >(null);
 
-  function ratioFromEvent(e: React.MouseEvent<SVGSVGElement>): number {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  // Wrapper rect → raw 0-1 ratio of the pointer along the waveform. The
+  // wrapper is the single interaction surface; the SVG (bands, ticks,
+  // icons, playhead) is all pointerEvents:none and purely visual.
+  function ratioFromClientX(clientX: number): number {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
   }
 
-  function handleClick(e: React.MouseEvent<SVGSVGElement>) {
+  // Update the section/cue hover tooltip from a raw ratio: find the cue
+  // tick under the cursor first (narrow, higher intent), else the section
+  // band that contains it. Mirrors the old per-element overlays, but driven
+  // from one place so the wrapper can own all hover.
+  function updateHoverMarker(ratio: number) {
+    const r = ratio * 100;
+    let nearestCue: (typeof cueTicks)[number] | null = null;
+    let nearestCueDist = Infinity;
+    for (const t of cueTicks) {
+      const d = Math.abs(t.x - r);
+      if (d < nearestCueDist) {
+        nearestCueDist = d;
+        nearestCue = t;
+      }
+    }
+    // ~1.5 viewBox units ≈ a few px — only show a cue tooltip when the
+    // cursor is genuinely on the tick, otherwise fall back to the section.
+    if (nearestCue && nearestCueDist <= 1.5) {
+      setHoverMarker({
+        kind: "cue",
+        label: nearestCue.label,
+        stamp: nearestCue.stamp,
+        x: nearestCue.x,
+      });
+      return;
+    }
+    const band = sectionBands.find((b) => r >= b.x && r <= b.x + b.w);
+    if (band) {
+      setHoverMarker({ kind: "section", label: band.name, x: band.x, w: band.w });
+    } else {
+      setHoverMarker(null);
+    }
+  }
+
+  // Drag semantics: Live's API has no "set playing position" for a playing
+  // clip, so the backend re-fires the clip from the committed beat — there
+  // is no continuous scrub. We therefore track a ghost playhead under the
+  // cursor during the drag and commit ONE precise seek on pointer-up (a
+  // plain click is just a zero-distance drag). This is intended.
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (!onSeek) return;
-    onSeek(ratioFromEvent(e));
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const ratio = ratioFromClientX(e.clientX);
+    setHoverRatio(ratio);
+    updateHoverMarker(ratio);
   }
 
-  function handleMove(e: React.MouseEvent<SVGSVGElement>) {
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!onSeek) return;
-    setHoverRatio(ratioFromEvent(e));
+    const ratio = ratioFromClientX(e.clientX);
+    setHoverRatio(ratio);
+    updateHoverMarker(ratio);
   }
 
-  // Ghost playhead = where the click *would* land if the user clicked now.
-  // Snaps to nearest section within the same tolerance the seek helper
-  // uses, so DJs see "I'm about to land on the Drop" before committing.
-  const ghostRatio =
-    hoverRatio != null
-      ? snapRatioToSection(hoverRatio, regions, durationSeconds ?? 0)
-      : null;
+  function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!onSeek) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    draggingRef.current = false;
+    const ratio = ratioFromClientX(e.clientX);
+    // Raw, precise seek to the release point — no section snapping. Holding
+    // shift snaps to the nearest section (handy for lining up a drop).
+    const committed = e.shiftKey
+      ? snapRatioToSection(ratio, regions, durationSeconds ?? 0)
+      : ratio;
+    onSeek(committed);
+  }
+
+  function handlePointerLeave() {
+    if (draggingRef.current) return;
+    setHoverRatio(null);
+    setHoverMarker(null);
+  }
+
+  // Ghost playhead = the RAW cursor position (no snapping), so the click
+  // lands exactly where the DJ points.
+  const ghostRatio = hoverRatio;
 
   if (!hasPeaks) {
     return (
@@ -199,8 +267,19 @@ export function Waveform({
 
   return (
     <div
+      ref={wrapperRef}
       className={className}
-      style={{ position: "relative", width: "100%", height: H }}
+      style={{
+        position: "relative",
+        width: "100%",
+        height: H,
+        cursor: onSeek ? "pointer" : undefined,
+        touchAction: onSeek ? "none" : undefined,
+      }}
+      onPointerDown={onSeek ? handlePointerDown : undefined}
+      onPointerMove={onSeek ? handlePointerMove : undefined}
+      onPointerUp={onSeek ? handlePointerUp : undefined}
+      onPointerLeave={onSeek ? handlePointerLeave : undefined}
     >
     <svg
       viewBox={`0 0 100 ${H}`}
@@ -210,11 +289,8 @@ export function Waveform({
       style={{
         display: "block",
         color: barColor,
-        cursor: onSeek ? "pointer" : undefined,
+        pointerEvents: "none",
       }}
-      onClick={onSeek ? handleClick : undefined}
-      onMouseMove={onSeek ? handleMove : undefined}
-      onMouseLeave={onSeek ? () => setHoverRatio(null) : undefined}
     >
       {/* Section bands — rendered first so peaks draw on top. Each band is
           a faint colored rect spanning the section's time-range. */}
@@ -307,55 +383,9 @@ export function Waveform({
       {/* Section icons — rendered as HTML overlays so they don't get
           stretched by the SVG's preserveAspectRatio="none". One small
           icon per section start, positioned via percent of the
-          waveform's width. The native ``title`` attribute gives a
-          hover tooltip without extra React state.
-          ``pointerEvents: auto`` so the title fires; the icons sit
-          above the SVG but the SVG's onClick still bubbles up because
-          the icons cover only a tiny rect. */}
-      {/* Per-section hover overlays. Each covers its full band so
-          hovering ANYWHERE inside the colored region reveals the
-          section name via native tooltip (Drop / Breakdown / etc.) —
-          not just the tiny icon. Click anywhere in a band seeks to
-          its start (parent's snap logic also does this, but doing it
-          explicitly here is cleaner & avoids the SVG onClick when
-          the band overlay captures the click). */}
-      {sectionBands.map((b) => (
-        <div
-          key={`band-${b.id}`}
-          data-testid="waveform-section-band"
-          title={b.name}
-          onClick={
-            onSeek
-              ? (e) => {
-                  e.stopPropagation();
-                  onSeek(b.x / 100);
-                }
-              : undefined
-          }
-          onMouseEnter={() =>
-            setHoverMarker({ kind: "section", label: b.name, x: b.x, w: b.w })
-          }
-          onMouseMove={
-            onSeek ? () => setHoverRatio(b.x / 100) : undefined
-          }
-          onMouseLeave={() => {
-            setHoverMarker(null);
-            if (onSeek) setHoverRatio(null);
-          }}
-          style={{
-            position: "absolute",
-            left: `${b.x}%`,
-            top: 0,
-            width: `${b.w}%`,
-            height: "100%",
-            pointerEvents: "auto",
-            cursor: onSeek ? "pointer" : undefined,
-          }}
-        />
-      ))}
-      {/* Section icons (visual only). pointerEvents: none so they
-          don't capture hover/click — the band overlay below them
-          handles all interaction. */}
+          waveform's width. Visual only: pointerEvents:none so the
+          wrapper owns all hover/seek interaction (hover tooltips are
+          driven from the cursor's raw ratio, not per-element). */}
       {sectionBands.map((b) => (
         <div
           key={`icon-${b.id}`}
@@ -375,58 +405,6 @@ export function Waveform({
         >
           {b.icon}
         </div>
-      ))}
-      {/* Cue / phrase hover overlays — give the 1px-wide SVG ticks a
-          proper click target (a ~14px-wide invisible strip centered
-          on the tick) with a title for the hover timestamp and an
-          onClick that seeks straight to the cue. Without these the
-          ticks were purely decorative.
-          z-indexed above section bands so cues inside a section's
-          band still get their own click target. */}
-      {cueTicks.map((t) => (
-        <button
-          key={`cue-hover-${t.id}`}
-          type="button"
-          data-testid="waveform-cue-hover"
-          title={`${t.label} @ ${t.stamp} — click to jump`}
-          aria-label={`Jump to ${t.label.toLowerCase()} at ${t.stamp}`}
-          onClick={
-            onSeek
-              ? (e) => {
-                  e.stopPropagation();
-                  onSeek(t.ratio);
-                }
-              : undefined
-          }
-          onMouseEnter={() =>
-            setHoverMarker({
-              kind: "cue",
-              label: t.label,
-              stamp: t.stamp,
-              x: t.x,
-            })
-          }
-          onMouseMove={
-            onSeek ? () => setHoverRatio(t.ratio) : undefined
-          }
-          onMouseLeave={() => {
-            setHoverMarker(null);
-            if (onSeek) setHoverRatio(null);
-          }}
-          style={{
-            position: "absolute",
-            left: `${t.x}%`,
-            top: 0,
-            transform: "translateX(-50%)",
-            width: 14,
-            height: "100%",
-            background: "transparent",
-            border: "none",
-            padding: 0,
-            cursor: onSeek ? "pointer" : "default",
-            zIndex: 2,
-          }}
-        />
       ))}
       {/* React-managed hover tooltip — instant, styled, replaces the
           unreliable native title tooltip. Floats above the waveform
