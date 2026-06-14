@@ -9,6 +9,7 @@
 
 import type React from "react";
 
+import { CueStrip } from "../components/CueStrip";
 import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
 import { SetMenu } from "../components/SetMenu";
 import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
@@ -25,6 +26,9 @@ export function SetEditor() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <Header set={set} />
+      {/* Preview waveform/scrubber — only renders while auditioning a pick
+          (▶ on any card). Lets you scrub the cue the same as in the Booth. */}
+      <CueStrip />
       <div className="flex-1 px-6 py-4 min-h-0 overflow-y-auto">
         <RoleColumnsGrid setId={set.id} mode="plan" />
       </div>

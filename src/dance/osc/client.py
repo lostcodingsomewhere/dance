@@ -264,6 +264,16 @@ class AbletonOSCClient:
         an empty slot (the preview-never-plays bug)."""
         self._send("/live/clip_slot/get/has_clip", track, slot)
 
+    def get_clip_is_playing(self, track: int, slot: int) -> None:
+        """Ask Live whether the clip in this slot is currently playing.
+
+        Reply addressed to ``/live/clip/get/is_playing`` with args
+        ``(track, slot, 0|1)``. Used to confirm a fired preview actually
+        started — compressed samples (mp3/m4a) keep decoding after the clip
+        object exists, so a fire can land before the sample is ready and play
+        silence; we poll this and re-fire until it's truly playing."""
+        self._send("/live/clip/get/is_playing", track, slot)
+
     def set_clip_launch_quantization(self, track: int, slot: int, value: int) -> None:
         """Set a clip's launch quantization (overrides the global setting).
 

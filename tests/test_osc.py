@@ -70,6 +70,8 @@ class _FakeLive:
         has_clip_delay: int = 0,
         answer_has_clip: bool = True,
         clip_never_appears: bool = False,
+        is_playing_delay: int = 0,
+        answer_is_playing: bool = True,
     ) -> None:
         self.names: list[str] = list(initial_names or [])
         self.received: list[tuple[str, tuple[Any, ...]]] = []
@@ -85,6 +87,12 @@ class _FakeLive:
         self._has_clip_delay = has_clip_delay
         self._answer_has_clip = answer_has_clip
         self._clip_never_appears = clip_never_appears
+        # (track, slot) -> number of is_playing queries still owed a False
+        # reply before the clip is considered playing (models a compressed
+        # sample that keeps decoding after the clip object exists).
+        self._is_playing_delay = is_playing_delay
+        self._answer_is_playing = answer_is_playing
+        self._playing_pending: dict[tuple[int, int], int] = {}
 
     def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
         with self._lock:
@@ -113,6 +121,7 @@ class _FakeLive:
                 key = (int(args[0]), int(args[1]))
                 self._present_clip.discard(key)
                 self._pending_clip[key] = self._has_clip_delay
+                self._playing_pending[key] = self._is_playing_delay
             elif addr == "/live/clip_slot/delete_clip":
                 key = (int(args[0]), int(args[1]))
                 self._present_clip.discard(key)
@@ -132,6 +141,19 @@ class _FakeLive:
                 self._reply.send_message(
                     "/live/clip_slot/get/has_clip",
                     [key[0], key[1], 1 if present else 0],
+                )
+            elif addr == "/live/clip/get/is_playing":
+                if not self._answer_is_playing:
+                    return  # model a fork without the is_playing handler
+                key = (int(args[0]), int(args[1]))
+                playing = key in self._present_clip
+                if playing and self._playing_pending.get(key, 0) > 0:
+                    # Still "decoding" — owe a few False replies first.
+                    self._playing_pending[key] -= 1
+                    playing = False
+                self._reply.send_message(
+                    "/live/clip/get/is_playing",
+                    [key[0], key[1], 1 if playing else 0],
                 )
 
     def __enter__(self) -> _FakeLive:
@@ -1359,8 +1381,10 @@ def test_preview_times_out_then_best_effort_fires_with_warning(tmp_path):
     ) as live:
         bridge = live.make_bridge()
         bridge.start()
-        # Shrink the confirm timeout so the test is fast.
+        # Shrink both timeouts so the test is fast (clip never appears → both
+        # the has_clip confirm and the is_playing re-fire loop time out).
         bridge._CUE_CREATE_CONFIRM_TIMEOUT = 0.4
+        bridge._CUE_PLAY_CONFIRM_TIMEOUT = 0.4
         try:
             result = bridge.preview_audio(str(audio))
             assert result["ok"] is True  # best-effort fire still "ok"
@@ -1386,6 +1410,7 @@ def test_preview_best_effort_fires_when_has_clip_unanswered(tmp_path):
         bridge = live.make_bridge()
         bridge.start()
         bridge._CUE_CREATE_CONFIRM_TIMEOUT = 0.4
+        bridge._CUE_PLAY_CONFIRM_TIMEOUT = 0.4
         try:
             result = bridge.preview_audio(str(audio))
             assert result["ok"] is True
@@ -1394,6 +1419,32 @@ def test_preview_best_effort_fires_when_has_clip_unanswered(tmp_path):
                 lambda: (result["cue_track_idx"], bridge._CUE_SLOT)
                 in live.args_for("/live/clip_slot/fire")
             )
+        finally:
+            bridge.stop()
+
+
+def test_preview_refires_until_clip_actually_plays(tmp_path):
+    """has_clip can flip True before a compressed sample finishes decoding, so
+    the first fire plays silence. The bridge must keep re-firing until Live
+    reports is_playing — modelled here by is_playing_delay (the clip exists
+    immediately but reports not-playing for the first 2 polls)."""
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"ID3")
+    with _FakeLive(
+        initial_names=list(_PREFIXED_DECK_NAMES), is_playing_delay=2
+    ) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.preview_audio(str(audio), label="PREVIEW song")
+            assert result["ok"] is True
+            # It confirmed playing within the window, so no warning.
+            assert result["warnings"] == []
+            cue_idx = result["cue_track_idx"]
+            # More than one fire was sent (initial + re-fires until playing).
+            fires = live.count("/live/clip_slot/fire")
+            assert fires >= 2, f"expected re-fires until playing, got {fires}"
+            assert bridge._clip_is_playing(cue_idx, bridge._CUE_SLOT) is True
         finally:
             bridge.stop()
 

@@ -65,7 +65,25 @@ methods = [
 
 Then **fully quit and reopen Ableton** (toggling Control Surface off/on isn't enough — Live's Python keeps modules in `sys.modules`). The handler is now bound to `/live/clip_slot/create_audio_clip (track_idx, slot_idx, absolute_path)`.
 
-Known quirk: AbletonOSC's wrapper logs each call via `logger.info(track, slot, rv)` which mangles into a Python `logging` format-string error after a successful call. This shows up as `RemoteScriptError: Message: <track>` in Live's log but **the audio clip is created successfully** — the exception fires *after* the LOM side effect. Harmless.
+### Fix the `clip_slot_callback` logging bug (Dance patch, 2026-06-14)
+
+AbletonOSC's `clip_slot_callback` (in `abletonosc/clip_slot.py`) logs each call
+via `self.logger.info(track_index, clip_index, rv)` — passing an `int` as the
+logging *format string*, which raises `TypeError: not all arguments converted
+during string formatting` on **every** clip-slot method (`fire`,
+`create_audio_clip`, …). It shows up as repeated `RemoteScriptError: Message:
+<track>` spam in Live's log. The exception fires *after* the LOM side effect, so
+clips are still created/fired — but the spam is noise and the callback's return
+value (its OSC reply) is dropped. Patch line ~21 to a proper `%`-format string:
+
+```python
+self.logger.info("clip_slot %s %s -> %s", track_index, clip_index, rv)
+```
+
+Then **fully quit and reopen Ableton** for it to take effect. (Independent of
+this, the bridge no longer trusts `has_clip` alone: it polls `is_playing` and
+re-fires the cue clip until Live confirms playback, so a compressed full-mix
+sample that's still decoding can't leave a "song" preview silent.)
 
 ## One-time AbletonOSC patch for crossfader assignment
 
