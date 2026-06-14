@@ -605,6 +605,12 @@ def get_plan_recs(
     queues = sq.parse_plan(s.plan)
 
     combo = sq.context_combo_stem_ids(session, queues, exclude_role=role)
+    if not combo:
+        # No cross-role context yet (e.g. the only picks so far ARE in this
+        # role). Seed from this role's own queued stems so the recs score as
+        # "more like what you queued" instead of coming back as unscored 0s
+        # with no breakdown badges.
+        combo = sq.role_own_stem_ids(session, queues, role)
     trailing = sq.plan_sequence(queues)
     exclude = list(set(queues.get(role, [])))  # don't re-recommend what's queued here
 
