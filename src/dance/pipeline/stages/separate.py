@@ -123,6 +123,9 @@ class StemSeparationStage:
                 device=self._device,
                 progress=False,
                 num_workers=0,
+                # shifts>0 averages N randomly time-shifted passes to reduce
+                # separation artifacts (≈ N× compute). Tunable via settings.
+                shifts=settings.demucs_shifts,
             )[0]
 
         # Drop stale rows so we don't accumulate duplicates on a retry.
@@ -143,7 +146,12 @@ class StemSeparationStage:
             # soundfile expects shape (samples, channels), torch tensors are
             # (channels, samples) — transpose before write.
             stem_np = sources[i].cpu().numpy().T
-            sf.write(str(stem_path), stem_np, self._model.samplerate, subtype="PCM_16")
+            sf.write(
+                str(stem_path),
+                stem_np,
+                self._model.samplerate,
+                subtype=settings.demucs_bit_depth,
+            )
             session.add(
                 StemFile(
                     track_id=track.id,
