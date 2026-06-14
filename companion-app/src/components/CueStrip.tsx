@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { pushTrackToLive } from "../api";
-import { useAbletonState } from "../hooks/useAbletonState";
 import { useClipPlayhead } from "../hooks/useClipPlayhead";
 import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
@@ -8,7 +7,7 @@ import { useRegions } from "../hooks/useRegions";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { useSeekClip } from "../hooks/useTransport";
 import { formatDuration, formatRemaining } from "../lib/format";
-import { ratioToBeats } from "../lib/seek";
+import { ratioToSeconds } from "../lib/seek";
 import { roleLabel } from "../lib/roles";
 import { store } from "../store";
 import { RoleIcon } from "./RoleIcon";
@@ -38,23 +37,23 @@ export function CueStrip() {
   // see "we're about to hit the drop" before committing the track to
   // master.
   const regions = useRegions(previewing?.trackId ?? null);
-  const ableton = useAbletonState();
   const seek = useSeekClip();
   const qc = useQueryClient();
 
   // Playhead: derived in ONE place (useClipPlayhead) from Live's real per-clip
   // position, the same as the Booth decks. Inputs are computed up here so the
-  // hook runs unconditionally (before the early return below). clipBpm is the
-  // track's analyzed BPM — what Live warps the preview clip to — so the
-  // playhead and the click-to-seek convert through the SAME bpm and agree.
+  // hook runs unconditionally (before the early return below). The cue/preview
+  // clip is UNWARPED (so big mp3s fire fast + audition at native tempo), which
+  // means Live reports its position + accepts seeks in SECONDS — so playhead
+  // and click-to-seek both go through seconds and agree to the pixel.
   const previewTrack = trackQuery.data;
-  const clipBpm = previewTrack?.analysis?.bpm ?? ableton.tempo;
   const previewDuration =
     previewTrack?.duration_seconds ?? waveform.data?.duration_seconds ?? null;
   const playhead = useClipPlayhead({
     trackIdx: previewing?.cueTrackIdx ?? null,
     durationSec: previewDuration,
-    clipBpm,
+    clipBpm: null,
+    positionUnit: "seconds",
   });
 
   const commit = useMutation({
@@ -161,17 +160,17 @@ export function CueStrip() {
           onSeek={
             previewing.cueTrackIdx != null &&
             previewing.slot != null &&
-            duration &&
-            clipBpm
+            duration
               ? (ratio) => {
-                  // Raw ratio — the click lands exactly where the DJ
-                  // points (no section snapping). Convert through clipBpm
-                  // (the warp BPM), the same value the playhead uses, so
-                  // the click and the resulting playhead position agree.
+                  // Raw ratio — the click lands exactly where the DJ points
+                  // (no section snapping). The cue clip is UNWARPED, so its
+                  // loop/start markers are in SECONDS — the same unit the
+                  // playhead uses, so the click and the resulting playhead
+                  // position agree.
                   seek.mutate({
                     track: previewing.cueTrackIdx!,
                     slot: previewing.slot!,
-                    positionBeats: ratioToBeats(ratio, duration, clipBpm),
+                    positionBeats: ratioToSeconds(ratio, duration),
                   });
                 }
               : undefined

@@ -1,4 +1,4 @@
-import { clipPlayhead } from "../lib/seek";
+import { clipPlayhead, clipPlayheadFromElapsed } from "../lib/seek";
 import { useAbletonState } from "./useAbletonState";
 
 export interface ClipPlayhead {
@@ -33,24 +33,33 @@ export function useClipPlayhead({
   trackIdx,
   durationSec,
   clipBpm,
+  positionUnit = "beats",
 }: {
   /** The Live track index whose firing clip drives the playhead. */
   trackIdx: number | null | undefined;
   /** The displayed audio's duration in seconds. */
   durationSec: number | null | undefined;
   /** The BPM the clip is warped at (the track's analyzed BPM); falls back to
-   * the project tempo. */
+   * the project tempo. Only used when ``positionUnit === "beats"``. */
   clipBpm: number | null | undefined;
+  /** Unit Live reports ``playing_position`` in: WARPED clips (deck columns)
+   * report "beats"; UNWARPED clips (the cue/preview clip) report "seconds". */
+  positionUnit?: "beats" | "seconds";
 }): ClipPlayhead {
   const ableton = useAbletonState();
-  const livePosBeats =
+  const livePos =
     trackIdx != null ? ableton.playing_positions[String(trackIdx)] : undefined;
   const bpm = clipBpm ?? ableton.tempo;
 
-  const v =
-    livePosBeats != null && durationSec != null && bpm != null
-      ? clipPlayhead(livePosBeats, durationSec, bpm)
-      : null;
+  let v = null;
+  if (livePos != null && durationSec != null) {
+    v =
+      positionUnit === "seconds"
+        ? clipPlayheadFromElapsed(livePos, durationSec)
+        : bpm != null
+          ? clipPlayhead(livePos, durationSec, bpm)
+          : null;
+  }
 
   return {
     position: v?.position,

@@ -776,8 +776,23 @@ class AbletonBridge:
     # actually playing. has_clip only confirms the clip OBJECT exists; a
     # compressed sample (mp3/m4a) keeps decoding afterwards, so the first fire
     # can land on a not-yet-loaded sample and play silence. WAV stems pass on
-    # the first poll; a full mp3 may need a couple of seconds to decode.
+    # the first poll; a full mp3 may need several seconds to decode on a COLD
+    # first preview (Live caches the decode, so a warm re-preview is instant).
+    # The re-fire loop exits the moment it's playing, so these are ceilings, not
+    # fixed waits — a PCM stem still returns in <0.5s. PCM (wav/aiff) plays
+    # instantly so it gets the short ceiling; compressed sources get a generous
+    # one so a big cold mp3 actually starts instead of timing out frozen at 0.
     _CUE_PLAY_CONFIRM_TIMEOUT: float = 3.0
+    _CUE_PLAY_CONFIRM_TIMEOUT_COMPRESSED: float = 12.0
+    _PCM_SUFFIXES: frozenset[str] = frozenset({".wav", ".aif", ".aiff"})
+
+    def _cue_play_timeout_for(self, path: Path) -> float:
+        """Pick the play-confirm ceiling by source type: PCM (wav/aiff) plays on
+        the first fire; a compressed sample (mp3/m4a/aac/ogg/opus/flac) may need
+        several seconds to decode on a cold first preview."""
+        if path.suffix.lower() in self._PCM_SUFFIXES:
+            return self._CUE_PLAY_CONFIRM_TIMEOUT
+        return self._CUE_PLAY_CONFIRM_TIMEOUT_COMPRESSED
 
     def reset_deck_columns(self) -> None:
         """Forget the cached deck-column indices AND the per-cell load map.
@@ -2071,6 +2086,19 @@ class AbletonBridge:
             # 1. Drop the sample in. AbletonOSC's create_audio_clip is async
             #    — Live hasn't finished building the clip when this returns.
             self.client.create_audio_clip(cue_idx, self._CUE_SLOT, str(path))
+            # 1b. UNWARP the preview clip. Live auto-warp-analyzes a long sample
+            #     on import, and for an 8-min track that analysis — not the raw
+            #     decode — is what made a cold "song" preview sit silent past the
+            #     confirm window (verified: an 8-min mix that timed out warped at
+            #     12s plays in ~3.6s unwarped). An audition wants the raw file at
+            #     its own tempo anyway (no time-stretch artifacts). Unwarped, the
+            #     clip's playing_position + loop/start markers are in SECONDS, so
+            #     the companion converts the cue playhead/seek in seconds (the
+            #     warped decks stay in beats). Best-effort.
+            try:
+                self.client.set_clip_warp(cue_idx, self._CUE_SLOT, False)
+            except OSError:  # pragma: no cover - best-effort
+                pass
             # 2. Name it + force instant launch BEFORE the existence poll so
             #    the slot is fully populated by the time we confirm + fire.
             #    launch_quantization=None makes the preview fire immediately
@@ -2113,14 +2141,13 @@ class AbletonBridge:
             #    sample and play silence — the "song/mix preview doesn't fire"
             #    bug. Re-fire until Live reports the clip is actually playing.
             #    WAV stems are already playing, so this returns immediately.
-            played = self._ensure_cue_playing(
-                cue_idx, timeout=self._CUE_PLAY_CONFIRM_TIMEOUT
-            )
+            play_timeout = self._cue_play_timeout_for(path)
+            played = self._ensure_cue_playing(cue_idx, timeout=play_timeout)
             if played is False:
                 warnings.append(
                     "Preview clip did not report playing within "
-                    f"{self._CUE_PLAY_CONFIRM_TIMEOUT:.0f}s (sample may still "
-                    "be decoding, or the fork doesn't expose is_playing)."
+                    f"{play_timeout:.0f}s (sample may still be decoding, or the "
+                    "fork doesn't expose is_playing)."
                 )
             # 5. Subscribe the cue clip's playing_position so the companion's
             #    preview waveform gets a REAL playhead (track_index → beats,

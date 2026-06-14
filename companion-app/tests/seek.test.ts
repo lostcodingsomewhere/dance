@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { clipPlayhead, ratioToBeats, snapRatioToSection } from "../src/lib/seek";
+import {
+  clipPlayhead,
+  clipPlayheadFromElapsed,
+  ratioToBeats,
+  ratioToSeconds,
+  snapRatioToSection,
+} from "../src/lib/seek";
 import type { Region } from "../src/types";
 
 // Minimal Region factory — fills every required field so the literal
@@ -101,11 +107,38 @@ describe("clipPlayhead", () => {
   });
 
   it("is the exact inverse of ratioToBeats — playhead lands where a click seeks", () => {
-    // This is the property that fixes "clickability": the playhead the cue
+    // This is the property that fixes "clickability": the playhead the deck
     // strip draws and the beat a same-ratio click seeks to use one conversion.
     for (const r of [0, 0.1, 0.37, 0.5, 0.99]) {
       const beats = ratioToBeats(r, 240, 128);
       expect(clipPlayhead(beats, 240, 128)?.position).toBeCloseTo(r);
+    }
+  });
+});
+
+describe("clipPlayheadFromElapsed / ratioToSeconds (unwarped cue clip)", () => {
+  it("maps elapsed seconds to a 0-1 ratio + remaining", () => {
+    const v = clipPlayheadFromElapsed(60, 240); // 60s into a 4-min clip
+    expect(v?.position).toBeCloseTo(0.25);
+    expect(v?.elapsedSec).toBeCloseTo(60);
+    expect(v?.remaining).toBeCloseTo(180);
+  });
+
+  it("wraps a looped seconds position back into range", () => {
+    // 300s on a 240s clip → 60s in → 25%.
+    expect(clipPlayheadFromElapsed(300, 240)?.position).toBeCloseTo(0.25);
+  });
+
+  it("returns null without a usable duration", () => {
+    expect(clipPlayheadFromElapsed(60, 0)).toBeNull();
+  });
+
+  it("ratioToSeconds is the inverse — unwarped cue playhead lands where you click", () => {
+    // The cue clip is unwarped: position + seek are both in seconds. A
+    // same-ratio click and the playhead must agree without any BPM.
+    for (const r of [0, 0.1, 0.37, 0.5, 0.99]) {
+      const secs = ratioToSeconds(r, 240);
+      expect(clipPlayheadFromElapsed(secs, 240)?.position).toBeCloseTo(r);
     }
   });
 });
