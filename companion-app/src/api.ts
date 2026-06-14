@@ -21,7 +21,6 @@ import type {
   SpotifySearchResponse,
   SpotifyTrackHit,
   StemFile,
-  TailRecsResponse,
   Track,
   TrackFilters,
   Waveform,
@@ -289,59 +288,10 @@ export function addTrackToSet(
   });
 }
 
-export function moveTrackInSet(
-  setId: number,
-  trackId: number,
-  position: number,
-): Promise<DanceSet> {
-  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ position }),
-  });
-}
-
-export function updateSetTrackNote(
-  setId: number,
-  trackId: number,
-  note: string,
-): Promise<DanceSet> {
-  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ note }),
-  });
-}
-
-/** Update a set track's stem filter. Pass null to clear (load all stems);
- *  pass a non-empty subset of ["drums","bass","vocals","other"] to limit. */
-export function updateSetTrackStemKinds(
-  setId: number,
-  trackId: number,
-  stemKinds: string[] | null,
-): Promise<DanceSet> {
-  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ stem_kinds: stemKinds }),
-  });
-}
-
-export function removeTrackFromSet(
-  setId: number,
-  trackId: number,
-): Promise<DanceSet> {
-  return request<DanceSet>(`/sets/${setId}/tracks/${trackId}`, {
-    method: "DELETE",
-  });
-}
-
-export function getTailRecs(
-  setId: number,
-  opts: { k?: number; excludeSessionPlays?: boolean } = {},
-): Promise<TailRecsResponse> {
-  const params: Record<string, unknown> = {};
-  if (opts.k != null) params.k = opts.k;
-  if (opts.excludeSessionPlays) params.exclude_session_plays = "true";
-  return request<TailRecsResponse>(`/sets/${setId}/tail-recs${qs(params)}`);
-}
+// NOTE: the set_tracks CRUD wrappers (move/note/stem-kinds/remove) and the
+// tail-recs fetch were retired with the old SetTrack editor + Set Rail. The
+// plan lives on sets.plan now (see api plan fns above + useSetPlan).
+// addTrackToSet (above) survives — StackMigrationPrompt + SetMenu still use it.
 
 // Spotify search + optimistic ingest --------------------------------------
 

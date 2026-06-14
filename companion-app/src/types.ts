@@ -330,23 +330,6 @@ export interface SetSummary {
   updated_at: string;
 }
 
-export interface TailRec {
-  track_id: number;
-  track_title: string | null;
-  track_artist: string | null;
-  bpm: number | null;
-  key_camelot: string | null;
-  floor_energy: number | null;
-  score: number;
-  score_breakdown: Record<string, number>;
-  reasons: string[];
-}
-
-export interface TailRecsResponse {
-  set_id: number;
-  set_track_count: number;
-  recs: TailRec[];
-}
 
 /**
  * A track loaded into Live via "Load to Live". Records which Ableton scene the
