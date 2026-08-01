@@ -490,6 +490,10 @@ class LoadTrackResult(BaseModel):
 
     ok: bool
     scene_index: int
+    # Which deck side received the load ("a" / "b"). The request may omit
+    # ``side`` and let the bridge pick the less-full one, so this is the only
+    # way the companion learns which deck to arm for playback.
+    side: str | None = None
     track_indices: dict[str, int] = Field(default_factory=dict)
     # How many of the 4 stems we managed to auto-load into Live (Live 12.0.5+
     # with our patched AbletonOSC). 0 means nothing landed; 4 is a full load

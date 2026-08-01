@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useClipPlayhead } from "../hooks/useClipPlayhead";
@@ -9,6 +9,7 @@ import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { formatDuration, formatRemaining } from "../lib/format";
 import { ratioToBeats } from "../lib/seek";
+import { store, useAppStore } from "../store";
 import type { DeckCell } from "../types";
 import { Waveform } from "./Waveform";
 
@@ -367,6 +368,25 @@ function DeckPanel({
     return null;
   }, [columns, cellAt, playing, side]);
 
+  // The scene ▶ should actually fire. The `anchor` heuristic above answers
+  // "what is this deck currently ABOUT?" — useful for the header's title and
+  // waveform, but wrong as a play target: branch (a) returns the scene already
+  // firing and branch (b) returns the LOWEST loaded scene, so once you've
+  // loaded a second track to this side, ▶ replays the first one forever. The
+  // arm records the scene you last loaded here and takes precedence.
+  const armedSceneIdx = useAppStore((s) => s.armed[side]) ?? undefined;
+
+  // Once Live confirms the armed scene is firing, the arm has been honoured —
+  // drop it so the chip clears and the header falls back to the anchor.
+  useEffect(() => {
+    if (armedSceneIdx == null) return;
+    const firingHere = SOURCE_ROLES.some((r) => {
+      const tIdx = columns[`${r}_${side}`];
+      return tIdx != null && playing[tIdx] === armedSceneIdx;
+    });
+    if (firingHere) store.clearArm(side);
+  }, [armedSceneIdx, columns, playing, side]);
+
   // Source-track metadata — read from any cell that matches anchor.
   const anchorCell: DeckCell | undefined = useMemo(() => {
     if (!anchor) return undefined;
@@ -409,6 +429,7 @@ function DeckPanel({
         sideLabel={sideLabel}
         anchorCell={anchorCell}
         anchorSceneIdx={anchor?.sceneIdx}
+        armedSceneIdx={armedSceneIdx}
         isPureAnchor={anchor?.isPureAnchor ?? false}
         firing={anchor?.firing ?? false}
         pflActive={pflActive}
@@ -455,6 +476,7 @@ function DeckHeader({
   sideLabel,
   anchorCell,
   anchorSceneIdx,
+  armedSceneIdx,
   isPureAnchor,
   firing,
   pflActive,
@@ -481,6 +503,10 @@ function DeckHeader({
   sideLabel: string;
   anchorCell: DeckCell | undefined;
   anchorSceneIdx: number | undefined;
+  /** Scene this deck's ▶ is armed to fire — the last thing loaded here.
+   * Takes precedence over ``anchorSceneIdx``, which is a "what is this deck
+   * about" heuristic and resolves to the OLDEST loaded scene. */
+  armedSceneIdx: number | undefined;
   isPureAnchor: boolean;
   firing: boolean;
   pflActive: boolean;
@@ -508,6 +534,10 @@ function DeckHeader({
   onToggleDelay: () => void;
 }) {
   const accentText = side === "a" ? "text-violet-200" : "text-indigo-200";
+  // What ▶ fires: the armed scene if there is one, else the anchor. The arm
+  // is what makes "load a track, press play" work for the 2nd track of a set
+  // and every one after it.
+  const fireSceneIdx = armedSceneIdx ?? anchorSceneIdx;
   // Sync gesture: snap the project's master tempo to this deck's
   // anchored track BPM. Only shows when there's a delta > 0.5 BPM.
   const sourceBpm = anchorCell?.bpm ?? null;
@@ -525,18 +555,29 @@ function DeckHeader({
           ▶ live
         </span>
       )}
+      {armedSceneIdx != null && (
+        <span
+          className="text-[10px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
+          title={`▶ will fire scene ${armedSceneIdx + 1} — the track you last loaded onto Deck ${sideLabel}`}
+          data-testid={`armed-${side}`}
+        >
+          armed · {armedSceneIdx + 1}
+        </span>
+      )}
       {/* Per-deck play / stop. Play fires all 5 of this side's cells
           (4 stems + mix) at the anchor scene; stop halts every clip
           on this side's tracks. Disabled when no anchor scene exists
           yet (nothing to fire). */}
       <button
         type="button"
-        onClick={() => anchorSceneIdx != null && onFireDeck(anchorSceneIdx)}
-        disabled={anchorSceneIdx == null}
+        onClick={() => fireSceneIdx != null && onFireDeck(fireSceneIdx)}
+        disabled={fireSceneIdx == null}
         title={
-          anchorSceneIdx == null
+          fireSceneIdx == null
             ? `Deck ${sideLabel} is empty`
-            : `Play Deck ${sideLabel} (fire scene ${anchorSceneIdx + 1})`
+            : armedSceneIdx != null
+              ? `Play Deck ${sideLabel} — scene ${fireSceneIdx + 1}, the track you just loaded`
+              : `Play Deck ${sideLabel} (fire scene ${fireSceneIdx + 1})`
         }
         aria-label={`Play Deck ${sideLabel}`}
         className={`text-[10px] leading-none rounded px-1.5 py-1 border transition-colors ${

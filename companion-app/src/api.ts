@@ -690,6 +690,9 @@ export function abletonResyncDecks(): Promise<ResyncDecksResult> {
 export interface LoadTrackResult {
   ok: boolean;
   scene_index: number;
+  /** Which deck side received the load. Present even when the request let
+   *  the bridge auto-pick, which is how ⌘K loads know which deck to arm. */
+  side?: "a" | "b" | null;
   track_indices: Record<string, number>;
   /** How many of 4 stems landed in Live. 4 = fully auto-loaded, ready to fire. */
   stems_loaded: number;

@@ -75,6 +75,8 @@ function StemRow({
       store.setLoadWarnings(label, result.warnings);
       // …and the warp audit follows once Live's analysis settles.
       scheduleWarpCheck(result.scene_index, label);
+      // Point that deck's ▶ at what we just put there.
+      store.armDeck(result.side ?? side, result.scene_index);
     },
   });
   const togglePreview = () => {
