@@ -8,6 +8,9 @@ const state = {
   plan: { set_id: 1, queues: {} as Record<string, unknown[]> },
   planRecs: [] as unknown[],
   liveRecs: [] as unknown[],
+  // Whether the live recommender has anything to score against (something
+  // playing / a tempo / trailing plays). False = the Booth's cold-open state.
+  hasContext: true,
 };
 
 const addToRole = vi.fn();
@@ -17,10 +20,15 @@ vi.mock("../src/hooks/useSetPlan", () => ({
   useSetPlan: () => ({ data: state.plan }),
   usePlanMutations: () => ({ addToRole, removeFromRole, put: { isPending: false } }),
   usePlanRecs: () => ({ data: { recs: state.planRecs }, isLoading: false }),
+  useAppendToPlan: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("../src/hooks/useColumnRecs", () => ({
-  useColumnRecs: () => ({ data: { recs: state.liveRecs }, isLoading: false }),
+  useColumnRecs: () => ({
+    data: { recs: state.liveRecs },
+    isLoading: false,
+    hasContext: state.hasContext,
+  }),
 }));
 
 vi.mock("../src/hooks/usePreview", () => ({
@@ -58,6 +66,7 @@ beforeEach(() => {
   state.plan = { set_id: 1, queues: {} };
   state.planRecs = [];
   state.liveRecs = [];
+  state.hasContext = true;
   addToRole.mockReset();
   removeFromRole.mockReset();
 });
@@ -97,5 +106,25 @@ describe("RoleColumnsGrid", () => {
     renderGrid("live", null);
     expect(screen.getAllByText("Live Rec").length).toBeGreaterThan(0);
     expect(screen.getAllByTitle(/Load → Deck A/i).length).toBeGreaterThan(0);
+  });
+
+  // Cold open — nothing playing. Previously every role column rendered the
+  // same arbitrary tracks at score 0.00, because the scorer had no computable
+  // feature to work with. That is the state the Booth OPENS in, so it was the
+  // first thing you ever saw. Now the plan fills in, or we say nothing.
+  it("cold Booth with an active set falls back to plan-scored recs", () => {
+    state.hasContext = false;
+    state.planRecs = [rec({ track_id: 9, track_title: "Plan Fallback" })];
+    renderGrid("live", 1);
+    expect(screen.getAllByText("Plan Fallback").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/from your plan/i).length).toBeGreaterThan(0);
+  });
+
+  it("cold Booth with no set says so instead of showing zero-score noise", () => {
+    state.hasContext = false;
+    state.liveRecs = [rec({ track_id: 4, track_title: "Should Not Show" })];
+    renderGrid("live", null);
+    expect(screen.queryByText("Should Not Show")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/nothing playing/i).length).toBe(5);
   });
 });

@@ -75,7 +75,19 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
     return { stemIds, excludeTracks };
   }, [deckMap.data, ableton.playing_clips]);
 
-  return useQuery({
+  // Is there ANY context to score against? With nothing playing, no trailing
+  // plays and no master tempo, every feature the scorer needs is absent —
+  // `combine` renormalizes over zero computable features and returns 0.0 for
+  // every candidate, so all five role columns come back with the SAME
+  // arbitrary tracks at score 0.00. That is the exact state the Booth opens
+  // in. Callers use this to fall back to the plan instead of rendering five
+  // identical unscored lists.
+  const hasContext =
+    combo.stemIds.length > 0
+    || trailingTrackIds.length > 0
+    || (ableton.tempo ?? 0) > 0;
+
+  const query = useQuery({
     // Cache key includes the combo so it re-runs on combo change.
     queryKey: [
       "recommend",
@@ -99,5 +111,10 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
     // Refetch on combo change; otherwise stale-cache for 30s.
     staleTime: 30_000,
     refetchOnWindowFocus: false,
+    // Nothing to score against → don't ask. Saves 5 pointless round-trips
+    // per idle Booth render and keeps the zero-score list off screen.
+    enabled: hasContext,
   });
+
+  return { ...query, hasContext };
 }
