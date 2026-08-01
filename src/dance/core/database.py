@@ -216,6 +216,21 @@ class Track(Base):
     state = Column(String(32), default=TrackState.PENDING.value, nullable=False, index=True)
     error_message = Column(Text, nullable=True)
 
+    # Set when this row is a redundant copy of another recording, pointing at
+    # the copy we keep. NULL = canonical (the normal case).
+    #
+    # The library was built over three ingest runs that pulled overlapping
+    # songs under different filenames, so ``file_hash`` differed and ingest's
+    # hash dedup never fired: 82 groups, 145 redundant rows of 353. See
+    # docs/proposals/library-duplicates.md.
+    #
+    # Deliberately a MARKER, not a delete: ``session_plays`` and
+    # ``track_edges`` reference these rows, and the audio is still on disk.
+    # Setting it back to NULL fully undoes the cleanup.
+    duplicate_of = Column(
+        Integer, ForeignKey("tracks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     created_at = Column(DateTime, default=now_utc, nullable=False)
     updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
     analyzed_at = Column(DateTime, nullable=True)

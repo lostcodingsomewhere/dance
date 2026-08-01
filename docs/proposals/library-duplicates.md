@@ -1,6 +1,6 @@
 # 41% of the library is duplicate recordings
 
-**Status:** PARTIALLY FIXED (rec surface); the durable cleanup needs a decision
+**Status:** DONE (audio-verified marking applied); disk reclaim still open
 **Date:** 2026-08-01
 
 ---
@@ -112,3 +112,47 @@ edges point at is exactly the kind of thing to do deliberately, not in passing.
 
 **Do not run any of this immediately before a session.** The rec-layer fix
 already removes the day-to-day annoyance; the rest is housekeeping.
+
+
+---
+
+## Update 2026-08-01 — metadata was not enough, and the audio proved it
+
+Challenged on whether the "duplicates" were really the same song, the marking
+was reverted and every candidate pair compared **by audio** before anything was
+hidden. Two things came out of it:
+
+**CLAP embeddings are the wrong tool for this.** Cosine over the stored
+full-mix embeddings ranked the most identical pair in the library (#218/#354,
+chroma 0.994) as the *least* similar (cosine 0.379). CLAP is semantic and
+window-sensitive; it does not answer "is this the same recording".
+
+**Fixed-offset comparison lies.** Copies from different sources carry different
+leading silence, so sampling "the middle" of each lands on different bars. The
+"Take Off" pair scores 0.715 unaligned, 0.822 aligned. Every comparison now
+searches for the offset first.
+
+Aligned chroma over all 125 candidates is strongly bimodal:
+
+```
+  0.60-0.70  # 1
+  0.70-0.75    0
+  0.75-0.80  # 1
+  0.80-0.85  ### 3
+  0.85-0.90  ###### 6
+  0.90-0.95  ### 3
+  0.95-1.00  ############################################ 111   (median 0.995)
+```
+
+So the threshold sits in real empty space, not on a guess. **111 marked, 14
+left visible.** Those 14 share a title and a duration but are demonstrably
+different audio — including `LA FAMA` at 0.696 and, notably, `Natural Blues`
+at 0.852, which this document previously cited as an obvious duplicate. A
+metadata-only cleanup would have hidden all 14.
+
+`dance dedupe` now verifies audio before marking and is dry-run by default;
+`--undo --apply` reverses it completely. Source audio is the right thing to
+compare — stems are derived from it, so same recording means equivalent stems.
+
+Final state: 357 rows intact, 111 marked, **244 visible complete tracks**,
+`stem_files` and `session_plays` untouched.

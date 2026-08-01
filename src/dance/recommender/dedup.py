@@ -98,6 +98,60 @@ def dedupe_track_rows(tracks: list[Track]) -> list[Track]:
     return out
 
 
+def find_duplicate_groups(tracks: list[Track]) -> list[tuple[Track, list[Track]]]:
+    """Group tracks into ``(canonical, redundant_copies)`` pairs.
+
+    Only groups that are the SAME RECORDING are returned — same normalized
+    title, durations within :data:`SAME_RECORDING_TOLERANCE_S`. Extended and
+    radio versions of one song land in separate groups and are both canonical.
+
+    Canonical selection, in order:
+
+    1. **Fully processed wins.** ``state == 'complete'`` — never demote a
+       working copy in favour of one that failed to separate.
+    2. **Largest file wins.** For the same recording at the same duration,
+       more bytes means a higher bitrate, and this library is already
+       source-quality-bound (the stems are separated from lossy MP3s, which
+       is the standing complaint about how they sound).
+    3. **Lowest id** as a deterministic tie-break, so repeat runs agree.
+    """
+    buckets: dict[str, list[Track]] = {}
+    for t in tracks:
+        key = title_key(str(t.title) if t.title is not None else None)
+        if not key or t.duration_seconds is None:
+            continue
+        buckets.setdefault(key, []).append(t)
+
+    groups: list[tuple[Track, list[Track]]] = []
+    for members in buckets.values():
+        if len(members) < 2:
+            continue
+        # Split a title bucket into same-recording clusters by duration, so an
+        # extended mix never absorbs the radio edit.
+        clusters: list[list[Track]] = []
+        for t in sorted(members, key=lambda x: float(x.duration_seconds or 0.0)):
+            dur = float(t.duration_seconds or 0.0)
+            for c in clusters:
+                if abs(dur - float(c[0].duration_seconds or 0.0)) <= SAME_RECORDING_TOLERANCE_S:
+                    c.append(t)
+                    break
+            else:
+                clusters.append([t])
+        for c in clusters:
+            if len(c) < 2:
+                continue
+            ranked = sorted(
+                c,
+                key=lambda t: (
+                    0 if str(t.state) == "complete" else 1,
+                    -int(t.file_size_bytes or 0),
+                    int(t.id),
+                ),
+            )
+            groups.append((ranked[0], ranked[1:]))
+    return groups
+
+
 class _HasTrackId(Protocol):
     track_id: int
 
