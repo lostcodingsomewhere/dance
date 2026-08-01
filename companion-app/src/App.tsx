@@ -1,4 +1,5 @@
 import { CommandBar } from "./components/CommandBar";
+import { LoadWarnings } from "./components/LoadWarnings";
 import { MasterStrip } from "./components/MasterStrip";
 import { StackMigrationPrompt } from "./components/StackMigrationPrompt";
 import { useAppStore } from "./store";
@@ -20,6 +21,9 @@ export function App() {
   return (
     <div className="h-full w-full flex flex-col bg-neutral-950 text-neutral-100">
       <MasterStrip />
+      {/* Warp / load warnings — directly under the master strip so a bad
+          auto-warp is impossible to miss before you fire the deck. */}
+      <LoadWarnings />
       <main className="flex-1 flex flex-col min-h-0">
         {view === "booth" && <Booth />}
         {view === "pipeline" && <PipelineOps />}

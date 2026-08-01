@@ -235,6 +235,34 @@ class AbletonOSCClient:
     def set_clip_warp(self, track: int, slot: int, warp: bool) -> None:
         self._send("/live/clip/set/warping", track, slot, 1 if warp else 0)
 
+    def set_clip_warp_mode(self, track: int, slot: int, mode: int) -> None:
+        """Set the clip's warp ALGORITHM (not whether it warps).
+
+        Live's WarpMode enum: 0=Beats, 1=Tones, 2=Texture, 3=Re-Pitch,
+        4=Complex, 6=Complex Pro. We force 0 (Beats) to match what the
+        offline .als writer emits (``als/writer.py`` → ``WarpMode 0``) —
+        the two load paths disagreeing on warp is exactly the drift that
+        makes a stem sound fine from a generated Set and wrong when
+        live-loaded.
+
+        Warp MARKERS are not settable over OSC — AbletonOSC's clip handler
+        explicitly excludes ``warp_markers`` ("Infered arg_value type is not
+        supported"). So we can pin the algorithm but not the grid; catching
+        a bad grid is what ``AbletonBridge._check_warp_agreement`` is for.
+        """
+        self._send("/live/clip/set/warp_mode", track, slot, mode)
+
+    def get_clip_length(self, track: int, slot: int) -> None:
+        """Ask Live for the clip's length in BEATS.
+
+        Reply: ``/live/clip/get/length`` with args ``(track, slot, beats)``.
+        Because beats-per-second is fixed by the project tempo, a warped
+        clip's beat-length is a direct readout of the tempo Live guessed for
+        the sample: two clips cut from the SAME source must report the same
+        length, or one of them got warped wrong.
+        """
+        self._send("/live/clip/get/length", track, slot)
+
     def set_clip_loop(
         self, track: int, slot: int, start_beats: float, end_beats: float
     ) -> None:

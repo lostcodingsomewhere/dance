@@ -201,6 +201,7 @@ class AbletonBridge:
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
+        self.listener.on("/live/clip/get/length", self._on_clip_length)
         self.listener.on("/live/clip_slot/get/has_clip", self._on_has_clip)
         self.listener.on("/live/clip/get/is_playing", self._on_clip_is_playing)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
@@ -526,6 +527,19 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_clip_length(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track, slot, beats) for /live/clip/get/length.
+        # Feeds the post-load warp check — see _check_warp_agreement.
+        if len(args) >= 3:
+            try:
+                beats = float(args[2])
+            except (TypeError, ValueError):
+                return
+            self._reply_values[address] = (int(args[0]), int(args[1]), beats)
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     def _on_has_clip(self, address: str, args: tuple[Any, ...]) -> None:
         # AbletonOSC sends (track, slot, 0|1) for
         # /live/clip_slot/get/has_clip. Stash (track, slot, bool) so the
@@ -825,6 +839,12 @@ class AbletonBridge:
             "cells": cells,
         }
 
+    def get_deck_cells(self) -> dict[tuple[int, str], int]:
+        """``(scene_index, deck_kind) -> source track id`` for every loaded
+        cell. A copy, so callers can't mutate bridge state. Used by the
+        warp-check endpoint to look up which tracks it needs analysis for."""
+        return dict(self._deck_cells)
+
     def scan_live_for_cells(
         self,
         *,
@@ -939,6 +959,33 @@ class AbletonBridge:
         if reply_track != track or reply_slot != slot:
             return None
         return bool(reply_playing)
+
+    def _get_clip_length(
+        self, track: int, slot: int, *, timeout: float = 0.3
+    ) -> float | None:
+        """One-shot 'how long is this clip, in beats?' query.
+
+        Returns ``None`` on timeout / empty slot. Same stale-reply guard as
+        ``_get_clip_name``. Used by the post-load warp check, which needs a
+        warp-dependent readout to compare stems against each other.
+        """
+        addr = "/live/clip/get/length"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_clip_length(track, slot)
+        except OSError:
+            return None
+        if not evt.wait(timeout):
+            return None
+        result = self._reply_values.get(addr)
+        if not isinstance(result, tuple) or len(result) < 3:
+            return None
+        reply_track, reply_slot, reply_len = result
+        if reply_track != track or reply_slot != slot:
+            return None
+        return float(reply_len) if reply_len else None
 
     def _ensure_cue_playing(self, cue_idx: int, *, timeout: float) -> bool:
         """Re-fire the cue clip until Live reports it's actually playing.
@@ -1532,6 +1579,182 @@ class AbletonBridge:
                     return i, "b"
             i += 1
 
+    # Live's WarpMode enum value for "Beats" — the algorithm the offline
+    # .als writer emits (als/writer.py → WarpMode 0). Pinned so a
+    # live-loaded stem and an exported one behave identically.
+    _WARP_MODE_BEATS = 0
+    # How far two clips cut from the same source may differ in beat-length
+    # before we call it a warp disagreement. 2% is far wider than any real
+    # rounding and far tighter than the 2x errors we're hunting.
+    _WARP_AGREE_TOL = 0.02
+
+    def _force_warp(self, track_index: int, slot_index: int) -> None:
+        """Pin a freshly-created clip to warped + Beats mode.
+
+        ``create_audio_clip`` leaves warp entirely to Live's auto-warp
+        preference, so the deck path and the .als path disagreed: an
+        exported Set pins ``Warp=true`` / ``WarpMode=0``, a live-loaded
+        stem inherited whatever Live felt like. Beatmatching two decks
+        requires warp ON, so we state it rather than hope for it.
+
+        Best-effort: this cannot fix a wrong tempo GUESS (warp markers
+        aren't reachable over OSC) — it only removes the "was it even
+        warped?" variable. ``_check_warp_agreement`` catches the rest.
+        """
+        try:
+            self.client.set_clip_warp(track_index, slot_index, True)
+            self.client.set_clip_warp_mode(
+                track_index, slot_index, self._WARP_MODE_BEATS
+            )
+        except OSError:  # pragma: no cover - best-effort
+            pass
+
+    def _warp_reference(
+        self, lengths: dict[str, float], expected_beats: float | None
+    ) -> float | None:
+        """Pick the beat-length that represents a CORRECT warp.
+
+        Every stem of one track is cut from the same source and so must warp
+        to the same beat-length. The reference is therefore the largest
+        cluster of mutually-agreeing lengths — with 4 stems and one bad
+        apple, the 3 that agree win, and we need no external ground truth
+        at all.
+
+        Only when no cluster has a majority (the 2-clips-disagreeing case,
+        which is genuinely undecidable from the clips alone) do we fall back
+        to the analyzer's expectation to break the tie. That ordering is
+        deliberate: our own analyzer disagrees with itself across stems of
+        the same track by ~3 BPM, so it's the weaker witness (CLAUDE.md
+        rule 3 — Ableton's interpretation wins).
+        """
+        vals = list(lengths.values())
+        if not vals:
+            return None
+        best: float | None = None
+        best_n = 0
+        for ref in vals:
+            n = sum(1 for v in vals if abs(v / ref - 1.0) <= self._WARP_AGREE_TOL)
+            if n > best_n:
+                best, best_n = ref, n
+        if best_n * 2 <= len(vals) and expected_beats:
+            # No majority — defer to the analyzer for the tie-break only.
+            best = min(vals, key=lambda v: abs(v / expected_beats - 1.0))
+        return best
+
+    def _check_warp_agreement(
+        self,
+        *,
+        scene_index: int,
+        loaded: list[tuple[str, int]],
+        expected_beats: float | None,
+    ) -> list[str]:
+        """Detect stems that Live auto-warped to the wrong tempo.
+
+        Two tiers, strongest first:
+
+        1. **Stems vs each other** (assumption-free). All stems of one track
+           share a source duration, so their warped beat-lengths must match.
+           One at half the others' length means Live guessed half the tempo
+           for it. Names the offending cell and the fix.
+        2. **The whole load vs the analyzer** (soft). If every stem agrees
+           but the load sits at a near-2x factor off our own BPM, Live
+           probably octave-flipped the whole track. Phrased as a check, not
+           an error — see ``_warp_reference`` on why the analyzer is the
+           weaker witness.
+
+        Returns human-readable warnings for the load result's ``warnings``
+        list; empty when everything agrees or Live didn't answer.
+        """
+        lengths: dict[str, float] = {}
+        for deck_kind, t_idx in loaded:
+            beats = self._get_clip_length(t_idx, scene_index)
+            if beats and beats > 0:
+                lengths[deck_kind] = beats
+        # One readable clip has nothing to be compared against, and zero
+        # means Live never answered (not running, or still analyzing).
+        if len(lengths) < 2:
+            return []
+
+        ref = self._warp_reference(lengths, expected_beats)
+        if not ref:
+            return []
+
+        warnings: list[str] = []
+        for deck_kind, beats in sorted(lengths.items()):
+            ratio = beats / ref
+            if abs(ratio - 1.0) <= self._WARP_AGREE_TOL:
+                continue
+            if 0.45 <= ratio <= 0.55:
+                warnings.append(
+                    f"{deck_kind}: Live warped this stem at HALF the tempo of "
+                    f"the others. Select the clip in Live and hit the '*2' "
+                    f"button in Clip view to fix it."
+                )
+            elif 1.8 <= ratio <= 2.2:
+                warnings.append(
+                    f"{deck_kind}: Live warped this stem at DOUBLE the tempo "
+                    f"of the others. Select the clip in Live and hit the ':2' "
+                    f"button in Clip view to fix it."
+                )
+            else:
+                warnings.append(
+                    f"{deck_kind}: warped to {beats:.0f} beats but the other "
+                    f"stems came out at {ref:.0f} — this stem will drift. "
+                    f"Check its warp markers in Live."
+                )
+
+        # Tier 2 — only meaningful when the stems agreed with each other.
+        if not warnings and expected_beats:
+            factor = ref / expected_beats
+            if 0.45 <= factor <= 0.55 or 1.8 <= factor <= 2.2:
+                doubled = factor > 1.0
+                warnings.append(
+                    f"All stems warped consistently, but at "
+                    f"{'double' if doubled else 'half'} the tempo our analysis "
+                    f"expected. Sounds right? Trust Live. Sounds wrong? Hit "
+                    f"'{':2' if doubled else '*2'}' on the clips."
+                )
+        return warnings
+
+    def check_warp_at(
+        self, scene_index: int, *, expected_beats_by_track: dict[int, float] | None = None
+    ) -> dict[str, Any]:
+        """Audit one scene's stem cells for Live auto-warp errors.
+
+        Run this AFTER Live has finished analyzing (~15s post-load) — see the
+        note in ``push_track_to_live``. Cells are grouped by SOURCE TRACK
+        before comparing, because the whole premise is "same audio, therefore
+        same beat-length"; in the live-remixing model one scene routinely
+        holds stems from four different songs, and comparing those to each
+        other would be meaningless.
+
+        Returns ``{"scene_index": int, "checked": int, "warnings": [str]}``.
+        """
+        by_track: dict[int, list[tuple[str, int]]] = {}
+        for (scene, deck_kind), track_id in self._deck_cells.items():
+            if scene != scene_index or deck_kind.startswith("mix"):
+                continue
+            if self._deck_columns is None or deck_kind not in self._deck_columns:
+                continue
+            by_track.setdefault(track_id, []).append(
+                (deck_kind, self._deck_columns[deck_kind])
+            )
+
+        warnings: list[str] = []
+        checked = 0
+        for track_id, cells in sorted(by_track.items()):
+            if len(cells) < 2:
+                continue  # nothing to compare this source against
+            checked += len(cells)
+            warnings.extend(
+                self._check_warp_agreement(
+                    scene_index=scene_index,
+                    loaded=sorted(cells),
+                    expected_beats=(expected_beats_by_track or {}).get(track_id),
+                )
+            )
+        return {"scene_index": scene_index, "checked": checked, "warnings": warnings}
+
     def push_track_to_live(
         self,
         track: "Track",
@@ -1547,6 +1770,11 @@ class AbletonBridge:
         # the less-full side at the target row. ``"a"`` or ``"b"`` forces
         # that side, used by the UI's explicit A/B load buttons.
         side: str | None = None,
+        # Beats the track SHOULD occupy once warped (duration x analyzed BPM
+        # / 60). Only used to break ties / spot a whole-track octave flip in
+        # the post-load warp check; ``None`` just makes that check weaker,
+        # never wrong. The API layer computes it — the bridge stays DB-free.
+        expected_beats: float | None = None,
     ) -> dict[str, Any]:
         """Stage some or all of a track's stems on a scene in Live's session view.
 
@@ -1649,6 +1877,9 @@ class AbletonBridge:
         # _create_deck_columns) so it doesn't double the summed stems, but
         # the DJ can unmute it to A/B against the original.
         stems_loaded = 0
+        # (deck_kind, track_index) for every cell this call populated — the
+        # input to the post-load warp check below.
+        loaded_cells: list[tuple[str, int]] = []
         for kind in valid_kinds:
             stem = stems_by_kind.get(kind)
             if stem is None or not stem.path:
@@ -1663,7 +1894,11 @@ class AbletonBridge:
                 self.client.set_clip_name(
                     t_idx, scene_index, f"{title} ({kind} {side.upper()})"
                 )
+                # Warp ON + Beats, always — a deck you can't beatmatch is
+                # not a deck. See _force_warp.
+                self._force_warp(t_idx, scene_index)
                 self._deck_cells[(scene_index, deck_kind)] = track.id
+                loaded_cells.append((deck_kind, t_idx))
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
                 warnings.append(f"OSC send for {deck_kind} failed: {exc}")
@@ -1688,6 +1923,12 @@ class AbletonBridge:
             else:
                 warnings.append(f"mix file missing on disk: {track.file_path!r}")
 
+        # NB: the warp check deliberately does NOT run here. Measured against
+        # real Live 12.4.2, a freshly created clip reports a placeholder
+        # length (= duration at the current project tempo, so all stems agree)
+        # and only settles to Live's real auto-warp analysis ~13-15s later.
+        # Checking inline reads the placeholder and always says "all good".
+        # Callers run ``check_warp_at`` once the analysis has landed.
         try:
             self.client.show_message(
                 f"Dance: {title} → scene {scene_index + 1} "

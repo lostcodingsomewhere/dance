@@ -35,6 +35,15 @@ interface AppState {
    * BoothColumnHeaders / rec banners.
    */
   stemColumnOrder: string[];
+  /**
+   * Warnings from the most recent load-to-Live, chiefly the warp check
+   * (``bridge._check_warp_agreement``): "Live warped this stem at HALF the
+   * tempo of the others". Ephemeral and explicitly dismissed — a stem that
+   * warped wrong sounds like a mistake YOU made, so the one thing that must
+   * not happen is the message scrolling past unread. ``null`` = nothing to
+   * report.
+   */
+  loadWarnings: { title: string; warnings: string[] } | null;
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -94,6 +103,7 @@ const initial: AppState = {
   commandBarOpen: false,
   previewing: null,
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
+  loadWarnings: null,
   ...readPersisted(),
 };
 
@@ -200,6 +210,18 @@ export const store = {
   },
   resetStemColumnOrder(): void {
     state = { ...state, stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER };
+    emit();
+  },
+  /** Surface warnings from a load. No-ops on an empty list so the happy
+   *  path never flashes an empty banner. */
+  setLoadWarnings(title: string, warnings: string[]): void {
+    if (!warnings || warnings.length === 0) return;
+    state = { ...state, loadWarnings: { title, warnings } };
+    emit();
+  },
+  clearLoadWarnings(): void {
+    if (state.loadWarnings == null) return;
+    state = { ...state, loadWarnings: null };
     emit();
   },
   setPreviewing(

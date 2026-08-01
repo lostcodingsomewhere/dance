@@ -95,9 +95,14 @@ open "/Users/arya/Music/Dance/Sets/<some track>.als"
 
 Edit this table as you go. Targets are soft.
 
+> **Start here: [`docs/session-1.md`](docs/session-1.md)** — a 45-minute script
+> that takes you from "rig is on" to "I recorded myself mixing", covering
+> Phases 0–2 below in one sitting. Written 2026-08-01 because the real blocker
+> was never the tooling, it was not having a "sit down and do this" script.
+
 | Phase | What I'm learning | Status | Notes |
 |---|---|---|---|
-| 0. Rig works at all | Sound out of Edifiers, APC40 lights up, Bose cues independently | ⬜ today | First-light test: open generated `.als`, hit play, hear it. |
+| 0. Rig works at all | Sound out of Edifiers, APC40 lights up, Bose cues independently | ⬜ today | First-light test: open generated `.als`, hit play, hear it. → `docs/session-1.md` Part 1. |
 | 1. APC40 → Session View basics | Launching clips, scene rows, stop buttons, faders→volume, knobs→EQ | ⬜ | Live's manual: APC40 mkII Reference (built-in PDF in Live). |
 | 2. Stem-mix a single track | Drop drums in, fade vocals out, EQ-sweep the bass | ⬜ | Use one of our exported `.als` files — 5 stem tracks already there. |
 | 3. Two-track transition | Track A → Track B using a recommended pair from Up Next | ⬜ | Companion app `/up-next` view drives the candidate list. |
@@ -126,6 +131,47 @@ Append to the top. Use this template:
 **Broke:** what surprised me / what didn't work
 **Next time:** one thing to try
 ```
+
+### 2026-08-01 — Live's auto-warp is wrong on stems (measured, not guessed)
+
+**Played:** No DJing — but for the first time the rig was measured *while running*,
+against real Live with real stems, instead of against fixtures.
+**Worked:**
+- **Found the thing that would have ruined session 1.** The OSC load path never
+  set warp — `create_audio_clip` then `set_clip_name`, nothing else — so every
+  stem inherited Live's own auto-warp guess. Read each clip's warped beat-length
+  back over OSC and divided by source duration to recover the tempo Live picked:
+
+  | track | ours | drums | bass | vocals | other |
+  |---|---|---|---|---|---|
+  | 1 | 126.05 | 124.98 | **113.71** | 124.28 | 123.57 |
+  | 2 | 123.05 | 123.98 | **112.85** | 122.68 | 123.40 |
+  | 3 | 126.05 | 122.44 | **73.16** | 123.91 | **147.73** |
+  | 4 | 129.20 | 127.97 | 126.90 | **62.99** | **63.86** |
+  | 5 | 129.20 | 129.22 | 127.53 | 129.53 | 130.44 |
+
+  4 of the first 4 tracks had at least one badly mis-warped stem; bass wrong on
+  3 of 5. Nothing errors — the stem just drifts, which feels exactly like *you*
+  fired the wrong thing. Track 5 was clean, so it's not universal.
+- Shipped: warp pinned to Beats on every load (matches the `.als` writer, which
+  always did this — the two paths had silently diverged); `check_warp_at` +
+  `POST /ableton/warp-check/{scene}`; an 18 s-delayed audit from the companion
+  into a sticky amber banner naming the cell and the fix (`*2` / `:2`).
+- Two timing facts that shaped the design, both measured: a fresh clip reports a
+  **placeholder** length (= project tempo) for ~13–15 s, so an inline check reads
+  it and always says all-clear; and **stamping the project tempo before loading
+  does not stick** — Live's auto-warp overwrites it. See
+  [`docs/proposals/warp-guard.md`](docs/proposals/warp-guard.md).
+- Wrote [`docs/session-1.md`](docs/session-1.md) — a 45-minute script that starts
+  on the **mix cells** (Live warps full mixes reliably) and only brings stems in
+  at Part 4, with the audit on.
+
+**Broke:** Nothing regressed — 453 tests green, no new ruff/mypy findings. But
+the honest read is that the app has never once been played, and the reason it
+felt unplayable was real, not nerves.
+**Next time:** Run `docs/session-1.md` end to end. Then the 5-minute test in
+`warp-guard.md` (Auto-Warp Long Samples OFF → stamp tempo → load → read back) —
+if the stamp survives, that's the real fix and stems become trustworthy.
 
 ### 2026-06-14 — Plan-grid port: a Set IS its plan (no DJing)
 

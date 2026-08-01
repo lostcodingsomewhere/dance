@@ -25,6 +25,7 @@ from dance.api.schemas import (
     CrossfaderRequest,
     TempoRequest,
     VolumeRequest,
+    WarpCheckResult,
 )
 from dance.core.database import AudioAnalysis, StemFile, Track
 from dance.osc.bridge import AbletonBridge
@@ -404,6 +405,22 @@ def load_track(
             status_code=400,
             detail=f"side must be 'a' or 'b' (or omitted to auto-pick), got {body.side!r}",
         )
+    # How many beats the track should occupy once warped, from OUR analysis.
+    # Feeds the bridge's post-load warp check as a tie-breaker only — Live's
+    # reading of the audio outranks ours (CLAUDE.md rule 3), so a missing or
+    # wrong value can never manufacture a warning on its own.
+    expected_beats: float | None = None
+    analysis = (
+        session.query(AudioAnalysis)
+        .filter(
+            AudioAnalysis.track_id == track.id,
+            AudioAnalysis.stem_file_id.is_(None),
+        )
+        .one_or_none()
+    )
+    if analysis is not None and analysis.bpm and track.duration_seconds:
+        expected_beats = float(track.duration_seconds) * float(analysis.bpm) / 60.0
+
     try:
         result = bridge.push_track_to_live(
             track,
@@ -412,6 +429,7 @@ def load_track(
             scene_index=body.scene_index,
             kinds=body.kinds,
             side=body.side,
+            expected_beats=expected_beats,
         )
     except OSError as exc:
         logger.warning("OSC send failed during load-track: %s", exc)
@@ -440,6 +458,55 @@ def load_track(
         stems_loaded=stems_loaded,
         message=message,
         warnings=result.get("warnings", []),
+    )
+
+
+@router.post("/warp-check/{scene_index}", response_model=WarpCheckResult)
+def warp_check(
+    scene_index: int,
+    bridge: AbletonBridge = Depends(get_bridge),
+    session: Session = Depends(get_session),
+) -> WarpCheckResult:
+    """Audit a loaded scene for Live auto-warp errors.
+
+    Verified against Live 12.4.2 on this library: of 4 tracks loaded, every
+    one had at least one stem warped to the wrong tempo (bass worst — 113 BPM
+    read as 73 on one track). Nothing errors; the stem just drifts. This is
+    the surface that tells the DJ it's the tool, not them.
+
+    Call it ~15s after a load — Live reports a placeholder length until its
+    background analysis lands, and the placeholder makes every stem agree.
+    """
+    if scene_index < 0:
+        raise HTTPException(status_code=400, detail="scene_index must be >= 0")
+
+    # Expected beats per source track on this scene, from our own analysis.
+    # Tie-breaker only — see AbletonBridge._warp_reference.
+    expected: dict[int, float] = {}
+    track_ids = {
+        tid
+        for (scene, kind), tid in bridge.get_deck_cells().items()
+        if scene == scene_index and not kind.startswith("mix")
+    }
+    if track_ids:
+        rows = (
+            session.query(Track, AudioAnalysis)
+            .join(AudioAnalysis, AudioAnalysis.track_id == Track.id)
+            .filter(Track.id.in_(track_ids), AudioAnalysis.stem_file_id.is_(None))
+            .all()
+        )
+        for track, analysis in rows:
+            if analysis.bpm and track.duration_seconds:
+                expected[int(track.id)] = (
+                    float(track.duration_seconds) * float(analysis.bpm) / 60.0
+                )
+
+    result = bridge.check_warp_at(scene_index, expected_beats_by_track=expected)
+    return WarpCheckResult(
+        ok=True,
+        scene_index=result["scene_index"],
+        checked=result["checked"],
+        warnings=result["warnings"],
     )
 
 
