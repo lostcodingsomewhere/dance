@@ -1945,6 +1945,11 @@ class AbletonBridge:
 
         return {
             "scene_index": scene_index,
+            # Which deck side actually received the load. The caller may have
+            # passed side=None and let _pick_side choose, so this is the only
+            # way the UI can know which deck to arm — see the FE's deck-arm
+            # state. Without it, an auto-picked load (⌘K) can't be armed.
+            "side": side,
             "track_indices": deck_columns,
             "stems_loaded": stems_loaded,
             "warnings": warnings,

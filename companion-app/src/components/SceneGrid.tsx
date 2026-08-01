@@ -66,6 +66,7 @@ export function SceneGrid() {
       store.setLoadWarnings(label, result.warnings);
       // An anchor-fill is a whole-song load, so it gets audited too.
       scheduleWarpCheck(result.scene_index, label);
+      store.armDeck(result.side, result.scene_index);
     },
   });
   const [expanded, setExpanded] = useState(false);

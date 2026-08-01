@@ -454,6 +454,7 @@ def load_track(
     return LoadTrackResult(
         ok=True,
         scene_index=result["scene_index"],
+        side=result.get("side"),
         track_indices=result["track_indices"],
         stems_loaded=stems_loaded,
         message=message,

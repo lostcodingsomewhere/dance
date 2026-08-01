@@ -44,6 +44,19 @@ interface AppState {
    * report.
    */
   loadWarnings: { title: string; warnings: string[] } | null;
+  /**
+   * The scene each deck's ▶ should fire next — set when you load a track to
+   * that deck, cleared once Live reports it firing.
+   *
+   * Without this, the deck's play button falls back to an "anchor scene"
+   * heuristic that resolves to the scene ALREADY firing on that side, or
+   * failing that the *lowest* loaded scene. Both mean the same thing in
+   * practice: from the second track of a set onward, ▶ replays the track
+   * you're already on and the one you just loaded is unreachable except by
+   * tapping its four stem cells individually. Arming makes ▶ mean "play what
+   * I just loaded".
+   */
+  armed: { a: number | null; b: number | null };
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -70,11 +83,21 @@ function readPersisted(): Partial<AppState> {
       Array.isArray(persistedOrder) &&
       persistedOrder.length === DEFAULT_STEM_COLUMN_ORDER.length &&
       DEFAULT_STEM_COLUMN_ORDER.every((c) => persistedOrder.includes(c));
+    const persistedArm = parsed.armed;
     return {
       loadedDecks: parsed.loadedDecks ?? {},
       stemColumnOrder: isValidOrder
         ? persistedOrder
         : DEFAULT_STEM_COLUMN_ORDER,
+      // Survives a mid-set browser reload — losing the arm would silently
+      // put ▶ back on the wrong scene, which is the whole bug.
+      armed:
+        persistedArm &&
+        typeof persistedArm === "object" &&
+        "a" in persistedArm &&
+        "b" in persistedArm
+          ? { a: persistedArm.a ?? null, b: persistedArm.b ?? null }
+          : { a: null, b: null },
     };
   } catch {
     return {};
@@ -89,6 +112,7 @@ function persist(s: AppState): void {
       JSON.stringify({
         loadedDecks: s.loadedDecks,
         stemColumnOrder: s.stemColumnOrder,
+        armed: s.armed,
       }),
     );
   } catch {
@@ -104,6 +128,7 @@ const initial: AppState = {
   previewing: null,
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
   loadWarnings: null,
+  armed: { a: null, b: null },
   ...readPersisted(),
 };
 
@@ -210,6 +235,22 @@ export const store = {
   },
   resetStemColumnOrder(): void {
     state = { ...state, stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER };
+    emit();
+  },
+  /** Point a deck's ▶ at the scene just loaded onto it. ``side`` may be null
+   *  when the backend couldn't report which deck it picked — then we simply
+   *  don't arm, and the old anchor heuristic still applies. */
+  armDeck(side: "a" | "b" | null | undefined, sceneIndex: number): void {
+    if (side !== "a" && side !== "b") return;
+    if (state.armed[side] === sceneIndex) return;
+    state = { ...state, armed: { ...state.armed, [side]: sceneIndex } };
+    emit();
+  },
+  /** Clear the arm — called once Live confirms that scene is firing, so the
+   *  chip disappears when it has been honoured. */
+  clearArm(side: "a" | "b"): void {
+    if (state.armed[side] == null) return;
+    state = { ...state, armed: { ...state.armed, [side]: null } };
     emit();
   },
   /** Surface warnings from a load. No-ops on an empty list so the happy

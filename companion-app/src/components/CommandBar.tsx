@@ -481,6 +481,7 @@ function RowShell({
       const label = `${title} → scene ${r.scene_index + 1}`;
       store.setLoadWarnings(label, r.warnings);
       scheduleWarpCheck(r.scene_index, label);
+      store.armDeck(r.side, r.scene_index);
       if (!fully && filePath) {
         try {
           await revealPath(filePath);
