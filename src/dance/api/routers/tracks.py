@@ -29,6 +29,7 @@ from dance.core.database import (
     Track,
     TrackEdge,
 )
+from dance.recommender.dedup import dedupe_track_rows
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,12 @@ stems_router = APIRouter(prefix="/stems", tags=["stems"])
 # render to fewer pixels anyway); anything below 50 is degenerate.
 _MIN_NUM_PEAKS = 50
 _MAX_NUM_PEAKS = 1000
+
+
+# How many extra rows to pull before collapsing duplicates, so the caller
+# still gets `limit` results back. The worst real group in this library has
+# 3 copies; 3x leaves headroom without needing a second query.
+_DEDUPE_OVERFETCH = 3
 
 
 @router.get("/search", response_model=list[TrackOut])
@@ -95,7 +102,13 @@ def search_tracks(
         query = query.order_by(title_score, artist_score, Track.title)
     else:
         query = query.order_by(Track.updated_at.desc())
-    tracks = query.limit(limit).all()
+    # Over-fetch, then collapse duplicate recordings, then trim to `limit`.
+    # The library carries 145 redundant copies (see
+    # docs/proposals/library-duplicates.md), so searching "navi" returned the
+    # same recording three times — three of the palette's eight slots on one
+    # song. Over-fetching keeps the list `limit` deep after the collapse.
+    rows = query.limit(limit * _DEDUPE_OVERFETCH).all()
+    tracks = dedupe_track_rows(rows)[:limit]
     return [track_to_out(session, t) for t in tracks]
 
 

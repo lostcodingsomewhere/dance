@@ -15,7 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dance.core.database import Track
-from dance.recommender.dedup import dedupe_by_recording, title_key
+from dance.recommender.dedup import (
+    dedupe_by_recording,
+    dedupe_track_rows,
+    title_key,
+)
 
 
 @dataclass
@@ -130,3 +134,31 @@ def test_order_is_preserved(session):
     session.commit()
     out = dedupe_by_recording(session, [_Rec(3), _Rec(1), _Rec(2)])
     assert [r.track_id for r in out] == [3, 1, 2]
+
+
+# --- Track-row variant (the ⌘K search path) --------------------------------
+
+
+def test_dedupe_track_rows_collapses_without_a_query(session):
+    """Searching "navi" returned the same recording three times, burning three
+    of the palette's eight slots on one song."""
+    for tid, artist in (
+        (67, "Dot Major;Kitty Amor"),
+        (246, "Dot Major, Kitty Amor"),
+        (374, "Dot Major"),
+    ):
+        _track(session, tid, "Navi - Kitty Amor Remix", artist, 211.8)
+    _track(session, 9, "Strobe", "deadmau5", 300.0)
+    session.commit()
+
+    rows = session.query(Track).order_by(Track.id).all()
+    out = dedupe_track_rows(rows)
+    assert [t.id for t in out] == [9, 67]
+
+
+def test_dedupe_track_rows_keeps_extended_and_radio(session):
+    _track(session, 1, "Manifesto (Extended Mix)", "MRAK", 348.4)
+    _track(session, 2, "Manifesto", "MRAK", 223.8)
+    session.commit()
+    rows = session.query(Track).order_by(Track.id).all()
+    assert [t.id for t in dedupe_track_rows(rows)] == [1, 2]

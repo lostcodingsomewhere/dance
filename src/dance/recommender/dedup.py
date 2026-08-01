@@ -70,6 +70,34 @@ def title_key(title: str | None) -> str:
     return _NON_ALNUM.sub("", _NOISE_SUFFIX.sub("", (title or "").lower()))
 
 
+def dedupe_track_rows(tracks: list[Track]) -> list[Track]:
+    """Same collapse, for a list of ``Track`` rows (order preserved).
+
+    Separate from :func:`dedupe_by_recording` because a Track already carries
+    its own title and duration — no lookup query is needed, which matters on
+    the ⌘K path where the palette re-queries on every keystroke.
+
+    Searching "navi" on this library returns the same recording three times,
+    burning three of the palette's eight slots on one song.
+    """
+    kept: dict[str, list[float]] = {}
+    out: list[Track] = []
+    for t in tracks:
+        # str() past SQLAlchemy's Column[str] declarative typing — the ORM
+        # hands back a plain str at runtime.
+        key = title_key(str(t.title) if t.title is not None else None)
+        duration = t.duration_seconds
+        if not key or duration is None:
+            out.append(t)
+            continue
+        seen = kept.setdefault(key, [])
+        if any(abs(float(duration) - d) <= SAME_RECORDING_TOLERANCE_S for d in seen):
+            continue
+        seen.append(float(duration))
+        out.append(t)
+    return out
+
+
 class _HasTrackId(Protocol):
     track_id: int
 
