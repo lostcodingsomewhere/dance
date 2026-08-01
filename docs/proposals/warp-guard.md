@@ -93,21 +93,86 @@ and consistently across all four stems.
 
 ### Option B — write `.asd` analysis sidecars
 
-Live reads a `.asd` next to the audio file and skips analysis entirely. This is
-the canonical fix and a one-time batch over 1,412 stems. The format is binary
-and undocumented; this is a research task, not an afternoon.
+**Investigated and cracked, then set aside — Option C is strictly better.**
 
-Warp **markers** are not reachable over OSC in any case — AbletonOSC's clip
-handler explicitly excludes `warp_markers` ("Infered arg_value type is not
-supported"), and Live's LOM exposes no marker-mutation method. So there is no
-third option that works purely through the existing bridge.
+A multi-agent reverse-engineering pass (3 independent parsers, adversarial
+verification) established the format: a self-describing container, magic
+`06 49`, a schema chunk (`ab 1e 56 78`) carrying a typedef table with UTF-16
+field names. `WarpMarker` is **named in the file**, with `SecTime : f64` and
+`BeatTime : f64`. Blind-confirmed on a fixture: a 4.1196 s / 181675-frame WAV
+decoded to markers `(0, 0)` and `(0.016092, 0.03125)` → 116.5158 BPM → exactly
+**8.0 beats**, nothing fitted. Forward-walking the record lands on
+`OriginalFileSize` == the sibling audio file's byte size, 26/26.
+
+One finding overturns an assumption this doc previously made:
+
+> **The stems' `.asd` files store no tempo at all.** The `WarpMarkers` list
+> header is 0, `UnbiasedTempoEstimate` is 0.0, and bytes `D+0 … D+139` are
+> **byte-identical across all 20 files** spanning 62.99–147.73 BPM. Live
+> re-runs auto-warp on every load. That is a proof, not a correlation.
+
+So the `.asd` never was a cache of Live's answer — which is why the same stem
+mis-warps identically every time.
+
+Writing one is feasible (no checksum, no global length field, no self-
+referential offsets) but has never been tested against Live 12.4.2, and a
+gotcha was found: auto-analysed stems carry `LoopEnd = OutMarker = 0.0`, so a
+naive writer that flips the saved-clip-settings flag could produce a
+zero-length clip. Confidence that a hand-written `.asd` actually changes
+Live's behaviour: **~0.65**. Not good enough to bet an evening on.
+
+### Option C — repair the grid over OSC ← **the plan**
+
+Live's `Clip` exposes **`add_warp_marker` / `move_warp_marker` /
+`remove_warp_marker`** as public, documented LOM methods (Live 11+). Stock
+AbletonOSC never registered them: `add_warp_marker` takes a *dict*, and the
+generic method dispatcher splats positional args. The `warp_markers`
+*property* is excluded in `clip.py` for an unrelated reason (it returns a dict
+Live can't serialise back) — the **methods** were simply never wired.
+
+This is strictly better than Option B: documented interface, applies to a clip
+already loaded, undoable, no binary forgery. And Live writes the `.asd` back
+itself when a clip's warp changes — so a repair may persist for every future
+load, giving library-wide correctness from the only writer guaranteed correct.
+
+**Shipped (inert until activated):**
+
+- The fork now registers `/live/clip/{add,move,remove}_warp_marker` plus
+  `/live/clip/get/warp_marker_times` (the grid flattened to floats, which is
+  what makes a repair *verifiable* rather than hopeful).
+- `client.py` has the matching senders.
+- `scripts/warp_probe.py` reports a scene's grids and, with `--repair`,
+  rewrites them.
+
+**Not shipped:** any automatic repair in the app. The patched handlers only
+take effect once Live reloads its Remote Scripts, so none of this could be
+verified against real Live in the session that wrote it. Per CLAUDE.md rule 2,
+unverified capability does not get wired into the performance path.
 
 ## Recommendation
 
-Test Option A (one preference toggle, one load, one read-back — ~5 minutes at
-the rig). If the stamp survives, implement it behind an "is anything playing?"
-guard and keep the audit as the backstop. If it does not survive, Option B is
-the only real fix and the audit plus manual correction is the interim.
+**For the first sessions: change nothing.** `check_warp_at` already flags
+mis-warped stems; trust it. If it fires with a non-octave drift it now tells
+you the target and where to type it (Live's Sample tab → Seg. BPM).
+
+**When you have 15 minutes** (not on a night you intend to play):
+
+1. Live → Preferences → Link/Tempo/MIDI → Control Surface: set AbletonOSC to
+   None, then back. That reloads the patched script.
+2. Stop the backend (it owns OSC port 11001), load a track, wait ~20 s.
+3. `python scripts/warp_probe.py --scene 1` — confirms the handlers answer and
+   prints each stem's grid.
+4. `python scripts/warp_probe.py --scene 1 --repair --bpm <target>`.
+5. Then quit Live, reopen, drag the same `.wav` in fresh. If the corrected grid
+   persisted to the `.asd`, the fix is permanent and library-wide — and the
+   binary writer is never needed.
+
+If step 5 holds, wire the repair into `check_warp_at` so the audit becomes
+self-healing. Note the target BPM must come from **dance's analysis, not from
+doubling Live's guess**: within `29d6163a` Live produced 127.97 / 126.90 /
+62.99 / 63.86, and doubling the halved pair gives 125.98 / 127.72 — still
+disagreeing. And `a747bfec` bass at 113.71 vs 124.98 drums is a 9% drift with
+no halving involved, so `:2` / `*2` cannot fix it at all.
 
 Until then, the practical workaround is in [`../session-1.md`](../session-1.md):
 **start on the mix cells, not the stems.** Live auto-warps a full mix reliably

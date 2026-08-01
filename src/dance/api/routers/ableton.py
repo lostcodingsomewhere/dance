@@ -484,6 +484,7 @@ def warp_check(
     # Expected beats per source track on this scene, from our own analysis.
     # Tie-breaker only — see AbletonBridge._warp_reference.
     expected: dict[int, float] = {}
+    durations: dict[int, float] = {}
     track_ids = {
         tid
         for (scene, kind), tid in bridge.get_deck_cells().items()
@@ -497,12 +498,18 @@ def warp_check(
             .all()
         )
         for track, analysis in rows:
-            if analysis.bpm and track.duration_seconds:
-                expected[int(track.id)] = (
-                    float(track.duration_seconds) * float(analysis.bpm) / 60.0
-                )
+            if track.duration_seconds:
+                durations[int(track.id)] = float(track.duration_seconds)
+                if analysis.bpm:
+                    expected[int(track.id)] = (
+                        float(track.duration_seconds) * float(analysis.bpm) / 60.0
+                    )
 
-    result = bridge.check_warp_at(scene_index, expected_beats_by_track=expected)
+    result = bridge.check_warp_at(
+        scene_index,
+        expected_beats_by_track=expected,
+        duration_by_track=durations,
+    )
     return WarpCheckResult(
         ok=True,
         scene_index=result["scene_index"],

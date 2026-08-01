@@ -820,6 +820,41 @@ def test_bridge_warp_check_flags_whole_track_octave_flip(tmp_path):
     assert "Trust Live" in flips[0]
 
 
+def test_bridge_warp_check_gives_a_target_bpm_for_non_octave_drift(tmp_path):
+    """A 9% drift is NOT an octave error, so ':2' / '*2' cannot fix it — the
+    DJ has to type a segment BPM. Measured on the real rig: a bass stem read
+    as 113.71 BPM against 124.98 drums. The message has to carry both numbers.
+    """
+    # 340.7s source. drums/vocals/other agree; bass sits ~9% low.
+    dur = 340.7
+    good = dur * 124.98 / 60.0
+    bad = dur * 113.71 / 60.0
+    lengths = {(idx, 0): good for idx in _A_STEM_IDX.values()}
+    lengths[(_A_STEM_IDX["bass_a"], 0)] = bad
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        mix, stems = _full_song_stems(tmp_path)
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)), stems, include_stems=True
+            )
+            result = bridge.check_warp_at(0, duration_by_track={7: dur})
+        finally:
+            bridge.stop()
+
+    hits = [w for w in result["warnings"] if "bass_a" in w]
+    assert len(hits) == 1
+    # Not misfiled as an octave error.
+    assert "*2" not in hits[0] and ":2" not in hits[0]
+    # Carries what Live thinks, what it should be, and where to type it.
+    assert "113.7" in hits[0]
+    assert "125.0" in hits[0]
+    assert "Seg. BPM" in hits[0]
+
+
 def test_bridge_warp_check_silent_when_live_never_answers(tmp_path):
     """No length replies (Live closed, or a fork without the handler) must
     degrade to silence, not to a false alarm."""
