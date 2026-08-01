@@ -432,6 +432,109 @@ def build_graph(ctx: click.Context, track_id: tuple[int, ...]) -> None:
 
 
 @main.command()
+@click.option("--apply", "apply_", is_flag=True, help="Actually write. Without this, dry run only.")
+@click.option("--undo", is_flag=True, help="Clear every duplicate_of marker (full revert).")
+@click.pass_context
+def dedupe(ctx: click.Context, apply_: bool, undo: bool) -> None:
+    """Mark redundant copies of the same recording (reversible).
+
+    Three ingest runs pulled overlapping songs under different filenames, so
+    file_hash differed and ingest's dedup never fired — 82 groups, 145
+    redundant rows of 353. See docs/proposals/library-duplicates.md.
+
+    This MARKS rather than deletes: session_plays and track_edges reference
+    these rows and the audio stays on disk. ``--undo`` restores the previous
+    state exactly.
+
+    DRY RUN BY DEFAULT. Nothing is written without ``--apply``.
+    """
+    settings: Settings = ctx.obj["settings"]
+    session = get_session(settings.db_url)
+    try:
+        from dance.core.database import Track
+        from dance.recommender.dedup import find_duplicate_groups
+
+        if undo:
+            n = session.query(Track).filter(Track.duplicate_of.isnot(None)).count()
+            if not apply_:
+                console.print(f"[yellow]DRY RUN[/yellow] would clear {n} duplicate_of markers")
+                console.print("Re-run with [bold]--undo --apply[/bold] to write.")
+                return
+            session.query(Track).filter(Track.duplicate_of.isnot(None)).update(
+                {Track.duplicate_of: None}, synchronize_session=False
+            )
+            session.commit()
+            console.print(f"[green]cleared[/green] {n} markers")
+            return
+
+        from dance.recommender.dedup_audio import compare_recordings
+
+        tracks = session.query(Track).all()
+        groups = find_duplicate_groups(tracks)
+        candidates = [(c, d) for c, ds in groups for d in ds]
+
+        # Metadata proposes, audio disposes. Title+duration alone would have
+        # hidden 14 real tracks on this library (see dedup_audio). Every pair
+        # is confirmed by listening before anything is marked.
+        console.print(
+            f"[bold]{len(groups)}[/bold] candidate groups, "
+            f"[bold]{len(candidates)}[/bold] copies — verifying audio…"
+        )
+        verified: list[tuple] = []
+        rejected: list[tuple] = []
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Comparing…", total=len(candidates))
+            for canon, dup in candidates:
+                m = compare_recordings(
+                    canon.file_path, dup.file_path,
+                    float(canon.duration_seconds or 0), float(dup.duration_seconds or 0),
+                )
+                (verified if m.same_recording else rejected).append((canon, dup, m))
+                progress.advance(task)
+
+        redundant = len(verified)
+
+        console.print(
+            f"\n[green]{len(verified)}[/green] confirmed same recording, "
+            f"[yellow]{len(rejected)}[/yellow] NOT confirmed (left visible), "
+            f"of {len(tracks)} tracks"
+        )
+        for canon, d, m in verified[:10]:
+            console.print(
+                f"  mark [red]#{d.id}[/red] -> keep [green]#{canon.id}[/green] "
+                f"sim={m.similarity:.3f}  {(canon.title or '')[:40]}"
+            )
+        if len(verified) > 10:
+            console.print(f"  [dim]… and {len(verified) - 10} more[/dim]")
+        if rejected:
+            console.print("\n[yellow]Not confirmed — these stay visible:[/yellow]")
+            for canon, d, m in rejected:
+                why = m.error or f"sim={m.similarity:.3f}" + (
+                    " (alignment hit search limit)" if m.at_search_limit else ""
+                )
+                console.print(
+                    f"  keep both [dim]#{d.id} / #{canon.id}[/dim] {why}  "
+                    f"{(canon.title or '')[:36]}"
+                )
+
+        if not apply_:
+            console.print("\n[yellow]DRY RUN[/yellow] — nothing written.")
+            console.print("Re-run with [bold]--apply[/bold] to mark. Reverse with [bold]--undo --apply[/bold].")
+            return
+
+        for canon, d, _m in verified:
+            d.duplicate_of = canon.id
+        session.commit()
+        console.print(f"\n[green]marked[/green] {redundant} copies. Reverse: dance dedupe --undo --apply")
+    finally:
+        session.close()
+
+
+@main.command()
 @click.option("--track-id", "-t", type=int, help="Tag a single track")
 @click.option("--limit", "-n", type=int, default=None, help="Max tracks to tag")
 @click.option("--retag", is_flag=True, help="Re-tag tracks that already have tags from this mode")

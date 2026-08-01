@@ -424,7 +424,13 @@ class _ColumnRecommenderImpl:
             )
             .outerjoin(TrackEmbedding, TrackEmbedding.stem_file_id == StemFile.id)
             .outerjoin(AudioAnalysis, AudioAnalysis.stem_file_id == StemFile.id)
+            .join(Track, Track.id == StemFile.track_id)
             .filter(StemFile.kind == column)
+            # Redundant copies never enter the candidate pool. 125 of 357
+            # rows in this library are the same recording ingested more than
+            # once (docs/proposals/library-duplicates.md); without this a rec
+            # list spends its slots showing you the same song twice.
+            .filter(Track.duplicate_of.is_(None))
             .all()
         )
         out: list[_Cand] = []
@@ -486,6 +492,8 @@ class _ColumnRecommenderImpl:
                 (AudioAnalysis.track_id == Track.id)
                 & (AudioAnalysis.stem_file_id.is_(None)),
             )
+            # Same reason as _stem_candidates — see there.
+            .filter(Track.duplicate_of.is_(None))
             .all()
         )
         out: list[_Cand] = []

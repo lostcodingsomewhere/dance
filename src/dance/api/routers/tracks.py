@@ -72,7 +72,9 @@ def search_tracks(
     Empty ``q`` returns the most-recently-updated tracks (browse mode).
     """
     needs_analysis = any(v is not None for v in (bpm_min, bpm_max, key, energy))
-    query = session.query(Track)
+    # Hide rows marked as a redundant copy of another recording — searching
+    # "navi" used to return the same song three times.
+    query = session.query(Track).filter(Track.duplicate_of.is_(None))
     term = q.strip()
     if term:
         pattern = f"%{term}%"
