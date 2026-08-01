@@ -33,7 +33,7 @@ from dance.core.database import (
     TrackEmbedding,
 )
 from dance.core.serialization import decode_embedding
-from dance.recommender import scoring
+from dance.recommender import dedup, scoring
 from dance.recommender.journey import JourneyState, journey_from_combo, journey_from_tracks
 
 
@@ -345,6 +345,12 @@ class _ColumnRecommenderImpl:
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
+        # Collapse duplicate RECORDINGS before truncating, so a rec list never
+        # spends two of its k slots on the same song ingested twice. Done after
+        # the sort so the copy the scorer preferred is the one kept, and before
+        # [:k] so the freed slots go to real alternatives. Extended-vs-radio
+        # variants survive — see dedup.SAME_RECORDING_TOLERANCE_S.
+        results = dedup.dedupe_by_recording(self.session, results)
         return results[:k]
 
     # ------------------------------------------------------------------
