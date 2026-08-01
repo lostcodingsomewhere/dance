@@ -83,11 +83,18 @@ export function useAppendToPlan() {
   });
 }
 
-export function usePlanRecs(setId: number | null, role: string, k = 8) {
+export function usePlanRecs(
+  setId: number | null,
+  role: string,
+  opts: { k?: number; enabled?: boolean } = {},
+) {
+  const k = opts.k ?? 8;
   return useQuery({
     queryKey: ["sets", setId, "plan-recs", role, k],
     queryFn: () => api.getPlanRecs(setId!, role, k),
-    enabled: !!setId,
+    // ``enabled`` lets the Booth ask for plan-scored recs only in the cold
+    // case (nothing playing), instead of fetching them on every render.
+    enabled: !!setId && (opts.enabled ?? true),
     staleTime: 10_000,
   });
 }

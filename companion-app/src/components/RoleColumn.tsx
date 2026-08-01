@@ -265,7 +265,22 @@ function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
   );
 }
 
-/** Recs scored against what's playing (Booth) — live-rescoring stream. */
+/**
+ * Recs in the Booth.
+ *
+ * Two regimes, and which one applies is decided by whether there is anything
+ * to score against — not by a mode flag:
+ *
+ * - **Something playing** (or a tempo / trailing plays): re-score against the
+ *   live combo. This is the choose-your-adventure stream from docs/vision.md.
+ * - **Nothing playing**: score against the *plan* instead. Without this the
+ *   scorer has zero computable features, so all five columns return the same
+ *   arbitrary tracks at score 0.00 — which is precisely what the Booth showed
+ *   on open, before you'd fired anything.
+ *
+ * With no active set and nothing playing there is genuinely nothing to say,
+ * so we say that instead of faking it.
+ */
 function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole }) {
   // ``visRole`` maps the plan role "song" onto the recommender's "mix" feed.
   // Passing the raw role asked the backend for a column it doesn't have, so
@@ -273,6 +288,28 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
   // whole-track A/B set is built from.
   const recs = useColumnRecs(visRole(role), { k: 4 });
   const { addToRole } = usePlanMutations(setId);
+  const cold = !recs.hasContext;
+  const planRecs = usePlanRecs(setId, role, { k: 4, enabled: cold && setId != null });
+
+  if (cold && setId != null) {
+    return (
+      <RecsList
+        loading={planRecs.isLoading}
+        recs={planRecs.data?.recs ?? []}
+        role={role}
+        mode="live"
+        onAdd={(tid) => addToRole(role, tid)}
+        note="from your plan"
+      />
+    );
+  }
+  if (cold) {
+    return (
+      <div className="px-1 text-[10px] italic leading-snug text-neutral-600">
+        nothing playing — load a deck or start a set
+      </div>
+    );
+  }
   return (
     <RecsList
       loading={recs.isLoading}
@@ -290,15 +327,24 @@ function RecsList({
   role,
   mode,
   onAdd,
+  note,
 }: {
   loading: boolean;
   recs: ColumnRec[];
   role: PlanRole;
   mode: Mode;
   onAdd?: (trackId: number) => void;
+  /** Where these came from, when it isn't the obvious one. Keeps the DJ from
+   *  wondering why the Booth is showing plan-scored picks. */
+  note?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
+      {note && !loading && recs.length > 0 && (
+        <div className="px-1 text-[9px] uppercase tracking-wider text-neutral-600">
+          {note}
+        </div>
+      )}
       {loading && <div className="text-[10px] text-neutral-600 px-1">…</div>}
       {!loading && recs.length === 0 && (
         <div className="text-[10px] text-neutral-600 italic px-1">no candidates</div>
