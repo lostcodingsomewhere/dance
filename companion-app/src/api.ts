@@ -697,6 +697,30 @@ export interface LoadTrackResult {
   warnings: string[];
 }
 
+export interface WarpCheckResult {
+  ok: boolean;
+  scene_index: number;
+  checked: number;
+  warnings: string[];
+}
+
+/**
+ * Audit a loaded scene for Live auto-warp errors.
+ *
+ * Live warps every stem independently and gets isolated stems wrong often —
+ * measured on this library, all 4 tracks tested had at least one stem on the
+ * wrong tempo (one bass read 113 BPM as 73). Nothing errors; the stem just
+ * drifts, which reads as the DJ's mistake.
+ *
+ * Call this ~15s AFTER a load, never immediately: a fresh clip reports a
+ * placeholder length that makes every stem look identical.
+ */
+export function warpCheck(sceneIndex: number): Promise<WarpCheckResult> {
+  return request<WarpCheckResult>(`/ableton/warp-check/${sceneIndex}`, {
+    method: "POST",
+  });
+}
+
 export function pushTrackToLive(
   trackId: number,
   options: {

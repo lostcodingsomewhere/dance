@@ -73,6 +73,7 @@ class _FakeLive:
         clip_never_appears: bool = False,
         is_playing_delay: int = 0,
         answer_is_playing: bool = True,
+        clip_lengths: dict[tuple[int, int], float] | None = None,
     ) -> None:
         self.names: list[str] = list(initial_names or [])
         self.received: list[tuple[str, tuple[Any, ...]]] = []
@@ -94,6 +95,11 @@ class _FakeLive:
         self._is_playing_delay = is_playing_delay
         self._answer_is_playing = answer_is_playing
         self._playing_pending: dict[tuple[int, int], int] = {}
+        # (track, slot) -> warped beat-length Live reports for that clip.
+        # Models the outcome of Live's auto-warp: a stem it guessed at half
+        # tempo comes back with half the beats. Absent key = no reply, which
+        # is what a fork without the length handler (or a silent Live) does.
+        self._clip_lengths: dict[tuple[int, int], float] = dict(clip_lengths or {})
 
     def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
         with self._lock:
@@ -142,6 +148,14 @@ class _FakeLive:
                 self._reply.send_message(
                     "/live/clip_slot/get/has_clip",
                     [key[0], key[1], 1 if present else 0],
+                )
+            elif addr == "/live/clip/get/length":
+                key = (int(args[0]), int(args[1]))
+                if key not in self._clip_lengths:
+                    return  # no clip / no handler → bridge sees a timeout
+                self._reply.send_message(
+                    "/live/clip/get/length",
+                    [key[0], key[1], self._clip_lengths[key]],
                 )
             elif addr == "/live/clip/get/is_playing":
                 if not self._answer_is_playing:
@@ -678,6 +692,209 @@ def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
             assert bridge._deck_cells[(0, "drums_a")] == 7
         finally:
             bridge.stop()
+
+
+# ---------------------------------------------------------------------------
+# Warp guard — forcing warp on load, and catching Live's bad auto-warp guesses
+# ---------------------------------------------------------------------------
+
+# Deck-column indices when the fake starts with 10 pre-existing tracks.
+_A_STEM_IDX = {"drums_a": 10, "bass_a": 12, "vocals_a": 14, "other_a": 16}
+
+
+def _full_song_stems(tmp_path):
+    """Four real on-disk stem files + the mix, for a whole-song load."""
+    paths = {}
+    for kind in ("drums", "bass", "vocals", "other"):
+        p = tmp_path / f"{kind}.wav"
+        p.write_bytes(b"RIFF")
+        paths[kind] = p
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+    return mix, [_stub_stem(k, str(v)) for k, v in paths.items()]
+
+
+def _load_then_check_warp(live, *, expected_beats=None, tmp_path=None, track_id=7):
+    """Whole-song load, then the warp audit — the real sequence.
+
+    The audit is deliberately a SEPARATE step from the load: measured against
+    Live 12.4.2, a fresh clip reports a placeholder length (all stems agree)
+    for ~13-15s before the real auto-warp analysis lands.
+    """
+    mix, stems = _full_song_stems(tmp_path)
+    bridge = live.make_bridge()
+    bridge.start()
+    try:
+        track = _stub_track(id=track_id, file_path=str(mix))
+        bridge.push_track_to_live(track, stems, include_stems=True)
+        expected = {track_id: expected_beats} if expected_beats else None
+        return bridge.check_warp_at(0, expected_beats_by_track=expected)
+    finally:
+        bridge.stop()
+
+
+def test_bridge_load_forces_warp_beats_on_every_stem(tmp_path):
+    """Every live-loaded stem gets Warp ON + Beats mode, explicitly.
+
+    ``create_audio_clip`` alone leaves warp to Live's auto-warp preference,
+    so the deck path used to disagree with the .als writer (which pins
+    Warp=true / WarpMode=0). A deck you can't beatmatch is not a deck.
+    """
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        _load_then_check_warp(live, tmp_path=tmp_path)
+
+        for deck_kind, idx in _A_STEM_IDX.items():
+            assert _wait_for(
+                lambda i=idx: (i, 0, 1) in live.args_for("/live/clip/set/warping")
+            ), f"{deck_kind} was not forced to warp"
+            assert _wait_for(
+                lambda i=idx: (i, 0, 0) in live.args_for("/live/clip/set/warp_mode")
+            ), f"{deck_kind} was not pinned to Beats mode"
+
+
+def test_bridge_warp_check_flags_half_warped_stem(tmp_path):
+    """One stem at half the others' beat-length = Live guessed half tempo.
+
+    This is the failure that makes a beginner think they played the wrong
+    thing: nothing errors, the vocal is just in a different universe. The
+    check names the cell and the one-click fix in Live.
+    """
+    lengths = {(idx, 0): 700.0 for idx in _A_STEM_IDX.values()}
+    lengths[(_A_STEM_IDX["vocals_a"], 0)] = 350.0  # Live halved this one
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        result = _load_then_check_warp(live, tmp_path=tmp_path)
+
+    warp_warnings = [w for w in result["warnings"] if "vocals_a" in w]
+    assert len(warp_warnings) == 1
+    assert "HALF" in warp_warnings[0]
+    assert "*2" in warp_warnings[0]
+    # The three that agreed are not accused.
+    assert not [w for w in result["warnings"] if "drums_a" in w or "bass_a" in w]
+
+
+def test_bridge_warp_check_flags_double_warped_stem(tmp_path):
+    """Mirror case — one stem at 2x the others gets the ':2' instruction."""
+    lengths = {(idx, 0): 700.0 for idx in _A_STEM_IDX.values()}
+    lengths[(_A_STEM_IDX["bass_a"], 0)] = 1400.0
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        result = _load_then_check_warp(live, tmp_path=tmp_path)
+
+    warp_warnings = [w for w in result["warnings"] if "bass_a" in w]
+    assert len(warp_warnings) == 1
+    assert "DOUBLE" in warp_warnings[0]
+    assert ":2" in warp_warnings[0]
+
+
+def test_bridge_warp_check_silent_when_stems_agree(tmp_path):
+    """The common case must be quiet — a warning the DJ learns to ignore is
+    worse than no warning. Agreement within tolerance = nothing said."""
+    lengths = {(idx, 0): 700.0 for idx in _A_STEM_IDX.values()}
+    # 1% jitter is well inside _WARP_AGREE_TOL and must not trip anything.
+    lengths[(_A_STEM_IDX["other_a"], 0)] = 707.0
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        result = _load_then_check_warp(live, expected_beats=700.0, tmp_path=tmp_path)
+
+    assert [w for w in result["warnings"] if "warp" in w.lower()] == []
+
+
+def test_bridge_warp_check_flags_whole_track_octave_flip(tmp_path):
+    """Stems can agree with each other and still all be wrong — Live
+    octave-flipping the whole track. Only the analyzer can catch that, so
+    it's phrased as a check, not an accusation (CLAUDE.md rule 3)."""
+    lengths = {(idx, 0): 350.0 for idx in _A_STEM_IDX.values()}
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        result = _load_then_check_warp(live, expected_beats=700.0, tmp_path=tmp_path)
+
+    flips = [w for w in result["warnings"] if "consistently" in w]
+    assert len(flips) == 1
+    assert "half" in flips[0]
+    # Framed as "sounds right? trust Live" — never as a hard error.
+    assert "Trust Live" in flips[0]
+
+
+def test_bridge_warp_check_silent_when_live_never_answers(tmp_path):
+    """No length replies (Live closed, or a fork without the handler) must
+    degrade to silence, not to a false alarm."""
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        result = _load_then_check_warp(live, expected_beats=700.0, tmp_path=tmp_path)
+
+    assert [w for w in result["warnings"] if "warp" in w.lower()] == []
+
+
+def test_load_itself_never_queries_length(tmp_path):
+    """The load path must not run the check. Live reports a placeholder
+    length until its analysis lands ~15s later, so an inline check reads the
+    placeholder — where every stem agrees — and reports all-clear on a scene
+    that is actually broken. Measured on Live 12.4.2."""
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)],
+        clip_lengths={(idx, 0): 700.0 for idx in _A_STEM_IDX.values()},
+    ) as live:
+        mix, stems = _full_song_stems(tmp_path)
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)), stems, include_stems=True
+            )
+        finally:
+            bridge.stop()
+        # Warp IS pinned during load (per-clip, free, matches the .als writer)...
+        for idx in _A_STEM_IDX.values():
+            assert _wait_for(
+                lambda i=idx: (i, 0, 1) in live.args_for("/live/clip/set/warping")
+            )
+        # ...but not one length was read.
+        assert live.count("/live/clip/get/length") == 0
+
+
+def test_warp_check_compares_only_within_one_source_track(tmp_path):
+    """A scene in the live-remixing model holds stems from different songs.
+    Those have different durations, so comparing them to each other is
+    meaningless — the check must group by source track first."""
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    other = tmp_path / "other.wav"
+    other.write_bytes(b"RIFF")
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+    lengths = {
+        (_A_STEM_IDX["drums_a"], 0): 700.0,
+        (_A_STEM_IDX["other_a"], 0): 350.0,  # different SONG, legitimately shorter
+    }
+    with _FakeLive(
+        initial_names=[f"Pre {i}" for i in range(10)], clip_lengths=lengths
+    ) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)),
+                [_stub_stem("drums", str(drums))],
+                kinds=["drums"],
+                side="a",
+            )
+            bridge.push_track_to_live(
+                _stub_track(id=99, file_path=str(mix)),
+                [_stub_stem("other", str(other))],
+                kinds=["other"],
+                side="a",
+            )
+            result = bridge.check_warp_at(0)
+        finally:
+            bridge.stop()
+
+    # Two sources, one stem each — nothing is comparable, so nothing is said.
+    assert result["checked"] == 0
+    assert result["warnings"] == []
 
 
 def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):

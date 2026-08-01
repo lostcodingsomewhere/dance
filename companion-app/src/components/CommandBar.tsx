@@ -9,6 +9,7 @@ import {
   spotifySearch,
 } from "../api";
 import { useActiveSet } from "../hooks/useSets";
+import { useWarpCheck } from "../hooks/useWarpCheck";
 import { useAppendToPlan } from "../hooks/useSetPlan";
 import { formatDuration, formatDurationMs } from "../lib/format";
 import { store, useAppStore } from "../store";
@@ -450,6 +451,7 @@ function RowShell({
   activeSetId: number | null;
 }) {
   const addToPlan = useAppendToPlan();
+  const scheduleWarpCheck = useWarpCheck();
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<string | null>(null);
 
@@ -473,6 +475,12 @@ function RowShell({
       });
       const fully = r.stems_loaded === 4;
       setDone(fully ? `scene ${r.scene_index + 1}` : `${r.stems_loaded}/4`);
+      // The palette closes itself half a second from now, so anything worth
+      // reading (warp check, missing stems) has to outlive it — the banner
+      // in the app shell does that.
+      const label = `${title} → scene ${r.scene_index + 1}`;
+      store.setLoadWarnings(label, r.warnings);
+      scheduleWarpCheck(r.scene_index, label);
       if (!fully && filePath) {
         try {
           await revealPath(filePath);

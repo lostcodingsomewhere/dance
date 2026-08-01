@@ -499,6 +499,27 @@ class LoadTrackResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class WarpCheckResult(BaseModel):
+    """Response from ``POST /api/v1/ableton/warp-check/{scene_index}``.
+
+    Live auto-warps every stem it's handed, independently — and on isolated
+    stems (bass especially, which has almost no transient content) it
+    regularly lands on the wrong tempo. A mis-warped stem doesn't error, it
+    just slides out of time, which reads as the DJ's mistake. This audits a
+    loaded scene and says which cell is wrong and which Live button fixes it.
+
+    Must be called AFTER Live's analysis settles (~15s post-load) — a fresh
+    clip reports a placeholder length that makes every stem look identical.
+    """
+
+    ok: bool
+    scene_index: int
+    # How many cells were actually compared. 0 = nothing loaded there, or
+    # every source track had only one stem on the scene (nothing to compare).
+    checked: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
 class DeckCellOut(BaseModel):
     """One loaded cell (scene × stem-kind) in Live's session view, with the
     source-track metadata the companion needs to render the SceneGrid +

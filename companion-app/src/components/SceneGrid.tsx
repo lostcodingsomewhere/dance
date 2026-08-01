@@ -3,12 +3,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useDeckMap } from "../hooks/useDeckMap";
+import { useWarpCheck } from "../hooks/useWarpCheck";
 import {
   useDeleteCell,
   useFireCell,
   useStopCell,
 } from "../hooks/useTransport";
 import { formatDuration } from "../lib/format";
+import { store } from "../store";
 import {
   ROLE_STYLES,
   TWO_DECK_COLUMN_ORDER,
@@ -47,6 +49,7 @@ export function SceneGrid() {
   const stopCell = useStopCell();
   const deleteCell = useDeleteCell();
   const qc = useQueryClient();
+  const scheduleWarpCheck = useWarpCheck();
   // Anchor-fill: load all 4 stems from a single-stem row's track into the
   // same row. Backend already supports it — pass scene_index=this row,
   // kinds=undefined (= full song). Lone stem gets overwritten with the
@@ -57,8 +60,12 @@ export function SceneGrid() {
         includeStems: true,
         sceneIndex: vars.sceneIdx,
       }),
-    onSuccess: () => {
+    onSuccess: (result, vars) => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+      const label = `Anchor → scene ${vars.sceneIdx + 1}`;
+      store.setLoadWarnings(label, result.warnings);
+      // An anchor-fill is a whole-song load, so it gets audited too.
+      scheduleWarpCheck(result.scene_index, label);
     },
   });
   const [expanded, setExpanded] = useState(false);

@@ -5,7 +5,9 @@ import { pushTrackToLive } from "../api";
 import { useColumnRecs } from "../hooks/useColumnRecs";
 import { useSetPlan, usePlanMutations, usePlanRecs } from "../hooks/useSetPlan";
 import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePreview";
+import { useWarpCheck } from "../hooks/useWarpCheck";
 import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { store } from "../store";
 import type { ColumnRec, PlanItem, PlanRole } from "../types";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 
@@ -59,13 +61,21 @@ function StemRow({
   const startPreview = useStartPreview();
   const stopPreview = useStopPreview();
   const previewing = usePreviewState();
+  const scheduleWarpCheck = useWarpCheck();
   const previewColumn = visRole(role);
   const isPreviewing =
     previewing?.trackId === trackId && previewing?.column === previewColumn;
   const load = useMutation({
     mutationFn: (side: "a" | "b") =>
       pushTrackToLive(trackId, { includeStems: true, kinds: loadKinds(role), side }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "decks"] }),
+    onSuccess: (result, side) => {
+      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
+      const label = `${title ?? `Track #${trackId}`} → Deck ${side.toUpperCase()}`;
+      // Immediate misses (missing stem file, Live unreachable) surface now…
+      store.setLoadWarnings(label, result.warnings);
+      // …and the warp audit follows once Live's analysis settles.
+      scheduleWarpCheck(result.scene_index, label);
+    },
   });
   const togglePreview = () => {
     if (isPreviewing) stopPreview.mutate();
@@ -255,7 +265,11 @@ function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
 
 /** Recs scored against what's playing (Booth) — live-rescoring stream. */
 function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole }) {
-  const recs = useColumnRecs(role, { k: 4 });
+  // ``visRole`` maps the plan role "song" onto the recommender's "mix" feed.
+  // Passing the raw role asked the backend for a column it doesn't have, so
+  // the SONG column silently showed "no candidates" — the one column a
+  // whole-track A/B set is built from.
+  const recs = useColumnRecs(visRole(role), { k: 4 });
   const { addToRole } = usePlanMutations(setId);
   return (
     <RecsList
