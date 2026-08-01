@@ -252,6 +252,36 @@ class AbletonOSCClient:
         """
         self._send("/live/clip/set/warp_mode", track, slot, mode)
 
+    # -- Warp markers -------------------------------------------------------
+    #
+    # Live's Clip exposes add/move/remove_warp_marker as public LOM methods
+    # (Live 11+). Stock AbletonOSC doesn't register them — ``add_warp_marker``
+    # takes a DICT and the generic method dispatcher splats positional args —
+    # so our fork adds thin handlers that rebuild the dict. See
+    # docs/proposals/warp-guard.md.
+    #
+    # UNVERIFIED AGAINST LIVE: the fork patch only takes effect after Live
+    # reloads its Remote Scripts. Use ``scripts/warp_probe.py`` to confirm
+    # before relying on any of this.
+
+    def add_warp_marker(
+        self, track: int, slot: int, beat_time: float, sample_time: float
+    ) -> None:
+        """Pin ``sample_time`` (seconds into the sample) to ``beat_time``."""
+        self._send("/live/clip/add_warp_marker", track, slot, beat_time, sample_time)
+
+    def remove_warp_marker(self, track: int, slot: int, beat_time: float) -> None:
+        """Remove the warp marker at ``beat_time``."""
+        self._send("/live/clip/remove_warp_marker", track, slot, beat_time)
+
+    def get_warp_marker_times(self, track: int, slot: int) -> None:
+        """Ask for the clip's grid as a flat (beat, sample, beat, sample, …).
+
+        Reply: ``/live/clip/get/warp_marker_times``. Reading the grid back is
+        what makes a repair verifiable rather than hopeful.
+        """
+        self._send("/live/clip/get/warp_marker_times", track, slot)
+
     def get_clip_length(self, track: int, slot: int) -> None:
         """Ask Live for the clip's length in BEATS.
 

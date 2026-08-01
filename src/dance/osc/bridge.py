@@ -1647,6 +1647,7 @@ class AbletonBridge:
         scene_index: int,
         loaded: list[tuple[str, int]],
         expected_beats: float | None,
+        duration_seconds: float | None = None,
     ) -> list[str]:
         """Detect stems that Live auto-warped to the wrong tempo.
 
@@ -1697,10 +1698,24 @@ class AbletonBridge:
                     f"button in Clip view to fix it."
                 )
             else:
+                # NOT a clean octave error, so ':2' / '*2' does NOT fix it —
+                # e.g. a bass stem measured at 113.71 against 124.98 drums is
+                # a 9% drift with no halving involved. The repair is to set
+                # the clip's segment BPM directly. Give the numbers, since
+                # the DJ has to type one of them in.
+                bpm_note = ""
+                if duration_seconds:
+                    got = beats / duration_seconds * 60.0
+                    want = ref / duration_seconds * 60.0
+                    bpm_note = (
+                        f" Live read it as ~{got:.1f} BPM; the others say "
+                        f"~{want:.1f}. Set 'Seg. BPM' to {want:.1f} in Live's "
+                        f"Sample tab."
+                    )
                 warnings.append(
                     f"{deck_kind}: warped to {beats:.0f} beats but the other "
-                    f"stems came out at {ref:.0f} — this stem will drift. "
-                    f"Check its warp markers in Live."
+                    f"stems came out at {ref:.0f} — this stem will drift."
+                    f"{bpm_note}"
                 )
 
         # Tier 2 — only meaningful when the stems agreed with each other.
@@ -1717,7 +1732,11 @@ class AbletonBridge:
         return warnings
 
     def check_warp_at(
-        self, scene_index: int, *, expected_beats_by_track: dict[int, float] | None = None
+        self,
+        scene_index: int,
+        *,
+        expected_beats_by_track: dict[int, float] | None = None,
+        duration_by_track: dict[int, float] | None = None,
     ) -> dict[str, Any]:
         """Audit one scene's stem cells for Live auto-warp errors.
 
@@ -1751,6 +1770,7 @@ class AbletonBridge:
                     scene_index=scene_index,
                     loaded=sorted(cells),
                     expected_beats=(expected_beats_by_track or {}).get(track_id),
+                    duration_seconds=(duration_by_track or {}).get(track_id),
                 )
             )
         return {"scene_index": scene_index, "checked": checked, "warnings": warnings}
