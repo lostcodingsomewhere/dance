@@ -113,7 +113,22 @@ class AbletonOSCClient:
     # Stem-DJing needs Cue. We set it on bridge init so the per-deck PFL
     # buttons in the UI Just Work without the user toggling it themselves.
     def set_solo_cue_mode(self, cue: bool) -> None:
-        self._send("/live/song/set/solo_cue_mode", 1 if cue else 0)
+        """DEPRECATED — this never worked and cannot work.
+
+        ``/live/song/set/solo_cue_mode`` is not registered by AbletonOSC or by
+        our fork, and Live's LOM has no writable property for the master
+        Solo/Cue switch. Every call was dropped on the floor (the fork logged
+        it "Unknown OSC address" 32 times). Kept only so an old caller fails
+        loudly rather than silently; nothing in the bridge calls it.
+
+        The switch must be flipped by hand in Live's master strip. Leaving it
+        on Solo means the PFL buttons mute the master instead of feeding the
+        cue output — see AbletonBridge.start and docs/session-1.md Part 0.
+        """
+        raise NotImplementedError(
+            "Live's Solo/Cue switch is not settable over OSC — set it by hand "
+            "in Live's master strip (see docs/session-1.md Part 0)."
+        )
 
     # ------------------------------------------------------------------
     # Mixer

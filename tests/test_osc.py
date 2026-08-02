@@ -932,6 +932,62 @@ def test_warp_check_compares_only_within_one_source_track(tmp_path):
     assert result["warnings"] == []
 
 
+def test_load_clears_a_slot_live_already_has_a_clip_in(tmp_path):
+    """Loading onto an occupied slot must DELETE first, or the rename lands on
+    the stale clip and the app lies about what will play.
+
+    Live raises "This clip slot already has a clip" and AbletonOSC has no
+    negative-reply channel, so the failed create is invisible — but the
+    set_clip_name that follows succeeds on the OLD clip. Card, clip name and
+    deck map then all show the new track while the previous audio fires.
+    Live's log on this rig recorded it 16 times.
+
+    _deck_cells cannot be trusted for occupancy: it is the bridge's memory of
+    what IT loaded, and an opened .als export puts a clip in slot 0 of every
+    A-side deck track that the bridge never knew about.
+    """
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            # Pre-occupy drums_a @ scene 0 in LIVE only — the bridge's
+            # _deck_cells stays empty, exactly like an opened .als export.
+            bridge._deck_columns = bridge._create_deck_columns(start_index=10)
+            drums_idx = bridge._deck_columns["drums_a"]
+            live.received.clear()
+            bridge.client.create_audio_clip(drums_idx, 0, str(drums))
+            assert _wait_for(lambda: (drums_idx, 0) in live._present_clip
+                             or (drums_idx, 0) in live._pending_clip)
+
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)),
+                [_stub_stem("drums", str(drums))],
+                kinds=["drums"],
+                side="a",
+                scene_index=0,
+            )
+        finally:
+            bridge.stop()
+
+        # The occupied slot was cleared before the new create.
+        deletes = live.args_for("/live/clip_slot/delete_clip")
+        assert (drums_idx, 0) in deletes, "occupied slot was not cleared"
+        order = [a for a, _ in live.received]
+        del_pos = max(i for i, a in enumerate(order) if a == "/live/clip_slot/delete_clip")
+        create_positions = [
+            i for i, (a, args) in enumerate(live.received)
+            if a == "/live/clip_slot/create_audio_clip" and args[:2] == (drums_idx, 0)
+        ]
+        assert create_positions and create_positions[-1] > del_pos, (
+            "delete must precede the replacing create"
+        )
+
+
 def test_bridge_push_track_to_live_skips_mix_on_single_stem_load(tmp_path):
     """Single-stem loads (kinds=['drums']) must NOT drop the mix file —
     the mix cell stays empty so we don't fight the user's remix in progress.
@@ -1595,9 +1651,14 @@ def test_preview_waits_for_clip_to_exist_then_fires(tmp_path):
 
 
 def test_preview_sets_instant_launch_quant_before_fire(tmp_path):
-    """The cue clip's launch_quantization is set to None (0) BEFORE the fire,
-    so previews fire instantly instead of waiting for the 1-bar global
-    quantize."""
+    """The cue clip's launch_quantization is set to None BEFORE the fire, so
+    previews fire instantly instead of waiting for the 1-bar global quantize.
+
+    Live's enum is **0=Global, 1=None** (AbletonOSC README:394). This asserted
+    0 and passed, so every preview really was bar-quantized — up to ~2 s of
+    apparent dead air after pressing ▶, which reads as "the button is broken".
+    The cue track is dedicated, so None is permanent there and needs no
+    restore (unlike the deck-clip seek path)."""
     audio = tmp_path / "vocals.wav"
     audio.write_bytes(b"RIFF")
     with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
@@ -1606,9 +1667,9 @@ def test_preview_sets_instant_launch_quant_before_fire(tmp_path):
         try:
             result = bridge.preview_audio(str(audio))
             cue_idx = result["cue_track_idx"]
-            # launch_quantization sent with value 0 (None) on the cue slot.
+            # 1 = None (instant). NOT 0 — that is Global, i.e. 1 Bar.
             assert _wait_for(
-                lambda: (cue_idx, bridge._CUE_SLOT, 0)
+                lambda: (cue_idx, bridge._CUE_SLOT, 1)
                 in live.args_for("/live/clip/set/launch_quantization")
             )
             # It was set BEFORE the fire.
