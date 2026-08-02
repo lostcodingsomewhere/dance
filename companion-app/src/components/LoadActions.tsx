@@ -5,6 +5,7 @@ import {
   pushTrackToLive,
   revealPath,
 } from "../api";
+import { sideTrackIndices } from "../lib/roles";
 import { store } from "../store";
 
 /**
@@ -91,7 +92,8 @@ export function LoadActions({
       store.registerDeck({
         track_id: trackId,
         scene_index: result.scene_index,
-        stem_track_indices: Object.values(result.track_indices),
+        side: result.side ?? null,
+        stem_track_indices: sideTrackIndices(result.track_indices, result.side),
         loaded_at: Date.now(),
       });
       const fully = result.stems_loaded === 4;

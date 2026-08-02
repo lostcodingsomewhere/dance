@@ -344,6 +344,14 @@ export interface SetSummary {
 export interface LoadedDeck {
   track_id: number;
   scene_index: number;
+  /** Which deck this landed on. A scene holds one deck per SIDE, so
+   *  (scene, side) is the identity — keying on scene alone made a Deck B
+   *  load overwrite the Deck A load at the same scene, which is the normal
+   *  A/B case. ``null`` when the backend could not report it. */
+  side: "a" | "b" | null;
+  /** Ableton track indices for THIS side only. Passing all ten deck columns
+   *  made "is my deck playing?" collapse to "is anything playing on this
+   *  scene?", so the other deck's clip could log this deck's track. */
   stem_track_indices: number[];
   loaded_at: number; // ms epoch
 }

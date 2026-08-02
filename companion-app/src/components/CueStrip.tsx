@@ -8,7 +8,7 @@ import { useTrackWaveform } from "../hooks/useWaveform";
 import { useSeekClip } from "../hooks/useTransport";
 import { formatDuration, formatRemaining } from "../lib/format";
 import { ratioToSeconds } from "../lib/seek";
-import { roleLabel } from "../lib/roles";
+import { roleLabel, sideTrackIndices } from "../lib/roles";
 import { store } from "../store";
 import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
@@ -74,7 +74,8 @@ export function CueStrip() {
         store.registerDeck({
           track_id: previewing.trackId,
           scene_index: result.scene_index,
-          stem_track_indices: Object.values(result.track_indices),
+          side: result.side ?? null,
+        stem_track_indices: sideTrackIndices(result.track_indices, result.side),
           loaded_at: Date.now(),
         });
       }

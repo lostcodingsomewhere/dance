@@ -11,7 +11,8 @@ interface AppState {
   currentSessionId: number | null;
   currentView: ViewName;
   /** Keyed by scene_index. One deck per scene. */
-  loadedDecks: Record<number, LoadedDeck>;
+  /** Keyed ``"<scene>:<side>"`` — a scene holds one deck per side. */
+  loadedDecks: Record<string, LoadedDeck>;
   commandBarOpen: boolean;
   /**
    * Currently auditioning candidate in the Cue track (headphones-only via
@@ -161,15 +162,24 @@ export function useAppState(): AppState {
   return useSyncExternalStore(subscribe, getSnapshot, () => initial);
 }
 
+/** Identity of a loaded deck: one per (scene, side). */
+export function deckKey(sceneIndex: number, side: "a" | "b" | null): string {
+  return `${sceneIndex}:${side ?? "?"}`;
+}
+
 /**
- * Compute the next free scene index from a loadedDecks map. Songs stack
- * vertically — first load goes to scene 0, then 1, etc. — so we just pick
- * one above the max in use.
+ * Highest scene index the UI knows about, +1.
+ *
+ * NOT used to choose where a load goes any more — the backend owns that, and
+ * it scans Live for a slot that is genuinely free on the requested side
+ * (``_free_stem_slot``). The frontend forcing a scene overrode that
+ * collision-avoidance with a guess derived only from loads this browser tab
+ * happened to see.
  */
 export function nextSceneIndex(
-  loadedDecks: Record<number, LoadedDeck>,
+  loadedDecks: Record<string, LoadedDeck>,
 ): number {
-  const used = Object.keys(loadedDecks).map(Number);
+  const used = Object.values(loadedDecks).map((d) => d.scene_index);
   if (used.length === 0) return 0;
   return Math.max(...used) + 1;
 }
@@ -191,14 +201,20 @@ export const store = {
   registerDeck(deck: LoadedDeck): void {
     state = {
       ...state,
-      loadedDecks: { ...state.loadedDecks, [deck.scene_index]: deck },
+      loadedDecks: {
+        ...state.loadedDecks,
+        [deckKey(deck.scene_index, deck.side)]: deck,
+      },
     };
     emit();
   },
-  unloadDeck(sceneIndex: number): void {
-    if (state.loadedDecks[sceneIndex] == null) return;
+  unloadDeck(sceneIndex: number, side: "a" | "b" | null = null): void {
     const next = { ...state.loadedDecks };
-    delete next[sceneIndex];
+    const keys = side != null
+      ? [deckKey(sceneIndex, side)]
+      : Object.keys(next).filter((k) => next[k].scene_index === sceneIndex);
+    if (keys.every((k) => next[k] == null)) return;
+    for (const k of keys) delete next[k];
     state = { ...state, loadedDecks: next };
     emit();
   },

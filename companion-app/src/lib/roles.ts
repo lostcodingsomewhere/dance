@@ -163,3 +163,23 @@ export const ROLE_STYLES: Record<
     text: "text-neutral-200",
   },
 };
+
+
+/**
+ * The Ableton track indices belonging to ONE deck side.
+ *
+ * ``LoadTrackResult.track_indices`` is the whole ten-column map, both sides.
+ * Registering a deck with all ten made "is my deck playing?" collapse to "is
+ * anything playing on this scene?", so a clip firing on Deck B could be
+ * logged as Deck A's track. Falls back to every index when the side is
+ * unknown, which is no worse than the old behaviour.
+ */
+export function sideTrackIndices(
+  trackIndices: Record<string, number>,
+  side: "a" | "b" | null | undefined,
+): number[] {
+  if (side !== "a" && side !== "b") return Object.values(trackIndices);
+  return Object.entries(trackIndices)
+    .filter(([kind]) => kind.endsWith(`_${side}`))
+    .map(([, idx]) => idx);
+}
