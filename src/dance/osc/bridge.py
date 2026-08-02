@@ -202,6 +202,14 @@ class AbletonBridge:
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
         self.listener.on("/live/clip/get/length", self._on_clip_length)
+        self.listener.on(
+            "/live/track/get/available_output_routing_channels",
+            self._on_output_routing_channels,
+        )
+        self.listener.on(
+            "/live/track/get/output_routing_channel",
+            self._on_output_routing_channel,
+        )
         self.listener.on("/live/clip_slot/get/has_clip", self._on_has_clip)
         self.listener.on("/live/clip/get/is_playing", self._on_clip_is_playing)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
@@ -542,6 +550,23 @@ class AbletonBridge:
                 int(args[1]),
                 str(args[2]) if args[2] is not None else "",
             )
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
+    def _on_output_routing_channels(self, address: str, args: tuple[Any, ...]) -> None:
+        # (track_index, *display_names) — the routing targets Live will accept
+        # verbatim. Feeds _resolve_output_channel.
+        if args:
+            self._reply_values[address] = (int(args[0]), [str(a) for a in args[1:]])
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
+    def _on_output_routing_channel(self, address: str, args: tuple[Any, ...]) -> None:
+        # (track_index, display_name) — the routing Live actually applied.
+        if len(args) >= 2:
+            self._reply_values[address] = (int(args[0]), str(args[1]))
             evt = self._reply_events.get(address)
             if evt is not None:
                 evt.set()
@@ -1626,6 +1651,88 @@ class AbletonBridge:
     # rounding and far tighter than the 2x errors we're hunting.
     _WARP_AGREE_TOL = 0.02
 
+    def _resolve_output_channel(self, track_index: int, wanted: str) -> str | None:
+        """Find the routing channel Live will actually accept for ``wanted``.
+
+        The cue track's routing is what keeps previews in the headphones
+        instead of the speakers, and it was previously written blind: the fork
+        matches ``channel.display_name`` EXACTLY, swallows a miss with a log
+        line, and the bridge never checked. Live's log carries two real
+        failures — "Couldn't find output routing channel: 3/4" on 2026-05-18,
+        when the rig still had a 2-output 2i2 and outs 3/4 genuinely did not
+        exist, and again on 2026-06-13.
+
+        The names are interface-dependent, so this asks Live for its list and
+        prefers an exact match, then a containing one ("3/4 (Scarlett 4i4
+        USB)"). ``None`` when Live is silent or offers no match; callers fall
+        back to the literal string, so behaviour with a silent Live is
+        unchanged. A genuine no-match is logged loudly rather than swallowed —
+        that is the case where the cue would play through the master.
+        """
+        addr = "/live/track/get/available_output_routing_channels"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_available_output_routing_channels(track_index)
+        except OSError:
+            return None
+        if not evt.wait(0.5):
+            return None
+        reply = self._reply_values.get(addr)
+        if not isinstance(reply, tuple) or len(reply) < 2:
+            return None
+        reply_idx, names = reply
+        if reply_idx != track_index or not names:
+            return None
+        for name in names:
+            if name == wanted:
+                return name
+        for name in names:
+            if wanted in name:
+                return name
+        logger.warning(
+            "No output routing channel matching %r on track %d. Live offers: %s. "
+            "The cue will play through the master instead of the headphones.",
+            wanted, track_index, names,
+        )
+        return None
+
+    def _verify_cue_routing(self, track_index: int, expected_channel: str) -> bool | None:
+        """Read the cue track's routing back and complain if it did not take.
+
+        OSC sets are fire-and-forget with no acknowledgement, so a rejected
+        routing looks exactly like a successful one from this side. Since the
+        failure mode is "the headphone cue comes out of the speakers" —
+        during a set, in front of people — it is worth one extra roundtrip to
+        find out. Returns True/False, or None when Live does not answer.
+        """
+        addr = "/live/track/get/output_routing_channel"
+        evt = threading.Event()
+        self._reply_events[addr] = evt
+        self._reply_values.pop(addr, None)
+        try:
+            self.client.get_track_output_routing_channel(track_index)
+        except OSError:
+            return None
+        if not evt.wait(0.5):
+            return None
+        reply = self._reply_values.get(addr)
+        actual = None
+        if isinstance(reply, tuple) and len(reply) >= 2:
+            actual = reply[1]
+        if actual is None:
+            return None
+        if actual == expected_channel:
+            return True
+        logger.warning(
+            "Cue track routing did NOT take: asked for %r, Live reports %r. "
+            "Headphone previews will come out of the MASTER. Check that the "
+            "audio interface is connected and exposes that output pair.",
+            expected_channel, actual,
+        )
+        return False
+
     def _clear_slot_if_occupied(self, track_index: int, slot_index: int) -> bool:
         """Delete whatever Live already has in this clip slot.
 
@@ -2351,7 +2458,14 @@ class AbletonBridge:
         try:
             self.client.set_track_color(idx, self._CUE_COLOR)
             self.client.set_track_output_routing_type(idx, self._CUE_OUTPUT_TYPE)
-            self.client.set_track_output_routing_channel(idx, self._CUE_OUTPUT_CHANNEL)
+            # Resolve against Live's own list; fall back to the literal string
+            # so a silent Live behaves exactly as it did before.
+            channel = (
+                self._resolve_output_channel(idx, self._CUE_OUTPUT_CHANNEL)
+                or self._CUE_OUTPUT_CHANNEL
+            )
+            self.client.set_track_output_routing_channel(idx, channel)
+            self._verify_cue_routing(idx, channel)
         except OSError:  # pragma: no cover - best-effort
             pass
         self._cue_track_idx = idx
