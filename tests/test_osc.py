@@ -1958,3 +1958,75 @@ def test_create_deck_columns_fills_only_missing_columns(tmp_path):
             )
         finally:
             bridge.stop()
+
+
+# ---------------------------------------------------------------------------
+# Recording — the button captured nothing at all before this
+# ---------------------------------------------------------------------------
+
+
+def test_record_on_arms_a_resampling_recorder_track():
+    """Record must ARM something, or Live captures silence.
+
+    The old endpoint was a bare ``record_mode`` toggle. Live records what
+    armed tracks hear; nothing in this project was ever armed or given an
+    input source, so there was no path from the button to audio at all —
+    which matters because "record every session and listen back" is the only
+    honest feedback signal in a bedroom.
+
+    Verified against real Live: the created track reads back name='Recorder',
+    arm=True, input_routing_type='Resampling', current_monitoring_state=2.
+    """
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(3)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.set_record(True)
+        finally:
+            bridge.stop()
+
+        assert result["ok"] is True
+        assert result["recording"] is True
+        idx = result["armed_track"]
+        assert idx is not None, "record must confirm an armed track"
+
+        assert _wait_for(
+            lambda: (idx, "Resampling") in live.args_for("/live/track/set/input_routing_type")
+        ), "recorder input must be Resampling (the master output)"
+        # Monitoring OFF, or the capture is fed back into the master.
+        assert _wait_for(lambda: (idx, 2) in live.args_for("/live/track/set/current_monitoring_state"))
+        assert _wait_for(lambda: (idx, 1) in live.args_for("/live/track/set/arm"))
+        assert _wait_for(lambda: (1,) in live.args_for("/live/song/set/record_mode"))
+
+        # The arming must precede the record toggle — arming after the fact
+        # would lose the head of the take.
+        order = [a for a, _ in live.received]
+        assert order.index("/live/track/set/arm") < order.index("/live/song/set/record_mode")
+
+
+def test_record_on_adopts_an_existing_recorder_track():
+    """Idempotent across a reopened Set — never stack up Recorder tracks."""
+    with _FakeLive(initial_names=["Pre 0", "Recorder", "Pre 2"]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.set_record(True)
+        finally:
+            bridge.stop()
+        assert result["armed_track"] == 1
+        assert live.count("/live/song/create_audio_track") == 0
+
+
+def test_record_off_does_not_provision_anything():
+    """Stopping must not create or arm tracks."""
+    with _FakeLive(initial_names=[f"Pre {i}" for i in range(3)]) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            result = bridge.set_record(False)
+        finally:
+            bridge.stop()
+        assert result["recording"] is False
+        assert result["armed_track"] is None
+        assert live.count("/live/song/create_audio_track") == 0
+        assert _wait_for(lambda: (0,) in live.args_for("/live/song/set/record_mode"))
