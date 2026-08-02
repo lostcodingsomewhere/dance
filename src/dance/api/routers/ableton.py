@@ -211,18 +211,24 @@ def set_crossfader(
 
 @router.post("/record/{state}")
 def record(state: str, bridge: AbletonBridge = Depends(get_bridge)) -> dict:
-    """Toggle Live's session record. ``state`` is ``on`` or ``off``.
+    """Start/stop capturing the set. ``state`` is ``on`` or ``off``.
 
-    No bookkeeping beyond the OSC toggle — Live owns the actual capture.
-    The FE drives elapsed-time ticking off the moment we returned ``ok``.
+    This used to be a bare ``record_mode`` toggle, which captured NOTHING:
+    Live records what armed tracks hear, and nothing here was ever armed or
+    given an input source. Turning record on now first ensures an armed
+    "Recorder" track whose input is Resampling (the master output) with
+    monitoring off.
+
+    ``warnings`` is non-empty when the recorder could not be confirmed — the
+    UI must surface that instead of showing a running timer over a recording
+    that is not happening.
     """
     if state not in ("on", "off"):
         raise HTTPException(
             status_code=400,
             detail=f"record state must be 'on' or 'off', got {state!r}",
         )
-    bridge.client.set_record_mode(state == "on")
-    return {"ok": True, "recording": state == "on"}
+    return bridge.set_record(state == "on")
 
 
 @router.post("/tempo")

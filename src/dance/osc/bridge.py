@@ -816,6 +816,13 @@ class AbletonBridge:
     # configuration so previews never leak to master.
     _CUE_DISPLAY_NAME: str = "Cue"
     _CUE_COLOR: int = 0xFFE066  # warm yellow — visually distinct from decks
+    # A dedicated track that captures the master so a set can be recorded.
+    # "Resampling" is Live's own name for "the master output" as an input
+    # source; monitoring must be Off or the capture feeds back into the mix.
+    _RECORDER_DISPLAY_NAME: str = "Recorder"
+    _RECORDER_INPUT_TYPE: str = "Resampling"
+    _MONITOR_OFF: int = 2
+
     _CUE_OUTPUT_TYPE: str = "Ext. Out"
     _CUE_OUTPUT_CHANNEL: str = "3/4"
     # Slot inside the Cue track used for all preview clips. We always
@@ -1698,6 +1705,69 @@ class AbletonBridge:
         )
         return None
 
+    def ensure_recorder_track(self, *, timeout: float = 1.0) -> int | None:
+        """Find or create the armed Resampling track a recording needs.
+
+        Live records what ARMED tracks hear. Nothing in this project was ever
+        armed, and no track had an input source, so pressing record set
+        ``record_mode`` and captured **silence** — there was no path from the
+        button to an audio file at all.
+
+        Adopts an existing track named "Recorder" (so this is idempotent and
+        survives a reopened Set), else appends one. Then: input = Resampling
+        (the master output), monitoring = Off (otherwise the capture is fed
+        back into the master), armed = True.
+        """
+        names = self.get_track_names(timeout=timeout)
+        idx: int | None = None
+        if names is not None:
+            for i, nm in enumerate(names):
+                if str(nm).strip() == self._RECORDER_DISPLAY_NAME:
+                    idx = i
+                    break
+        if idx is None:
+            idx = self._create_track_and_get_index(
+                self._RECORDER_DISPLAY_NAME, timeout=timeout
+            )
+        if idx is None:
+            return None
+        try:
+            self.client.set_track_input_routing_type(idx, self._RECORDER_INPUT_TYPE)
+            self.client.set_track_monitoring_state(idx, self._MONITOR_OFF)
+            self.client.set_track_arm(idx, True)
+        except OSError:  # pragma: no cover - best-effort
+            return None
+        return idx
+
+    def set_record(self, on: bool) -> dict[str, Any]:
+        """Start/stop capturing the set, and say honestly whether it will work.
+
+        Turning record ON first guarantees an armed Resampling track exists —
+        without one Live's Arrangement Record button captures nothing, which
+        is what the app did before. ``armed_track`` is ``None`` when Live is
+        unreachable or the track could not be confirmed; the caller should
+        surface that rather than claim it is recording.
+        """
+        recorder: int | None = None
+        if on:
+            recorder = self.ensure_recorder_track()
+        try:
+            self.client.set_record_mode(on)
+        except OSError as exc:
+            return {"ok": False, "recording": False, "warning": str(exc)}
+        warnings: list[str] = []
+        if on and recorder is None:
+            warnings.append(
+                "Could not confirm an armed Recorder track — Live may capture "
+                "nothing. Check Live is reachable, then retry."
+            )
+        return {
+            "ok": True,
+            "recording": on,
+            "armed_track": recorder,
+            "warnings": warnings,
+        }
+
     def _verify_cue_routing(self, track_index: int, expected_channel: str) -> bool | None:
         """Read the cue track's routing back and complain if it did not take.
 
@@ -1947,8 +2017,8 @@ class AbletonBridge:
 
     def push_track_to_live(
         self,
-        track: "Track",
-        stems: list["StemFile"],
+        track: Track,
+        stems: list[StemFile],
         *,
         scene_index: int | None = None,
         kinds: list[str] | None = None,

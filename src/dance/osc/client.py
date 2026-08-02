@@ -82,12 +82,47 @@ class AbletonOSCClient:
         self._send("/live/song/stop_all_clips")
 
     def set_record_mode(self, on: bool) -> None:
-        """Toggle Live's session record. When on, fired clips that have
-        an armed track record into the next empty slot. We use it as a
-        plain "capture this take" affordance — UI guards live in the API
-        layer.
+        """Toggle Live's **Arrangement** Record button.
+
+        The old docstring said "session record ... fired clips record into the
+        next empty slot". That is ``session_record`` (Session Overdub), a
+        different LOM property — Live's docs are explicit: ``record_mode`` is
+        "1 = the Arrangement Record button is on".
+
+        Arrangement record is the RIGHT one for capturing a DJ set (one
+        continuous timeline you can export), so the address stays and the
+        description is corrected. But on its own it still captures nothing:
+        Live records what ARMED tracks hear, and nothing here was ever armed.
+        See ``AbletonBridge.set_record``.
         """
         self._send("/live/song/set/record_mode", 1 if on else 0)
+
+    def get_record_mode(self) -> None:
+        """Read the Arrangement Record state back. Reply:
+        ``/live/song/get/record_mode``."""
+        self._send("/live/song/get/record_mode")
+
+    def set_track_arm(self, track: int, armed: bool) -> None:
+        """Arm/disarm a track for recording."""
+        self._send("/live/track/set/arm", track, 1 if armed else 0)
+
+    def get_track_arm(self, track: int) -> None:
+        self._send("/live/track/get/arm", track)
+
+    def set_track_monitoring_state(self, track: int, state: int) -> None:
+        """Live's ``current_monitoring_state``: 0=In, 1=Auto, 2=Off.
+
+        The recorder wants **Off**: with Resampling input, monitoring would
+        feed the captured master back into the master.
+        """
+        self._send("/live/track/set/current_monitoring_state", track, state)
+
+    def set_track_input_routing_type(self, track: int, type_str: str) -> None:
+        """Set a track's input source by display name (e.g. "Resampling")."""
+        self._send("/live/track/set/input_routing_type", track, type_str)
+
+    def get_track_input_routing_type(self, track: int) -> None:
+        self._send("/live/track/get/input_routing_type", track)
 
     # Master crossfader: -1 (full A) ... 0 (center) ... +1 (full B). Lives
     # on Song.master_track.mixer_device.crossfader. Driven primarily by the
