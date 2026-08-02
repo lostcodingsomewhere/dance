@@ -6,7 +6,7 @@ import { useColumnRecs } from "../hooks/useColumnRecs";
 import { useSetPlan, usePlanMutations, usePlanRecs } from "../hooks/useSetPlan";
 import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useWarpCheck } from "../hooks/useWarpCheck";
-import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { ROLE_STYLES, roleLabel, sideTrackIndices, type StemRole } from "../lib/roles";
 import { store } from "../store";
 import type { ColumnRec, PlanItem, PlanRole } from "../types";
 import { ScoreBreakdown } from "./ScoreBreakdown";
@@ -77,6 +77,19 @@ function StemRow({
       scheduleWarpCheck(result.scene_index, label);
       // Point that deck's ▶ at what we just put there.
       store.armDeck(result.side ?? side, result.scene_index);
+      // Register the deck so the play can be LOGGED. ⤒A/⤒B is the Booth's
+      // primary load button and it was the one load path that never did
+      // this — useAutoLog reads useNowPlayingTrack, which only recognises a
+      // playing clip if its deck is in `loadedDecks`, so nothing fired from
+      // the plan grid could ever be recorded. That is why the whole project
+      // has 6 logged plays: the only ones that counted came from ⌘K.
+      store.registerDeck({
+        track_id: trackId,
+        scene_index: result.scene_index,
+        side: result.side ?? side,
+        stem_track_indices: sideTrackIndices(result.track_indices, result.side ?? side),
+        loaded_at: Date.now(),
+      });
     },
   });
   const togglePreview = () => {

@@ -12,6 +12,7 @@ import { useActiveSet } from "../hooks/useSets";
 import { useWarpCheck } from "../hooks/useWarpCheck";
 import { useAppendToPlan } from "../hooks/useSetPlan";
 import { formatDuration, formatDurationMs } from "../lib/format";
+import { sideTrackIndices } from "../lib/roles";
 import { store, useAppStore } from "../store";
 import type { Recommendation, SpotifyTrackHit, Track } from "../types";
 import { BpmRangePicker } from "./BpmRangePicker";
@@ -470,7 +471,8 @@ function RowShell({
       store.registerDeck({
         track_id: trackId,
         scene_index: r.scene_index,
-        stem_track_indices: Object.values(r.track_indices),
+        side: r.side ?? null,
+        stem_track_indices: sideTrackIndices(r.track_indices, r.side),
         loaded_at: Date.now(),
       });
       const fully = r.stems_loaded === 4;
