@@ -74,6 +74,7 @@ class _FakeLive:
         is_playing_delay: int = 0,
         answer_is_playing: bool = True,
         clip_lengths: dict[tuple[int, int], float] | None = None,
+        num_scenes: int = 8,
     ) -> None:
         self.names: list[str] = list(initial_names or [])
         self.received: list[tuple[str, tuple[Any, ...]]] = []
@@ -100,6 +101,9 @@ class _FakeLive:
         # tempo comes back with half the beats. Absent key = no reply, which
         # is what a fork without the length handler (or a silent Live) does.
         self._clip_lengths: dict[tuple[int, int], float] = dict(clip_lengths or {})
+        # Clip slots only exist inside scenes. An exported .als ships 8, and
+        # creating a clip beyond the last one raises IndexError inside Live.
+        self.num_scenes = num_scenes
 
     def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
         with self._lock:
@@ -116,6 +120,10 @@ class _FakeLive:
                 idx, name = int(args[0]), str(args[1])
                 if 0 <= idx < len(self.names):
                     self.names[idx] = name
+            elif addr == "/live/song/create_scene":
+                self.num_scenes += 1
+            elif addr == "/live/song/get/num_scenes":
+                self._reply.send_message("/live/song/get/num_scenes", [self.num_scenes])
             elif addr == "/live/song/get/num_tracks":
                 self._reply.send_message(
                     "/live/song/get/num_tracks", [len(self.names)]
@@ -2069,3 +2077,59 @@ def test_adopted_deck_columns_are_styled_not_just_created_ones():
         assert _wait_for(
             lambda: any(a[0] == drums_a for a in live.args_for("/live/track/set/crossfade_assign"))
         )
+
+
+def test_load_past_the_last_scene_grows_the_set(tmp_path):
+    """The 9th load onto a side must not aim at a slot that doesn't exist.
+
+    Verified against real Live: creating a clip beyond the last scene raises
+    "IndexError: Index out of range" internally, no clip appears, and because
+    OSC carries no error reply the bridge recorded the cell anyway — the grid
+    showed a loaded cell that was not there and firing it did nothing.
+    `create_scene` existed on the client and was called from nowhere.
+    """
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES), num_scenes=8) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)),
+                [_stub_stem("drums", str(drums))],
+                kinds=["drums"],
+                side="a",
+                scene_index=9,          # scenes 0..7 exist; 9 is two past the end
+            )
+        finally:
+            bridge.stop()
+
+        assert live.num_scenes >= 10, (
+            f"Set was not grown to hold scene index 9 (num_scenes={live.num_scenes})"
+        )
+        assert live.count("/live/song/create_scene") >= 2
+
+
+def test_load_within_the_existing_scenes_creates_none(tmp_path):
+    """Don't grow the Set for a load that already fits — a DJ's scene list
+    should not sprout empty rows on every load."""
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES), num_scenes=8) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)),
+                [_stub_stem("drums", str(drums))],
+                kinds=["drums"], side="a", scene_index=3,
+            )
+        finally:
+            bridge.stop()
+        assert live.count("/live/song/create_scene") == 0
+        assert live.num_scenes == 8
