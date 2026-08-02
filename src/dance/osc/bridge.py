@@ -223,11 +223,30 @@ class AbletonBridge:
             self.client.start_listen_beat()
             self.client.start_listen_is_playing()
             self.client.start_listen_crossfader()
-            # Set Live's master Solo/Cue mode to "Cue" so per-track Solo
-            # buttons act as PFL (route to outs 3/4) instead of muting
-            # master. Stem-DJing needs PFL semantics. Idempotent — Live
-            # already in Cue mode is a no-op.
-            self.client.set_solo_cue_mode(True)
+            # NOTE: we do NOT try to set Live's Solo/Cue switch here any more.
+            #
+            # This used to send /live/song/set/solo_cue_mode and claim it was
+            # idempotent. That address does not exist — not in AbletonOSC, not
+            # in our fork — and Live's LOM exposes no writable property for the
+            # switch either (only a read-only `exclusive_solo`, which is a
+            # different setting). The fork logged it as "Unknown OSC address"
+            # 32 times; it had never once worked.
+            #
+            # The consequence is severe enough to spell out: with Live left in
+            # SOLO mode, the PFL button on a deck solos that deck's tracks,
+            # which MUTES everything else — the room goes silent and the
+            # headphones get nothing, because Solo-in-Place does not feed the
+            # Cue output. It reads as a random dropout mid-set.
+            #
+            # It has to be set by hand: Live's master strip → click the Solo
+            # button so it reads "Cue", then re-save the template. See
+            # docs/session-1.md Part 0.
+            logger.warning(
+                "Live's Solo/Cue switch cannot be set over OSC. If it is on "
+                "SOLO rather than CUE, the PFL buttons will mute the master "
+                "instead of feeding your headphones. Set it by hand in Live's "
+                "master strip and re-save the template."
+            )
         except OSError as exc:
             # Live isn't listening; that's fine in dev/test.
             logger.info("Could not subscribe to Live (%s) — continuing without push state", exc)
@@ -778,10 +797,19 @@ class AbletonBridge:
     # delete + recreate so anchor-mode fire_scene calls never accidentally
     # re-trigger a stale preview.
     _CUE_SLOT: int = 0
-    # Live's Clip.launch_quantization enum value for "None" (fire instantly,
-    # no quantization). Set on the cue clip so previews are snappy regardless
-    # of the template's GlobalQuantisation (1 Bar) and transport state.
-    _LAUNCH_QUANT_NONE: int = 0
+    # Live's Clip.launch_quantization enum: **0 = Global, 1 = None**, then
+    # 2=8Bars, 3=4Bars, 4=2Bars, 5=1Bar, 6=1/2, … (AbletonOSC README:394).
+    #
+    # This was 0 — i.e. "Global", the exact opposite of what it claimed. The
+    # template pins Global at 1 Bar, so the write was a no-op and every cue
+    # preview waited for the next bar (up to ~2 s with the transport running)
+    # before it started. That reads as "the preview button didn't work", which
+    # is why it was only ever noticed as flakiness.
+    _LAUNCH_QUANT_NONE: int = 1
+    # The default for a freshly created clip. Deck clips must stay here so
+    # scene fires land beat-aligned; only the dedicated cue track is set to
+    # None, and the seek path restores this after its instant re-fire.
+    _LAUNCH_QUANT_GLOBAL: int = 0
     # How long to wait for Live to confirm the async create_audio_clip
     # populated the cue slot before we fire it. ~1.5s covers a cold sample
     # decode without hanging the request.
@@ -1588,6 +1616,31 @@ class AbletonBridge:
     # rounding and far tighter than the 2x errors we're hunting.
     _WARP_AGREE_TOL = 0.02
 
+    def _clear_slot_if_occupied(self, track_index: int, slot_index: int) -> bool:
+        """Delete whatever Live already has in this clip slot.
+
+        Returns True if a clip was found and deletion was sent. Asks Live
+        rather than consulting ``_deck_cells`` — the bridge's map is its own
+        memory of what IT loaded, and Live routinely holds clips it never
+        knew about (an opened .als export, a backend restart, a prior failed
+        create).
+
+        Silent when ``has_clip`` goes unanswered: a fork without the handler
+        gets the old best-effort behaviour rather than a hard failure.
+        """
+        occupied = self._clip_slot_has_clip(track_index, slot_index)
+        if not occupied:
+            return False
+        try:
+            self.client.stop_clip(track_index, slot_index)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        try:
+            self.client.delete_clip(track_index, slot_index)
+        except OSError:  # pragma: no cover - best-effort
+            return False
+        return True
+
     def _force_warp(self, track_index: int, slot_index: int) -> None:
         """Pin a freshly-created clip to warped + Beats mode.
 
@@ -1910,6 +1963,22 @@ class AbletonBridge:
             deck_kind = f"{kind}_{side}"
             t_idx = deck_columns[deck_kind]
             try:
+                # Clear the slot first if Live already has a clip there.
+                #
+                # Live raises "This clip slot already has a clip" and
+                # AbletonOSC has no way to report that back, so without this
+                # the create silently fails — and the set_clip_name below then
+                # succeeds ON THE STALE CLIP. The card, the clip name in Live
+                # and the deck map all say the new track while the OLD audio
+                # is what fires. Live's log shows this happened 16 times on
+                # this rig.
+                #
+                # _deck_cells is not a reliable occupancy check: it is the
+                # bridge's own memory, and Live can hold clips it never knew
+                # about — an opened .als export puts a clip in slot 0 of every
+                # A-side deck track, and recover_deck_columns adopts the
+                # columns but not the cells. Ask Live.
+                self._clear_slot_if_occupied(t_idx, scene_index)
                 self.client.create_audio_clip(t_idx, scene_index, str(stem_path))
                 self.client.set_clip_name(
                     t_idx, scene_index, f"{title} ({kind} {side.upper()})"

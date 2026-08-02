@@ -563,8 +563,14 @@ def test_seek_clip_sets_instant_launch_quant_before_fire(
     client: TestClient, fake_bridge: FakeAbletonBridge
 ) -> None:
     """Click-to-seek must jump instantly: the endpoint sets loop_start +
-    start_marker, forces launch_quantization=None (0), THEN re-fires — so the
-    fire isn't bar-quantized. Regression for the up-to-1-bar seek lag."""
+    start_marker, forces launch_quantization to None, re-fires, then puts the
+    clip back on Global.
+
+    Live's enum is **0=Global, 1=None** (AbletonOSC README:394). This test
+    used to assert 0 and pass, which is how the seek stayed bar-quantized —
+    the very lag it was written to prevent. The restore matters just as much:
+    this is a deck clip, and leaving it on None would un-quantize every later
+    scene fire."""
     r = client.post("/api/v1/ableton/transport/seek/4/2?position=12.5")
     assert r.status_code == 200
     assert r.json() == {
@@ -582,15 +588,27 @@ def test_seek_clip_sets_instant_launch_quant_before_fire(
     lq_pos = names.index("set_clip_launch_quantization")
     fire_pos = names.index("fire_clip")
     assert lq_pos < fire_pos, "launch_quantization must be set BEFORE the fire"
-    # launch_quantization sent with value 0 (None) on the seeked clip.
+    # 1 = None (instant), NOT 0 — 0 is Global, which the template pins at 1 Bar.
     assert fake_bridge.client.calls[lq_pos] == (
         "set_clip_launch_quantization",
-        (4, 2, 0),
+        (4, 2, 1),
     )
     # Markers precede the fire too (the re-fire must read the new position).
     assert names.index("set_clip_loop_start") < fire_pos
     assert names.index("set_clip_start_marker") < fire_pos
-    assert fake_bridge.client.calls[-1] == ("fire_clip", (4, 2))
+    # …and the clip is restored to Global AFTER the fire, so subsequent scene
+    # launches stay beat-aligned.
+    lq_calls = [i for i, n in enumerate(names) if n == "set_clip_launch_quantization"]
+    assert len(lq_calls) == 2, "expected set-None then restore-Global"
+    assert lq_calls[1] > fire_pos
+    assert fake_bridge.client.calls[lq_calls[1]] == (
+        "set_clip_launch_quantization",
+        (4, 2, 0),
+    )
+    # The restore is deliberately the FINAL send: the instant launch applies to
+    # this fire and to nothing after it.
+    assert fake_bridge.client.calls[fire_pos] == ("fire_clip", (4, 2))
+    assert names[-1] == "set_clip_launch_quantization"
 
 
 def test_load_track_404_when_missing(client: TestClient) -> None:

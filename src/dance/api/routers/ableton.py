@@ -329,12 +329,23 @@ def seek_clip(
     you'd need to seek to 0 explicitly.
     """
     # Markers are quick property sets; they precede the fire here so the
-    # re-fire reads the new loop_start / start_marker. launch_quantization is
-    # set to 0 (None) BEFORE the fire so the jump is instant, not bar-quantized.
+    # re-fire reads the new loop_start / start_marker.
     bridge.client.set_clip_loop_start(track_index, slot_index, position)
     bridge.client.set_clip_start_marker(track_index, slot_index, position)
-    bridge.client.set_clip_launch_quantization(track_index, slot_index, 0)
+    # Instant launch for the re-fire. This used to pass a literal 0 believing
+    # it meant "None"; Live's enum is 0=Global / 1=None, and Global is pinned
+    # at 1 Bar by the template — so the seek was itself bar-quantized, which
+    # is the lag this docstring says it exists to remove.
+    bridge.client.set_clip_launch_quantization(
+        track_index, slot_index, AbletonBridge._LAUNCH_QUANT_NONE
+    )
     bridge.client.fire_clip(track_index, slot_index)
+    # Put the clip back on Global. This is a DECK clip, not the cue track —
+    # leaving it on None would make every later scene fire un-quantized, so
+    # the whole set drifts off the grid after a single waveform click.
+    bridge.client.set_clip_launch_quantization(
+        track_index, slot_index, AbletonBridge._LAUNCH_QUANT_GLOBAL
+    )
     return {
         "ok": True,
         "track_index": track_index,
