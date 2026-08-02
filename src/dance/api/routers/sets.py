@@ -11,6 +11,7 @@ Tail-rec scoring lives in :mod:`dance.recommender.tail` and is surfaced at
 from __future__ import annotations
 
 import json
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
@@ -42,6 +43,21 @@ from dance.recommender.recommender import recommend_by_column
 from dance.recommender.tail import DEFAULT_WINDOW, tail_recs_for_set
 
 router = APIRouter(prefix="/sets", tags=["sets"])
+
+# Serialises plan mutations.
+#
+# Every plan write is read-modify-write on a single JSON column, and uvicorn
+# runs sync endpoints in a threadpool — so concurrent writers all read the
+# same starting plan and the last commit wins. Measured before this existed:
+# four concurrent appends of [19, 21, 11, 379] left ONE pick in the plan.
+# Two ＋ clicks in quick succession are exactly that case.
+#
+# A process-wide lock is the right tool here rather than DB-level locking:
+# this is a single-process personal backend, plan writes are a handful per
+# minute, and the held region is a few milliseconds of SQLite work. If this
+# ever runs multi-worker, this must become a DB-level guard (SQLite
+# BEGIN IMMEDIATE, or a version column with a retry).
+_PLAN_WRITE_LOCK = threading.Lock()
 
 _VALID_STEM_KINDS = {k.value for k in StemKind}
 
@@ -554,17 +570,40 @@ def put_plan(
     body: SetPlanUpdateRequest,
     session: Session = Depends(get_session),
 ) -> dict:
-    """Replace the whole plan. ``queues`` maps role → ordered list of track ids;
-    the frontend edits locally (add / remove / reorder) and PUTs the result."""
+    """Replace the whole plan. ``queues`` maps role → ordered list of track ids.
+
+    This is a WHOLE-PLAN replace: every role not present in ``queues`` is
+    emptied. That is intentional for reorder/remove, but it makes a partial
+    body destructive, so ids are validated before anything is persisted —
+    a request that names a track that does not exist is rejected outright
+    rather than silently writing a plan that points at nothing.
+
+    Prefer ``POST /plan/append`` for adds: it merges server-side against the
+    row and cannot race another writer.
+    """
     s = _require_set(session, set_id)
     queues: dict[str, list[int]] = {r: [] for r in sq.PLAN_ROLES}
     for role, ids in (body.queues or {}).items():
         queues[_validate_role(role)] = [int(t) for t in ids]
-    s.plan = sq.encode_plan(queues)
-    s.updated_at = now_utc()
-    session.commit()
-    session.refresh(s)
-    return _plan_out(session, s)
+
+    wanted = {tid for ids in queues.values() for tid in ids}
+    if wanted:
+        known = {
+            int(r[0])
+            for r in session.query(Track.id).filter(Track.id.in_(wanted)).all()
+        }
+        missing = sorted(wanted - known)
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"unknown track ids in plan: {missing}",
+            )
+    with _PLAN_WRITE_LOCK:
+        s.plan = sq.encode_plan(queues)
+        s.updated_at = now_utc()
+        session.commit()
+        session.refresh(s)
+        return _plan_out(session, s)
 
 
 @router.post("/{set_id}/plan/append", response_model=SetPlanOut)
@@ -575,18 +614,22 @@ def append_to_plan(
 ) -> dict:
     """Append one track to a role's queue (server-side merge). Used by ⌘K so it
     works without the whole plan loaded client-side."""
-    s = _require_set(session, set_id)
     role = _validate_role(body.role)
     if session.get(Track, body.track_id) is None:
         raise HTTPException(status_code=404, detail="track not found")
-    queues = sq.parse_plan(s.plan)
-    if body.track_id not in queues[role]:
-        queues[role].append(body.track_id)
-    s.plan = sq.encode_plan(queues)
-    s.updated_at = now_utc()
-    session.commit()
-    session.refresh(s)
-    return _plan_out(session, s)
+    with _PLAN_WRITE_LOCK:
+        # Re-read INSIDE the lock — a plan fetched before it was acquired is
+        # already stale.
+        s = _require_set(session, set_id)
+        session.refresh(s)
+        queues = sq.parse_plan(s.plan)
+        if body.track_id not in queues[role]:
+            queues[role].append(body.track_id)
+        s.plan = sq.encode_plan(queues)
+        s.updated_at = now_utc()
+        session.commit()
+        session.refresh(s)
+        return _plan_out(session, s)
 
 
 @router.get("/{set_id}/plan-recs", response_model=ColumnRecsResponse)

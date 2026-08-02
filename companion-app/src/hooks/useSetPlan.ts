@@ -23,6 +23,7 @@ export function useSetPlan(setId: number | null | undefined) {
 export function usePlanMutations(setId: number | null) {
   const qc = useQueryClient();
 
+  const append = useAppendToPlan();
   const put = useMutation({
     mutationFn: (queues: Record<string, number[]>) => api.putPlan(setId as number, queues),
     onSuccess: (plan) => {
@@ -33,31 +34,46 @@ export function usePlanMutations(setId: number | null) {
   });
 
   // Derive the current {role: [ids]} from cached SetPlan, apply an edit, PUT.
-  const currentQueues = (): Record<string, number[]> => {
+  //
+  // Returns null when the plan has not loaded yet. That case MUST NOT be
+  // treated as "an empty plan": PUT /sets/{id}/plan seeds every role empty
+  // and overwrites only the roles it is sent, so PUTting a single-role
+  // object built from a cold cache silently ERASES the other four columns.
+  const currentQueues = (): Record<string, number[]> | null => {
     const plan = qc.getQueryData<SetPlan>(KEY(setId ?? -1));
+    if (plan == null) return null;
     const out: Record<string, number[]> = {};
-    for (const [role, items] of Object.entries(plan?.queues ?? {})) {
+    for (const [role, items] of Object.entries(plan.queues ?? {})) {
       out[role] = items.map((i) => i.track_id);
     }
     return out;
   };
 
+  // Adds go through the SERVER-SIDE append, not read-modify-PUT.
+  //
+  // The PUT path rebuilds the whole plan from a react-query cache that only
+  // refreshes on the previous PUT's response, so two ＋ clicks inside one
+  // round-trip both read the same snapshot and the second overwrites the
+  // first — the earlier pick vanishes with no error. The append endpoint
+  // merges server-side against the row itself, which has neither problem,
+  // and it validates the track id.
   const addToRole = (role: string, trackId: number) => {
     if (setId == null) return;
-    const q = currentQueues();
-    const list = q[role] ?? [];
-    if (!list.includes(trackId)) q[role] = [...list, trackId];
-    put.mutate(q);
+    append.mutate({ setId, role, trackId });
   };
 
   const removeFromRole = (role: string, index: number) => {
     const q = currentQueues();
+    // No server-side remove endpoint exists, so this stays read-modify-PUT —
+    // but refuse to run against an unloaded plan rather than wiping it.
+    if (q == null) return;
     q[role] = (q[role] ?? []).filter((_, i) => i !== index);
     put.mutate(q);
   };
 
   const moveInRole = (role: string, from: number, to: number) => {
     const q = currentQueues();
+    if (q == null) return;
     const list = [...(q[role] ?? [])];
     if (to < 0 || to >= list.length) return;
     const [it] = list.splice(from, 1);
