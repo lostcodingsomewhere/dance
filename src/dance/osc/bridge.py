@@ -199,6 +199,7 @@ class AbletonBridge:
             "/live/clip/get/playing_position", self._on_playing_position
         )
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
+        self.listener.on("/live/song/get/num_scenes", self._on_num_scenes)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
         self.listener.on("/live/clip/get/length", self._on_clip_length)
@@ -533,6 +534,13 @@ class AbletonBridge:
             if evt is not None:
                 evt.set()
 
+    def _on_num_scenes(self, address: str, args: tuple[Any, ...]) -> None:
+        if args:
+            self._reply_values[address] = int(args[0])
+            evt = self._reply_events.get(address)
+            if evt is not None:
+                evt.set()
+
     def _on_track_names(self, address: str, args: tuple[Any, ...]) -> None:
         # AbletonOSC sends one variadic-string reply with N names.
         self._reply_values[address] = [str(a) for a in args]
@@ -642,6 +650,53 @@ class AbletonBridge:
         return self._await_reply(
             "/live/song/get/num_tracks", self.client.get_num_tracks, timeout
         )
+
+    def get_num_scenes(self, timeout: float = 0.5) -> int | None:
+        """How many scenes the Set currently has."""
+        return self._await_reply(
+            "/live/song/get/num_scenes", self.client.get_num_scenes, timeout
+        )
+
+    def ensure_scene_exists(self, scene_index: int, *, timeout: float = 0.5) -> bool | None:
+        """Make sure ``scene_index`` is a real slot before anything is put in it.
+
+        Clip slots only exist inside scenes. An exported .als ships 8 scenes
+        and nothing ever created more — ``create_scene`` exists on the client
+        and was called from nowhere — so the 9th load onto a side aimed at a
+        slot that does not exist. Verified against real Live: it raises
+        ``IndexError: Index out of range`` internally, no clip appears, and
+        because OSC carries no error reply the bridge recorded the cell in
+        ``_deck_cells`` regardless. The grid then showed a loaded cell that
+        was not there, and firing it did nothing.
+
+        Returns True when the scene exists (or was created), False if Live
+        would not grow, None when Live is unreachable — callers should treat
+        None as "proceed best-effort", matching the old behaviour.
+        """
+        have = self.get_num_scenes(timeout=timeout)
+        if have is None:
+            return None
+        if scene_index < have:
+            return True
+        # Append one at a time; Live indexes scenes densely so N appends give
+        # us index N-1. Bounded so a silent Live can never spin here.
+        needed = scene_index - have + 1
+        for _ in range(min(needed, 64)):
+            try:
+                self.client.create_scene(-1)
+            except OSError:  # pragma: no cover - best-effort
+                return None
+        now = self.get_num_scenes(timeout=timeout)
+        if now is None:
+            return None
+        if now > scene_index:
+            return True
+        logger.warning(
+            "Could not grow the Set to %d scenes (Live reports %d). A load "
+            "into that slot will silently do nothing.",
+            scene_index + 1, now,
+        )
+        return False
 
     def get_track_names(self, timeout: float = 1.0) -> list[str] | None:
         """Ask Live for every track's name in one OSC roundtrip. Returns the
@@ -2136,6 +2191,18 @@ class AbletonBridge:
         # in muted (the mix *track* is muted at creation, see
         # _create_deck_columns) so it doesn't double the summed stems, but
         # the DJ can unmute it to A/B against the original.
+        # Grow the Set if this load is aimed past the last scene. Without
+        # this the clip creation raises IndexError inside Live, no clip
+        # appears, and — since OSC has no error reply — the cell is recorded
+        # anyway and the grid shows something that is not there.
+        if live_reachable:
+            grew = self.ensure_scene_exists(scene_index)
+            if grew is False:
+                warnings.append(
+                    f"Live has no scene {scene_index + 1} and would not create "
+                    f"one; this load would land nowhere."
+                )
+
         stems_loaded = 0
         # (deck_kind, track_index) for every cell this call populated — the
         # input to the post-load warp check below.

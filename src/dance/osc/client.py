@@ -272,6 +272,17 @@ class AbletonOSCClient:
         """Delete the track at ``index``."""
         self._send("/live/song/delete_track", index)
 
+    def get_num_scenes(self) -> None:
+        """Ask how many scenes the Set has. Reply:
+        ``/live/song/get/num_scenes``.
+
+        Needed because clip slots only exist inside scenes: creating a clip
+        at a slot beyond the last scene raises ``IndexError: Index out of
+        range`` inside Live and, since OSC has no error reply, looks
+        identical to success from here.
+        """
+        self._send("/live/song/get/num_scenes")
+
     def create_scene(self, index: int = -1) -> None:
         """Insert a new scene at ``index`` (default: append)."""
         self._send("/live/song/create_scene", index)
