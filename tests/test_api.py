@@ -3545,3 +3545,129 @@ def test_deck_map_stem_lookup_handles_side_b_and_mix(
     cells = {c["kind"]: c for c in client.get("/api/v1/ableton/decks").json()["cells"]}
     assert cells["vocals_b"]["stem_file_id"] == 888
     assert cells["mix_a"]["stem_file_id"] is None
+
+
+def test_put_plan_rejects_unknown_track_ids(client: TestClient, session) -> None:
+    """PUT is a whole-plan replace, so a body naming a nonexistent track would
+    persist a plan pointing at nothing. Reject instead."""
+    from dance.core.database import Set as DanceSet
+
+    session.add(DanceSet(id=90, name="S"))
+    session.commit()
+    r = client.put("/api/v1/sets/90/plan", json={"queues": {"song": [999999]}})
+    assert r.status_code == 404
+    assert "unknown track ids" in r.json()["detail"]
+
+
+def test_append_to_plan_is_atomic_across_two_quick_adds(
+    client: TestClient, session
+) -> None:
+    """Two adds in a row must both survive.
+
+    The grid used to read-modify-PUT off a react-query cache that only
+    refreshed on the previous PUT's response, so two ＋ clicks inside one
+    round-trip both read the same snapshot and the second overwrote the
+    first — the earlier pick vanished with no error. The append endpoint
+    merges server-side against the row itself.
+    """
+    from dance.core.database import Set as DanceSet, Track
+
+    session.add(DanceSet(id=91, name="S"))
+    for tid in (501, 502):
+        session.add(
+            Track(
+                id=tid,
+                file_hash=f"h{tid}",
+                file_path=f"/tmp/{tid}.mp3",
+                file_name=f"{tid}.mp3",
+                file_size_bytes=1,
+                title=f"T{tid}",
+                duration_seconds=100.0,
+                state="complete",
+            )
+        )
+    session.commit()
+
+    client.post("/api/v1/sets/91/plan/append", json={"role": "song", "track_id": 501})
+    r = client.post(
+        "/api/v1/sets/91/plan/append", json={"role": "song", "track_id": 502}
+    )
+    assert r.status_code == 200
+    ids = [i["track_id"] for i in r.json()["queues"]["song"]]
+    assert ids == [501, 502], "the first pick was dropped"
+
+
+def test_put_plan_still_replaces_wholesale(client: TestClient, session) -> None:
+    """Guard the intended behaviour: PUT is how remove/reorder work, so a role
+    absent from the body really is emptied. This is why a PARTIAL body is
+    destructive and why adds go through append instead."""
+    from dance.core.database import Set as DanceSet, Track
+
+    session.add(DanceSet(id=92, name="S"))
+    session.add(
+        Track(
+            id=503,
+            file_hash="h503",
+            file_path="/tmp/503.mp3",
+            file_name="503.mp3",
+            file_size_bytes=1,
+            title="T",
+            duration_seconds=100.0,
+            state="complete",
+        )
+    )
+    session.commit()
+    client.post("/api/v1/sets/92/plan/append", json={"role": "drums", "track_id": 503})
+    r = client.put("/api/v1/sets/92/plan", json={"queues": {"song": [503]}})
+    assert r.status_code == 200
+    assert r.json()["queues"]["drums"] == []
+
+
+def test_concurrent_appends_do_not_lose_picks(client: TestClient, session) -> None:
+    """Plan writes are read-modify-write on one JSON column, and uvicorn runs
+    sync endpoints in a threadpool — so concurrent writers all read the same
+    starting plan and the last commit wins.
+
+    Measured against the running backend BEFORE the lock existed: four
+    concurrent appends of [19, 21, 11, 379] left exactly ONE pick. Two ＋
+    clicks in quick succession are precisely that case, which is how a pick
+    could vanish with no error.
+    """
+    import threading
+
+    from dance.core.database import Set as DanceSet, Track
+
+    session.add(DanceSet(id=93, name="S"))
+    ids = [601, 602, 603, 604]
+    for tid in ids:
+        session.add(
+            Track(
+                id=tid,
+                file_hash=f"h{tid}",
+                file_path=f"/tmp/{tid}.mp3",
+                file_name=f"{tid}.mp3",
+                file_size_bytes=1,
+                title=f"T{tid}",
+                duration_seconds=100.0,
+                state="complete",
+            )
+        )
+    session.commit()
+
+    start = threading.Barrier(len(ids))
+
+    def add(tid: int) -> None:
+        start.wait(timeout=5)
+        client.post(
+            "/api/v1/sets/93/plan/append", json={"role": "song", "track_id": tid}
+        )
+
+    threads = [threading.Thread(target=add, args=(t,)) for t in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    final = client.get("/api/v1/sets/93/plan").json()
+    got = sorted(i["track_id"] for i in final["queues"]["song"])
+    assert got == sorted(ids), f"picks were lost: {sorted(set(ids) - set(got))}"
