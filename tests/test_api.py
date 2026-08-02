@@ -3473,3 +3473,75 @@ def test_seek_proceeds_best_effort_when_live_is_silent(
     assert body["position"] == 999
     assert body["clamped"] is False
     assert body["clip_length_beats"] is None
+
+
+def test_deck_map_resolves_stem_file_id_from_deck_kind(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session
+) -> None:
+    """Deck cells are keyed by DECK kind ("drums_a"); stem_files.kind holds
+    only the source kind ("drums"). Querying with the suffix attached matched
+    nothing, so every cell returned stem_file_id = null.
+
+    Not cosmetic: useColumnRecs builds combo_stem_ids from exactly this field,
+    so the live rec streams were scored against an EMPTY combo — no embedding
+    signal from what is playing, which is the mechanism docs/vision.md is
+    built on.
+    """
+    from dance.core.database import StemFile, Track
+
+    track = Track(
+        id=4242,
+        file_hash="h4242",
+        file_path="/tmp/x.mp3",
+        file_name="x.mp3",
+        file_size_bytes=1,
+        title="X",
+        duration_seconds=200.0,
+        state="complete",
+    )
+    session.add(track)
+    session.add(
+        StemFile(id=777, track_id=4242, kind="drums", path="/tmp/drums.wav")
+    )
+    session.commit()
+
+    fake_bridge.deck_state_return = {
+        "columns": {"drums_a": 0},
+        "cells": [{"scene_index": 0, "kind": "drums_a", "track_id": 4242}],
+    }
+    cells = client.get("/api/v1/ableton/decks").json()["cells"]
+    assert len(cells) == 1
+    assert cells[0]["stem_file_id"] == 777, "deck kind must map to the source kind"
+
+
+def test_deck_map_stem_lookup_handles_side_b_and_mix(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session
+) -> None:
+    from dance.core.database import StemFile, Track
+
+    session.add(
+        Track(
+            id=4343,
+            file_hash="h4343",
+            file_path="/tmp/y.mp3",
+            file_name="y.mp3",
+            file_size_bytes=1,
+            title="Y",
+            duration_seconds=200.0,
+            state="complete",
+        )
+    )
+    session.add(StemFile(id=888, track_id=4343, kind="vocals", path="/tmp/v.wav"))
+    session.commit()
+
+    fake_bridge.deck_state_return = {
+        "columns": {"vocals_b": 5, "mix_a": 8},
+        "cells": [
+            {"scene_index": 1, "kind": "vocals_b", "track_id": 4343},
+            # The mix cell has no StemFile row — must stay null, not error.
+            {"scene_index": 1, "kind": "mix_a", "track_id": 4343},
+        ],
+    }
+    cells = {c["kind"]: c for c in client.get("/api/v1/ableton/decks").json()["cells"]}
+    assert cells["vocals_b"]["stem_file_id"] == 888
+    assert cells["mix_a"]["stem_file_id"] is None
