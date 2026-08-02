@@ -2342,6 +2342,21 @@ class AbletonBridge:
         # 1. Full adopt — all 10 columns already in Live? Reuse, create none.
         adopted_all = self.recover_deck_columns(timeout=1.0)
         if adopted_all is not None:
+            # Style them anyway. Styling used to live only on the CREATE path,
+            # so this early return skipped the mix mute, the crossfade
+            # assignment and the colours entirely — and this is the branch the
+            # documented workflow takes, because an exported .als already
+            # contains all ten named deck columns.
+            #
+            # The .als's own mix clips carry Disabled=true (als/writer.py:449),
+            # so an exported Set does not double on its own. The break comes
+            # one step later: push_track_to_live drops a NEW, enabled mix clip
+            # into mix_a on every whole-song load, and its comment reasons
+            # "the mix track is muted at creation" — an assumption that only
+            # holds on the create path. Adopted + live-loaded means firing the
+            # scene plays the original full track on top of its own four stems.
+            for kind, idx in adopted_all.items():
+                self._style_deck_column(idx, kind)
             return adopted_all
 
         # 2. Partial adopt — keep whatever columns already exist by name.
@@ -2363,8 +2378,10 @@ class AbletonBridge:
         predicted_idx = start_index
         for kind in self._DECK_KINDS:
             if kind in existing:
-                # Adopt the existing column verbatim — don't recreate it.
+                # Adopt the existing column — but still style it, for the
+                # same reason as the full-adopt branch above.
                 columns[kind] = existing[kind]
+                self._style_deck_column(existing[kind], kind)
                 continue
             col_idx: int
             if live_reachable:
@@ -2390,9 +2407,14 @@ class AbletonBridge:
         return columns
 
     def _style_deck_column(self, idx: int, kind: str) -> None:
-        """Apply color, crossfade routing, and (for mix tracks) mute to a
-        freshly-created deck column. Split out of ``_create_deck_columns`` so
-        the create-only path and the predicted-fallback path share styling.
+        """Apply color, crossfade routing, and (for mix tracks) mute to a deck
+        column — on EVERY provisioning path, adopted or created.
+
+        Idempotent, and deliberately confined to ``_create_deck_columns``
+        (first load, or after a reset) rather than running on every resync:
+        unmuting a mix track to A/B against the original is a supported
+        gesture, and re-muting it under the DJ mid-set would be worse than
+        the bug this fixes.
 
         Crossfader routing mirrors the static .als writer
         (dance/als/writer.py:_crossfade_value_for) so a live-loaded deck

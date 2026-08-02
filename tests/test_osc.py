@@ -2030,3 +2030,42 @@ def test_record_off_does_not_provision_anything():
         assert result["armed_track"] is None
         assert live.count("/live/song/create_audio_track") == 0
         assert _wait_for(lambda: (0,) in live.args_for("/live/song/set/record_mode"))
+
+
+def test_adopted_deck_columns_are_styled_not_just_created_ones():
+    """Adopting existing deck columns must still mute the mix tracks.
+
+    Styling used to live only on the CREATE path, so the full-adopt early
+    return skipped the mix mute, the crossfade assignment and the colours —
+    and full adopt is exactly the branch the documented workflow takes, since
+    an exported .als already contains all ten named deck columns.
+
+    An exported Set does not double on its own (its mix clips carry
+    Disabled=true). The break is one step later: push_track_to_live drops a
+    NEW, enabled mix clip into mix_a on every whole-song load, reasoning that
+    "the mix track is muted at creation" — true only on the create path. So
+    adopted + live-loaded plays the original full track over its own stems.
+    """
+    with _FakeLive(initial_names=list(_PREFIXED_DECK_NAMES)) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            live.received.clear()
+            columns = bridge._create_deck_columns(start_index=0)
+        finally:
+            bridge.stop()
+
+        # Nothing was created — this is the pure adopt path.
+        assert live.count("/live/song/create_audio_track") == 0
+        mix_a, mix_b = columns["mix_a"], columns["mix_b"]
+        assert _wait_for(
+            lambda: (mix_a, 1) in live.args_for("/live/track/set/mute")
+        ), "adopted mix_a was left UNMUTED — it will double the stems"
+        assert _wait_for(lambda: (mix_b, 1) in live.args_for("/live/track/set/mute"))
+        # Stem decks must NOT be muted.
+        drums_a = columns["drums_a"]
+        assert (drums_a, 1) not in live.args_for("/live/track/set/mute")
+        # Crossfade assignment is applied to adopted columns too.
+        assert _wait_for(
+            lambda: any(a[0] == drums_a for a in live.args_for("/live/track/set/crossfade_assign"))
+        )
