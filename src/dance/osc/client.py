@@ -189,6 +189,27 @@ class AbletonOSCClient:
         """
         self._send("/live/track/set/output_routing_type", track, type_str)
 
+    def get_track_output_routing_channel(self, track: int) -> None:
+        """Read back the routing Live actually applied.
+
+        Reply: ``/live/track/get/output_routing_channel`` (track, name).
+        Used to confirm the cue really landed on the headphone pair — a
+        rejected set is indistinguishable from a successful one otherwise.
+        """
+        self._send("/live/track/get/output_routing_channel", track)
+
+    def get_available_output_routing_channels(self, track: int) -> None:
+        """Ask Live which output channels this track can actually be routed to.
+
+        Reply: ``/live/track/get/available_output_routing_channels`` with
+        ``(track, *display_names)``. Needed because the fork matches routing
+        by EXACT ``display_name`` and Live's names are interface-specific —
+        sending the literal ``"3/4"`` produced "Couldn't find output routing
+        channel: 3/4" in Live's log and left the Cue track on Master, so every
+        headphone preview played out the speakers instead.
+        """
+        self._send("/live/track/get/available_output_routing_channels", track)
+
     def set_track_output_routing_channel(self, track: int, channel: str) -> None:
         """Set a track's output routing channel (e.g. ``"3/4"``, ``"1/2"``).
 
