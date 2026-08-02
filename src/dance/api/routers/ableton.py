@@ -36,6 +36,17 @@ logger = logging.getLogger(__name__)
 # refuses a marker written at the boundary just as it does one past it.
 _SEEK_END_MARGIN_BEATS = 0.25
 
+# Deck kinds carry a side suffix ("drums_a"); StemFile.kind never does.
+_DECK_SIDE_SUFFIXES = ("_a", "_b")
+
+
+def _source_kind(deck_kind: str) -> str:
+    """``"drums_a"`` -> ``"drums"``. Side-less kinds pass through unchanged."""
+    for suffix in _DECK_SIDE_SUFFIXES:
+        if deck_kind.endswith(suffix):
+            return deck_kind[: -len(suffix)]
+    return deck_kind
+
 router = APIRouter(prefix="/ableton", tags=["ableton"])
 
 
@@ -603,12 +614,23 @@ def deck_map(
     stem_cache: dict[tuple[int, str], int | None] = {}
 
     def _stem_id(track_id: int, kind: str) -> int | None:
-        key = (track_id, kind)
+        # ``kind`` arrives as a DECK kind — "drums_a", "vocals_b" — because
+        # that is how the bridge keys its cells. ``stem_files.kind`` only ever
+        # holds the source kind, so querying with the suffix attached matched
+        # NOTHING and every cell came back with stem_file_id = null.
+        #
+        # Not cosmetic: useColumnRecs builds ``combo_stem_ids`` from exactly
+        # this field, so the live rec streams have always been scored against
+        # an EMPTY combo — no embedding signal from what is playing, which is
+        # the mechanism docs/vision.md is built on. It also cost TwoDeckStrip
+        # its per-stem waveforms, which silently fell back to the mix.
+        source_kind = _source_kind(kind)
+        key = (track_id, source_kind)
         if key in stem_cache:
             return stem_cache[key]
         stem = (
             session.query(StemFile)
-            .filter(StemFile.track_id == track_id, StemFile.kind == kind)
+            .filter(StemFile.track_id == track_id, StemFile.kind == source_kind)
             .one_or_none()
         )
         stem_cache[key] = stem.id if stem else None
