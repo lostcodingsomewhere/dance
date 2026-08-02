@@ -1015,6 +1015,16 @@ class AbletonBridge:
             return None
         return float(reply_len) if reply_len else None
 
+    def get_clip_length_beats(self, track: int, slot: int, *, timeout: float = 0.3) -> float | None:
+        """Public read of a clip's length in beats. ``None`` if Live is silent.
+
+        Callers use this to CLAMP against Live's own idea of a clip's extent
+        rather than one derived from our analysis — the two disagree by up to
+        9% on this library (see docs/proposals/warp-guard.md), and Live
+        silently refuses any marker write that falls outside its own range.
+        """
+        return self._get_clip_length(track, slot, timeout=timeout)
+
     def _ensure_cue_playing(self, cue_idx: int, *, timeout: float) -> bool:
         """Re-fire the cue clip until Live reports it's actually playing.
 

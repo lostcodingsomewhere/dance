@@ -32,6 +32,10 @@ from dance.osc.bridge import AbletonBridge
 
 logger = logging.getLogger(__name__)
 
+# Land this far inside the loop rather than exactly on loop_end — Live
+# refuses a marker written at the boundary just as it does one past it.
+_SEEK_END_MARGIN_BEATS = 0.25
+
 router = APIRouter(prefix="/ableton", tags=["ableton"])
 
 
@@ -328,6 +332,30 @@ def seek_clip(
     stay there until another seek (or a reload). To "reset to top"
     you'd need to seek to 0 explicitly.
     """
+    # Clamp against LIVE's idea of the clip's extent before writing anything.
+    #
+    # The companion computes the target beat with ratioToBeats(), which uses
+    # OUR analyzed BPM and duration (lib/seek.ts). Live's loop_end comes from
+    # its own auto-warp guess, and the two disagree by up to 9% on this
+    # library (docs/proposals/warp-guard.md). When the computed beat lands
+    # past Live's loop_end, Live refuses BOTH marker writes — "Cannot set
+    # LoopStart behind LoopEnd" and "StartMarker out of range", each logged 68
+    # times on this rig — and then the fire below still runs, so the clip
+    # restarts from ZERO in front of the room while this endpoint returns
+    # {"ok": true}. Clamping is what makes the click land where it was aimed.
+    requested = position
+    clamped = False
+    length = bridge.get_clip_length_beats(track_index, slot_index)
+    if length and length > 0:
+        # Stay strictly inside the loop; landing exactly on loop_end is the
+        # same refusal.
+        ceiling = max(0.0, length - _SEEK_END_MARGIN_BEATS)
+        position = min(max(0.0, position), ceiling)
+        clamped = abs(position - requested) > 1e-6
+    elif position < 0:
+        position = 0.0
+        clamped = True
+
     # Markers are quick property sets; they precede the fire here so the
     # re-fire reads the new loop_start / start_marker.
     bridge.client.set_clip_loop_start(track_index, slot_index, position)
@@ -350,7 +378,14 @@ def seek_clip(
         "ok": True,
         "track_index": track_index,
         "slot_index": slot_index,
+        # The position actually applied. When Live's warped length is shorter
+        # than our analysis expects, this is NOT what the caller asked for —
+        # `clamped` says so rather than silently reporting success on a seek
+        # that would have been refused.
         "position": position,
+        "requested_position": requested,
+        "clamped": clamped,
+        "clip_length_beats": length,
     }
 
 

@@ -91,10 +91,18 @@ class FakeAbletonBridge:
         self.preview_raises: Exception | None = None
         self.stop_preview_calls: int = 0
         # Cell-level deck state — overridable by individual tests.
+        # Live's own idea of a clip's length in beats, used by the seek
+        # endpoint to clamp. None = Live silent (seek proceeds best-effort).
+        self.clip_length_beats: float | None = None
         self.deck_state_return: dict[str, Any] = {
             "columns": None,
             "cells": [],
         }
+
+    def get_clip_length_beats(
+        self, track: int, slot: int, *, timeout: float = 0.3
+    ) -> float | None:
+        return self.clip_length_beats
 
     def start(self) -> None:
         self.started = True
@@ -573,12 +581,11 @@ def test_seek_clip_sets_instant_launch_quant_before_fire(
     scene fire."""
     r = client.post("/api/v1/ableton/transport/seek/4/2?position=12.5")
     assert r.status_code == 200
-    assert r.json() == {
-        "ok": True,
-        "track_index": 4,
-        "slot_index": 2,
-        "position": 12.5,
-    }
+    body = r.json()
+    assert body["ok"] is True
+    assert (body["track_index"], body["slot_index"]) == (4, 2)
+    assert body["position"] == 12.5
+    assert body["clamped"] is False
 
     names = [c[0] for c in fake_bridge.client.calls]
     # All four OSC sends happened, with the markers + the instant-launch
@@ -3418,3 +3425,51 @@ def test_plan_recs_scored_against_plan(client: TestClient, session, make_track) 
 def test_plan_404_for_missing_set(client: TestClient) -> None:
     assert client.get("/api/v1/sets/9999/plan").status_code == 404
     assert client.get("/api/v1/sets/9999/plan-recs?role=drums").status_code == 404
+
+
+def test_seek_clamps_to_lives_clip_length(
+    client: TestClient, fake_bridge: FakeAbletonBridge
+) -> None:
+    """A seek past Live's loop_end must be pulled inside it, not sent as-is.
+
+    The companion computes the target beat from OUR analyzed BPM
+    (lib/seek.ts ratioToBeats); Live's loop_end comes from its own auto-warp
+    guess, and the two disagree by up to 9% on this library. Unclamped, Live
+    refuses BOTH marker writes ("Cannot set LoopStart behind LoopEnd" and
+    "StartMarker out of range" — 68 of each in this rig's log) and the fire
+    still runs, so the clip restarts from ZERO while the API reports success.
+    """
+    fake_bridge.clip_length_beats = 100.0
+    r = client.post("/api/v1/ableton/transport/seek/4/2?position=250")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["clamped"] is True
+    assert body["requested_position"] == 250
+    # Strictly inside the loop — landing exactly on loop_end is refused too.
+    assert 0 < body["position"] < 100.0
+
+    sent = dict(
+        (c[0], c[1]) for c in fake_bridge.client.calls if c[0] == "set_clip_loop_start"
+    )
+    assert sent["set_clip_loop_start"] == (4, 2, body["position"])
+
+
+def test_seek_clamps_negative_positions(
+    client: TestClient, fake_bridge: FakeAbletonBridge
+) -> None:
+    fake_bridge.clip_length_beats = 100.0
+    body = client.post("/api/v1/ableton/transport/seek/4/2?position=-5").json()
+    assert body["position"] == 0.0
+    assert body["clamped"] is True
+
+
+def test_seek_proceeds_best_effort_when_live_is_silent(
+    client: TestClient, fake_bridge: FakeAbletonBridge
+) -> None:
+    """No length reply (Live closed, or a fork without the handler) must not
+    block the seek — it degrades to the old unclamped behaviour and says so."""
+    fake_bridge.clip_length_beats = None
+    body = client.post("/api/v1/ableton/transport/seek/4/2?position=999").json()
+    assert body["position"] == 999
+    assert body["clamped"] is False
+    assert body["clip_length_beats"] is None
