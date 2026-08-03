@@ -75,6 +75,9 @@ class _FakeLive:
         answer_is_playing: bool = True,
         clip_lengths: dict[tuple[int, int], float] | None = None,
         num_scenes: int = 8,
+        clip_names: dict[tuple[int, int], str] | None = None,
+        answer_bulk_clip_names: bool = True,
+        bulk_silent_tracks: set[int] | None = None,
     ) -> None:
         self.names: list[str] = list(initial_names or [])
         self.received: list[tuple[str, tuple[Any, ...]]] = []
@@ -104,6 +107,15 @@ class _FakeLive:
         # Clip slots only exist inside scenes. An exported .als ships 8, and
         # creating a clip beyond the last one raises IndexError inside Live.
         self.num_scenes = num_scenes
+        # (track, slot) -> clip name, for the resync scan. The per-slot query
+        # stays SILENT for an empty slot (that's what real Live does, and why
+        # the old scan cost a full timeout per empty slot); the bulk query
+        # answers with one reply per track carrying None for empty slots.
+        self._clip_names: dict[tuple[int, int], str] = dict(clip_names or {})
+        self._answer_bulk_clip_names = answer_bulk_clip_names
+        # Track indices the bulk handler refuses to answer, to model a
+        # partially-dropped batch (UDP has no delivery guarantee).
+        self._bulk_silent_tracks = set(bulk_silent_tracks or set())
 
     def _on_any(self, addr: str, args: tuple[Any, ...]) -> None:
         with self._lock:
@@ -156,6 +168,27 @@ class _FakeLive:
                 self._reply.send_message(
                     "/live/clip_slot/get/has_clip",
                     [key[0], key[1], 1 if present else 0],
+                )
+            elif addr == "/live/clip/get/name":
+                key = (int(args[0]), int(args[1]))
+                if key not in self._clip_names:
+                    return  # empty slot → real Live never replies
+                self._reply.send_message(
+                    "/live/clip/get/name", [key[0], key[1], self._clip_names[key]]
+                )
+            elif addr == "/live/track/get/clips/name":
+                if not self._answer_bulk_clip_names:
+                    return  # model an AbletonOSC without the bulk handler
+                track = int(args[0])
+                if track in self._bulk_silent_tracks:
+                    return  # model a dropped reply for one track
+                self._reply.send_message(
+                    "/live/track/get/clips/name",
+                    [track]
+                    + [
+                        self._clip_names.get((track, slot))
+                        for slot in range(self.num_scenes)
+                    ],
                 )
             elif addr == "/live/clip/get/length":
                 key = (int(args[0]), int(args[1]))
@@ -1384,6 +1417,103 @@ def test_bridge_deck_map_revision_bumps_on_adopt():
         assert bridge.state.deck_map_revision == rev + 1
     finally:
         bridge.stop()
+
+
+def _bridge_with_deck_columns(live: _FakeLive) -> AbletonBridge:
+    """A started bridge whose deck columns map onto tracks 0..9."""
+    bridge = live.make_bridge()
+    bridge.start()
+    bridge._deck_columns = {k: i for i, k in enumerate(bridge._DECK_KINDS)}
+    return bridge
+
+
+def test_scan_live_for_cells_uses_one_bulk_query_per_column():
+    """Resync asks each deck column ONCE, not once per clip slot.
+
+    The per-slot walk cost a full timeout for every EMPTY slot (real Live
+    never replies to a query about an empty slot), which measured 30.3 s
+    against the real rig and froze the UI for the whole resync.
+    """
+    names = {(0, 2): "Bad Memories (drums a)", (3, 5): "Nightdrive (bass b)"}
+    with _FakeLive([f"Deck {i}" for i in range(10)], clip_names=names) as live:
+        bridge = _bridge_with_deck_columns(live)
+        try:
+            found = bridge.scan_live_for_cells()
+        finally:
+            bridge.stop()
+
+    assert live.count("/live/track/get/clips/name") == 10
+    # The whole point: no per-slot queries at all.
+    assert live.count("/live/clip/get/name") == 0
+    assert found == [
+        {"scene_index": 2, "kind": "drums_a", "clip_name": "Bad Memories (drums a)"},
+        {"scene_index": 5, "kind": "bass_b", "clip_name": "Nightdrive (bass b)"},
+    ]
+
+
+def test_scan_live_for_cells_falls_back_when_bulk_unanswered():
+    """An AbletonOSC without the bulk handler still resyncs, via per-slot."""
+    names = {(0, 1): "Bad Memories (drums a)"}
+    with _FakeLive(
+        [f"Deck {i}" for i in range(10)],
+        clip_names=names,
+        answer_bulk_clip_names=False,
+    ) as live:
+        bridge = _bridge_with_deck_columns(live)
+        try:
+            found = bridge.scan_live_for_cells(
+                num_slots=3, timeout_per_slot=0.05, batch_timeout=0.3
+            )
+        finally:
+            bridge.stop()
+
+    assert live.count("/live/track/get/clips/name") == 10  # tried first
+    assert live.count("/live/clip/get/name") == 30  # then fell back
+    assert found == [
+        {"scene_index": 1, "kind": "drums_a", "clip_name": "Bad Memories (drums a)"}
+    ]
+
+
+def test_scan_live_for_cells_keeps_partial_batch():
+    """A dropped reply for one column doesn't discard the other nine.
+
+    UDP gives no delivery guarantee, and the alternative — falling back to
+    the 30 s walk because one packet went missing — is worse than reporting
+    what did arrive.
+    """
+    names = {(0, 0): "Kept (drums a)", (1, 0): "Lost (drums b)"}
+    with _FakeLive(
+        [f"Deck {i}" for i in range(10)],
+        clip_names=names,
+        bulk_silent_tracks={1},
+    ) as live:
+        bridge = _bridge_with_deck_columns(live)
+        try:
+            found = bridge.scan_live_for_cells(batch_timeout=0.4)
+        finally:
+            bridge.stop()
+
+    assert live.count("/live/clip/get/name") == 0  # no slow fallback
+    assert found == [
+        {"scene_index": 0, "kind": "drums_a", "clip_name": "Kept (drums a)"}
+    ]
+
+
+def test_scan_live_for_cells_reads_every_slot_of_a_column():
+    """Slots are read from one reply, so a column with several clips is
+    fully recovered — including slots past the old 8-scene default."""
+    names = {(0, slot): f"T{slot} (drums a)" for slot in range(8)}
+    with _FakeLive(
+        [f"Deck {i}" for i in range(10)], clip_names=names, num_scenes=8
+    ) as live:
+        bridge = _bridge_with_deck_columns(live)
+        try:
+            found = bridge.scan_live_for_cells()
+        finally:
+            bridge.stop()
+
+    assert [c["scene_index"] for c in found] == list(range(8))
+    assert all(c["kind"] == "drums_a" for c in found)
 
 
 def test_bridge_state_to_dict_includes_new_contract_fields():

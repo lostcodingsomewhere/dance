@@ -698,6 +698,51 @@ def clean_decks(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return {"ok": True, **bridge.clean_live_decks()}
 
 
+def _title_from_clip_name(clip_name: str, kind: str) -> str:
+    """Recover the track title from a clip name we wrote on load.
+
+    ``push_track_to_live`` names stems ``"{title} ({source} {side})"`` and
+    the mix ``"{title} (mix {side})"``. The trailing parenthetical is only
+    stripped when it actually names THIS cell's deck kind, so a title that
+    genuinely ends in brackets — "Tres Hermanos [Feat. Dan Auerbach]", or
+    anything "(Radio Edit)" — survives intact. Also accepts the legacy
+    ``"({kind})"`` form.
+    """
+    if clip_name.endswith(")") and "(" in clip_name:
+        opener = clip_name.rfind("(")
+        paren = clip_name[opener + 1 : -1].strip().lower()
+        paren_kind = paren.replace(" ", "_")  # "drums a" -> "drums_a"
+        if paren_kind == kind or paren == kind:
+            return clip_name[:opener].strip()
+    return clip_name
+
+
+def _resolve_titles(session: Session, titles: set[str]) -> dict[str, int]:
+    """Map clip titles to Track ids in ONE query.
+
+    Titles are not unique — this library has 80 titles carried by more than
+    one row, so the per-clip ``.one_or_none()`` this replaced raised
+    ``MultipleResultsFound`` and turned resync into a 500 for any of them.
+
+    Ambiguity resolves toward the canonical row: a track not marked as a
+    duplicate wins, then lowest id, so the choice is deterministic across
+    runs rather than dependent on row order.
+    """
+    if not titles:
+        return {}
+    rows = (
+        session.query(Track.id, Track.title, Track.duplicate_of)
+        .filter(Track.title.in_(titles))
+        .all()
+    )
+    best: dict[str, tuple[int, int]] = {}  # title -> (is_duplicate, id)
+    for track_id, title, duplicate_of in rows:
+        rank = (1 if duplicate_of is not None else 0, int(track_id))
+        if title not in best or rank < best[title]:
+            best[title] = rank
+    return {title: rank[1] for title, rank in best.items()}
+
+
 @router.post("/decks/resync")
 def resync_decks(
     bridge: AbletonBridge = Depends(get_bridge),
@@ -709,10 +754,10 @@ def resync_decks(
     or user manually placed clips outside our Load endpoint).
 
     Workflow:
-      1. ``bridge.scan_live_for_cells()`` walks each deck column × scene,
-         queries the clip name, returns a list of populated cells.
+      1. ``bridge.scan_live_for_cells()`` asks each deck column for all its
+         clip names in one OSC round trip, and returns the populated cells.
       2. We parse each clip name (format we set on load: ``"{title} ({kind})"``)
-         and resolve the title to a dance Track id via DB lookup.
+         and resolve the titles to dance Track ids in a single DB query.
       3. ``bridge.adopt_cells(new_map)`` replaces the in-memory cell map
          and persists.
 
@@ -724,6 +769,9 @@ def resync_decks(
     adopted: dict[tuple[int, str], int] = {}
     unmatched: list[dict[str, Any]] = []
 
+    titles = {_title_from_clip_name(e["clip_name"], e["kind"]) for e in scanned}
+    by_title = _resolve_titles(session, titles)
+
     for entry in scanned:
         clip_name: str = entry["clip_name"]
         kind: str = entry["kind"]  # deck-column kind, e.g. "drums_a", "mix_b"
@@ -734,18 +782,12 @@ def resync_decks(
         # kind as "{source}_{side}" and require it to match this cell's column.
         # (Also accept the legacy "({kind})" form where the paren already equals
         # the deck kind, e.g. "(drums_a)".)
-        title = clip_name
-        if clip_name.endswith(")") and "(" in clip_name:
-            opener = clip_name.rfind("(")
-            paren = clip_name[opener + 1 : -1].strip().lower()
-            paren_kind = paren.replace(" ", "_")  # "drums a" -> "drums_a"
-            if paren_kind == kind or paren == kind:
-                title = clip_name[:opener].strip()
-        track = session.query(Track).filter(Track.title == title).one_or_none()
-        if track is None:
+        title = _title_from_clip_name(clip_name, kind)
+        track_id = by_title.get(title)
+        if track_id is None:
             unmatched.append({**entry, "tried_title": title})
             continue
-        adopted[(entry["scene_index"], kind)] = int(track.id)
+        adopted[(entry["scene_index"], kind)] = track_id
 
     bridge.adopt_cells(adopted)
     return {
