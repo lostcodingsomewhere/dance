@@ -183,6 +183,10 @@ class AbletonBridge:
         # leaking to the master speakers. Lazy-created on first preview call.
         # See preview_audio() / stop_preview().
         self._cue_track_idx: int | None = None
+        # Whether ``_cue_track_idx`` has been confirmed to still name "Cue"
+        # in the CURRENT Live set. An index restored from disk, or adopted
+        # before the user opened a different Set, is a guess until checked.
+        self._cue_idx_verified: bool = False
 
         # Wire incoming OSC → state updates.
         self.listener.on("/live/song/get/tempo", self._on_tempo)
@@ -341,6 +345,9 @@ class AbletonBridge:
             cue = data.get("cue_track_idx")
             if isinstance(cue, int):
                 self._cue_track_idx = cue
+                # Restored from a previous run — the current Live set may be
+                # a completely different one. Confirm before firing into it.
+                self._cue_idx_verified = False
             logger.info(
                 "Restored bridge state: %d columns, %d cells%s",
                 len(self._deck_columns or {}),
@@ -730,6 +737,7 @@ class AbletonBridge:
         for idx, name in enumerate(names):
             if name == self._CUE_DISPLAY_NAME:
                 self._cue_track_idx = idx
+                self._cue_idx_verified = True
                 break
         # Only adopt deck columns if we found ALL 5; partial recoveries (user
         # renamed one) are confusing — better to create a fresh set.
@@ -788,6 +796,7 @@ class AbletonBridge:
         self._deck_columns = None
         self._deck_cells = {}
         self._cue_track_idx = None
+        self._cue_idx_verified = False
         self._track_solo = {}
         self._recompute_soloed_kinds()
         self._persist_state()
@@ -2590,7 +2599,36 @@ class AbletonBridge:
         than risk leaking into a random track.
         """
         if self._cue_track_idx is not None:
-            return self._cue_track_idx
+            if self._cue_idx_verified:
+                return self._cue_track_idx
+            # An index carried over from a previous run (or from before the
+            # user opened a different Live set) is a GUESS. Confirm the track
+            # at that index is still called "Cue" before anything is fired
+            # into it.
+            #
+            # Getting this wrong is destructive, not merely wrong: preview_audio
+            # deletes whatever clip occupies (cue_idx, _CUE_SLOT) before
+            # writing its own. A stale index pointing at a deck column would
+            # delete a loaded stem at scene 1 and then play the preview
+            # through the MASTER — the exact "leaked previews into a deck
+            # track" failure this function's docstring says it was written to
+            # prevent, arriving from disk instead of from a prediction.
+            names = self.get_track_names(timeout=num_tracks_timeout)
+            if names is None:
+                # Live unreachable — refuse to guess rather than fire blind.
+                return None
+            idx = self._cue_track_idx
+            if 0 <= idx < len(names) and names[idx] == self._CUE_DISPLAY_NAME:
+                self._cue_idx_verified = True
+                return idx
+            logger.warning(
+                "Persisted Cue track index %d no longer names %r (Live has %r "
+                "there). Discarding it and re-adopting.",
+                idx, self._CUE_DISPLAY_NAME,
+                names[idx] if 0 <= idx < len(names) else "<out of range>",
+            )
+            self._cue_track_idx = None
+            self._persist_state()
 
         # Adopt an existing "Cue" track by name. get_track_names is the
         # reliable name→index lookup; checking it directly (rather than via
@@ -2601,6 +2639,7 @@ class AbletonBridge:
             for existing_idx, nm in enumerate(names):
                 if nm == self._CUE_DISPLAY_NAME:
                     self._cue_track_idx = existing_idx
+                    self._cue_idx_verified = True
                     self._persist_state()
                     return existing_idx
         else:
@@ -2628,6 +2667,7 @@ class AbletonBridge:
         except OSError:  # pragma: no cover - best-effort
             pass
         self._cue_track_idx = idx
+        self._cue_idx_verified = True
         self._persist_state()
         return idx
 
