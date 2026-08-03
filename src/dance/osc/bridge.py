@@ -187,6 +187,10 @@ class AbletonBridge:
         # in the CURRENT Live set. An index restored from disk, or adopted
         # before the user opened a different Set, is a guess until checked.
         self._cue_idx_verified: bool = False
+        # Whether ``_deck_columns`` has been confirmed against the CURRENT
+        # Live set's track names. Restored-from-disk indices describe
+        # whatever Set was open last time.
+        self._deck_columns_verified: bool = False
 
         # Wire incoming OSC → state updates.
         self.listener.on("/live/song/get/tempo", self._on_tempo)
@@ -797,6 +801,7 @@ class AbletonBridge:
         self._deck_cells = {}
         self._cue_track_idx = None
         self._cue_idx_verified = False
+        self._deck_columns_verified = False
         self._track_solo = {}
         self._recompute_soloed_kinds()
         self._persist_state()
@@ -1867,6 +1872,33 @@ class AbletonBridge:
         )
         return False
 
+    def _deck_columns_match_live(self, *, timeout: float = 1.0) -> bool:
+        """Do the cached deck-column indices still name deck columns in Live?
+
+        Compares each cached index against Live's current track names using
+        the same accepted-name sets adoption uses. Returns True when Live is
+        unreachable — an unverifiable map is left alone rather than being
+        rebuilt on a guess, matching the best-effort contract elsewhere.
+        """
+        if not self._deck_columns:
+            return False
+        names = self.get_track_names(timeout=timeout)
+        if names is None:
+            return True  # can't check; don't churn the layout on a guess
+        for kind, idx in self._deck_columns.items():
+            accepted = self._DECK_RECOVERY_NAMES.get(kind)
+            if not accepted:
+                continue
+            if not (0 <= idx < len(names)) or names[idx] not in accepted:
+                logger.warning(
+                    "Cached deck column %s points at track %d, which Live now "
+                    "calls %r. Re-deriving the layout.",
+                    kind, idx,
+                    names[idx] if 0 <= idx < len(names) else "<out of range>",
+                )
+                return False
+        return True
+
     def _clear_slot_if_occupied(self, track_index: int, slot_index: int) -> bool:
         """Delete whatever Live already has in this clip slot.
 
@@ -2150,11 +2182,19 @@ class AbletonBridge:
             self._deck_columns = self._create_deck_columns(
                 start_index=base if live_reachable else 0
             )
-        elif live_reachable:
-            cached_max = max(self._deck_columns.values())
-            assert base is not None  # narrowed by live_reachable
-            if cached_max >= base:
+        elif live_reachable and not self._deck_columns_verified:
+            # Confirm the cached indices still NAME the deck columns.
+            #
+            # The old test was `cached_max >= base` — re-derive only when the
+            # indices no longer FIT, i.e. only when Live SHRANK. If Live grew,
+            # or the user opened a different Set, or tracks were reordered,
+            # the stale map was kept and clips were written to whatever now
+            # occupies those indices — possibly the user's own tracks. Growth
+            # is the normal case here, since the bridge itself adds a Cue
+            # track and a Recorder track beyond the ten deck columns.
+            if not self._deck_columns_match_live():
                 self._deck_columns = self._create_deck_columns(start_index=base)
+            self._deck_columns_verified = True
 
         deck_columns: dict[str, int] = self._deck_columns
 
