@@ -5,6 +5,7 @@
 // of plays possible without a backend change.
 
 import { useSyncExternalStore } from "react";
+import type { GridFocus } from "./lib/gridNav";
 import type { LoadedDeck, ViewName } from "./types";
 
 interface AppState {
@@ -58,6 +59,14 @@ interface AppState {
    * I just loaded".
    */
   armed: { a: number | null; b: number | null };
+  /**
+   * The keyboard cursor on the plan grid — which card ↑↓←→ is standing on.
+   *
+   * Ephemeral by design: a cursor restored from a previous session would
+   * point at recommendations that have since been re-scored, so it starts
+   * empty and the first arrow key adopts a sensible cell.
+   */
+  gridFocus: GridFocus | null;
 }
 
 const STORAGE_KEY = "dance.companion.state.v2";
@@ -130,6 +139,7 @@ const initial: AppState = {
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
   loadWarnings: null,
   armed: { a: null, b: null },
+  gridFocus: null,
   ...readPersisted(),
 };
 
@@ -279,6 +289,23 @@ export const store = {
   clearLoadWarnings(): void {
     if (state.loadWarnings == null) return;
     state = { ...state, loadWarnings: null };
+    emit();
+  },
+  /** Read the cursor from a non-React callsite (the shape subscriber). */
+  peekGridFocus(): GridFocus | null {
+    return state.gridFocus;
+  },
+  /** Move the keyboard cursor. Null clears it. */
+  setGridFocus(focus: GridFocus | null): void {
+    const cur = state.gridFocus;
+    if (
+      cur?.role === focus?.role &&
+      cur?.zone === focus?.zone &&
+      cur?.index === focus?.index
+    ) {
+      return; // same cell — don't re-render the grid
+    }
+    state = { ...state, gridFocus: focus };
     emit();
   },
   setPreviewing(

@@ -93,6 +93,43 @@ The plan grid is a flat 5-column CSS grid (`grid-cols-5`) — one column per rol
 
 There are no sidebars. Glanceable signals (energy arc, session/play count) live in the MasterStrip so the SceneGrid + plan grid own the center. The SceneGrid defaults to 4 rows visible with an `▾ show all 8 rows` toggle — auto-expands if cells are loaded in rows 5–8. (There is no PlayedStrip footer; play count + end-set moved into the MasterStrip's session chip.)
 
+## The audition loop (keyboard)
+
+Planning is one repeated motion: **look → hear → decide → next**. Driven by
+mouse, each pass costs two trips to 28px buttons (▶ then ＋), so triaging a
+single screenful — 5 roles × ~4 recs — is around 40 precise mouse moves. That
+is what makes building a set feel like data entry instead of listening.
+
+The plan grid is keyboard-driven, in **both** modes:
+
+| Key | Set (`mode="plan"`) | Booth (`mode="live"`) |
+|---|---|---|
+| `↑ ↓` | move within a column — plan picks and recs read as **one** list, so ↓ crosses the seam | same |
+| `← →` | move between role columns, staying in the same zone; empty columns are skipped | same |
+| `space` | audition the focused card in headphones (toggles) | same |
+| `enter` | **add to plan** | **load Deck A** |
+| `shift+enter` | — | **load Deck B** |
+| `esc` | stop the audition; a second press releases the cursor | same |
+
+The motions are identical on purpose and only the commit verb changes. That is
+what makes planning double as *rehearsal*: the hands learn one vocabulary and
+it transfers to the booth, instead of the two surfaces teaching conflicting
+habits. The bindings are printed under the grid — a shortcut nobody knows about
+is a shortcut nobody uses.
+
+Two deliberate choices worth keeping:
+
+- **Moving does not audition.** Auto-preview on move is tempting, but every
+  preview creates and fires a real clip in Live, so arrowing through twenty
+  candidates would machine-gun the Cue track. `space` is one keystroke.
+- **Committing holds the cursor's slot**, so the next candidate slides under it
+  and triage continues without an arrow key between picks. Getting this right
+  required distinguishing a list that is *empty* from one that is merely
+  *in flight* — see `lib/gridShape.ts`.
+
+Clicking a card also moves the cursor there, so mouse and keyboard compose
+rather than competing for "the current card".
+
 ## What information must be co-located
 
 Some things must be visible in one glance, no tab-switching:
