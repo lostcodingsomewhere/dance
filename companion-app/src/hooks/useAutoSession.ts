@@ -38,10 +38,23 @@ export function useAutoSession(): void {
         ? now - new Date(last).getTime() > STALE_AFTER_LAST_PLAY_MS
         : now - new Date(started).getTime() > STALE_AFTER_START_NO_PLAYS_MS;
       if (isStale) {
+        // Guard against re-entering while the end is in flight, then RELEASE
+        // the guard so the normal "playing -> create" branch below can run.
+        //
+        // This used to latch `attemptedRef` permanently and create the
+        // replacement only `if (ableton.is_playing)` — evaluated against the
+        // value captured when the effect ran. Come back the next day, open
+        // the app with the transport stopped (which is how you always open
+        // it), and the stale session was ended, no replacement was made, and
+        // the guard blocked every retry for the lifetime of the mount. The
+        // whole night went unlogged and only a page reload fixed it.
         attemptedRef.current = true;
         endSession.mutate(session.data.id, {
           onSuccess: () => {
-            if (ableton.is_playing) createSession.mutate(undefined);
+            attemptedRef.current = false;
+          },
+          onError: () => {
+            attemptedRef.current = false;
           },
         });
         return;

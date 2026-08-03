@@ -52,7 +52,20 @@ def create_session(
     body: SessionCreateRequest,
     session: Session = Depends(get_session),
 ) -> dict:
-    dj = DjSession(name=body.name, notes=body.notes, started_at=now_utc())
+    # Close any session still open before starting a new one. Two open
+    # sessions make "the current session" ambiguous, and everything derived
+    # from it — the energy arc, the recommender's trailing journey, the play
+    # count — silently picks one.
+    now = now_utc()
+    stale = (
+        session.query(DjSession)
+        .filter(DjSession.ended_at.is_(None))
+        .all()
+    )
+    for old_session in stale:
+        old_session.ended_at = now
+
+    dj = DjSession(name=body.name, notes=body.notes, started_at=now)
     session.add(dj)
     session.commit()
     session.refresh(dj)

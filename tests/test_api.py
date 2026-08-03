@@ -3671,3 +3671,23 @@ def test_concurrent_appends_do_not_lose_picks(client: TestClient, session) -> No
     final = client.get("/api/v1/sets/93/plan").json()
     got = sorted(i["track_id"] for i in final["queues"]["song"])
     assert got == sorted(ids), f"picks were lost: {sorted(set(ids) - set(got))}"
+
+
+def test_create_session_closes_any_still_open(client: TestClient, session) -> None:
+    """Two open sessions make "the current session" ambiguous, and everything
+    derived from it — the energy arc, the recommender's trailing journey, the
+    play count — silently picks one."""
+    from datetime import datetime, timezone
+
+    session.add(
+        DjSession(name="last night", started_at=datetime.now(timezone.utc))
+    )
+    session.commit()
+    assert session.query(DjSession).filter(DjSession.ended_at.is_(None)).count() == 1
+
+    r = client.post("/api/v1/sessions", json={"name": "tonight"})
+    assert r.status_code in (200, 201)
+    session.expire_all()
+    open_now = session.query(DjSession).filter(DjSession.ended_at.is_(None)).all()
+    assert len(open_now) == 1
+    assert open_now[0].name == "tonight"
