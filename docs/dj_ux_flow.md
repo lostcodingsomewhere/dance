@@ -122,7 +122,7 @@ A well-tuned single-surface UI should support this pattern without forcing the u
 
 Non-negotiable for this user (see [`../HARDWARE.md`](../HARDWARE.md)):
 
-- **APC40 mk2 — 8×5 clip grid.** Hardware-fixed. Each row = scene; the 8 columns are stem-role × deck tracks (drums/bass/vocals/other × A/B, in fader order). The companion app's grid mirrors this orientation, and the 8 channel faders map 1:1 (faders 1–4 = Deck A, faders 5–8 = Deck B). The hardware A/B crossfader blends Deck A against Deck B.
+- **APC40 mk2 — 8×5 clip grid.** Hardware-fixed. Each row = scene; the 8 columns are stem-role × deck tracks (drums/bass/vocals/other × A/B, in fader order). The companion app's grid mirrors this orientation, and the 8 channel faders map 1:1 in that same role-major order, so **Deck A is faders 1, 3, 5, 7 and Deck B is 2, 4, 6, 8** (adjacent pairs are one role's two decks). The hardware A/B crossfader blends Deck A against Deck B.
 - **Ableton Live Standard 12.4.** Audio engine, mixer, clock, clip-launch quantize, master out. Not negotiable.
 - **MacBook Pro M2 Pro 16 GB.** The screen the companion app runs on, primary surface during dev.
 - **No Bluetooth audio path.** Wired-only.

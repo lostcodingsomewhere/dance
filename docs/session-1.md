@@ -116,7 +116,10 @@ Now unmute the 4 stem tracks and mute the Mix tracks — the reverse of Part 3.
       If it's flagged with neither (a generic "will drift"), just don't use that
       stem this session — mute it and carry on with three.
 - [ ] Fire Deck A (▶ on its panel). All four stems play. Sounds like the song.
-- [ ] **Ride the faders.** APC40 faders 1–4 are Deck A's stems. Pull the vocal
+- [ ] **Ride the faders.** The 8 faders are role-major, not side-major:
+      **Deck A is faders 1, 3, 5, 7** (drums, bass, vocals, other) and Deck B
+      is 2, 4, 6, 8. Adjacent pairs are the same role on opposite decks.
+      Pull the vocal
       out. Bring it back. Pull the bass. This is the whole thing — you're
       playing the song's parts, live.
 - [ ] Now the transition again: instead of crossfading whole tracks, bring in

@@ -775,7 +775,16 @@ class AbletonBridge:
     })
 
     def clean_live_decks(self, timeout: float = 1.0) -> dict[str, Any]:
-        """Delete every ``Deck *`` track AND the Cue track in Live (covers
+        """Delete every bridge-managed track in Live — decks, Cue, Recorder.
+
+        The Recorder must be in this list. It is appended AFTER the ten deck
+        columns, so leaving it behind makes it the lowest-indexed survivor of
+        a clean: it slides to index 0 and the decks recreated afterwards land
+        at 1-10. The APC40's session ring still starts at track 0, so fader 1
+        would then control a silent Resampling track and the last stem column
+        would fall outside the ring entirely.
+
+        (covers
         stragglers from previous backend runs and the pre-deck-pair
         layout) and reset the bridge cache. Returns a summary of what was
         removed.
@@ -789,7 +798,7 @@ class AbletonBridge:
         expected = (
             set(self._DECK_DISPLAY_NAMES.values())
             | self._LEGACY_DECK_DISPLAY_NAMES
-            | {self._CUE_DISPLAY_NAME}
+            | {self._CUE_DISPLAY_NAME, self._RECORDER_DISPLAY_NAME}
         )
         deck_indices = [i for i, n in enumerate(names) if n in expected]
         for idx in sorted(deck_indices, reverse=True):
@@ -2360,6 +2369,7 @@ class AbletonBridge:
         for accepted in cls._DECK_RECOVERY_NAMES.values():
             names |= set(accepted)
         names.add(cls._CUE_DISPLAY_NAME)
+        names.add(cls._RECORDER_DISPLAY_NAME)
         return frozenset(names)
 
     def _create_track_and_get_index(
