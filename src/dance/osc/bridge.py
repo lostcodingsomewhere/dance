@@ -124,6 +124,13 @@ class AbletonBridge:
         self._reply_events: dict[str, threading.Event] = {}
         self._reply_values: dict[str, Any] = {}
 
+        # Batched-reply scratchpad. Unlike ``_reply_values`` (one slot per
+        # address, last-write-wins) this accumulates BY TRACK INDEX, so many
+        # in-flight queries to the same address can be demultiplexed from
+        # their replies. See ``scan_live_for_cells``.
+        self._clip_names_batch: dict[int, list[str | None]] = {}
+        self._clip_names_lock = threading.Lock()
+
         # Indices of the 5 reusable "Deck" tracks in Live (mix, drums, bass,
         # vocals, other). ``None`` means we haven't created them yet; populated
         # on the first ``push_track_to_live`` call, then reused for every
@@ -210,6 +217,9 @@ class AbletonBridge:
         self.listener.on("/live/song/get/num_scenes", self._on_num_scenes)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
+        self.listener.on(
+            "/live/track/get/clips/name", self._on_track_clip_names
+        )
         self.listener.on("/live/clip/get/length", self._on_clip_length)
         self.listener.on(
             "/live/track/get/available_output_routing_channels",
@@ -572,6 +582,22 @@ class AbletonBridge:
             evt = self._reply_events.get(address)
             if evt is not None:
                 evt.set()
+
+    def _on_track_clip_names(self, address: str, args: tuple[Any, ...]) -> None:
+        # AbletonOSC sends (track_index, *clip_names) for
+        # /live/track/get/clips/name — ONE reply covering every clip slot on
+        # that track, with None for empty slots. Accumulated by track index
+        # (not stashed in _reply_values) so a whole batch of concurrent
+        # queries can be collected in a single reply window.
+        if not args:
+            return
+        try:
+            track_index = int(args[0])
+        except (TypeError, ValueError):
+            return
+        names = [None if a is None else str(a) for a in args[1:]]
+        with self._clip_names_lock:
+            self._clip_names_batch[track_index] = names
 
     def _on_output_routing_channels(self, address: str, args: tuple[Any, ...]) -> None:
         # (track_index, *display_names) — the routing targets Live will accept
@@ -988,23 +1014,44 @@ class AbletonBridge:
         *,
         num_slots: int = 16,
         timeout_per_slot: float = 0.15,
+        batch_timeout: float = 1.5,
     ) -> list[dict[str, Any]]:
-        """Walk each deck-column track's first ``num_slots`` clip slots and
-        return what's there. Sequential one-shot OSC queries to
-        ``/live/clip/get/name``; empty slots return no reply (we time out
-        quickly and move on).
+        """Return every populated clip cell across the deck columns.
 
         Returns a list of ``{"scene_index": int, "kind": str, "clip_name":
-        str}`` for every populated cell. Caller is responsible for matching
-        the clip names back to dance Track ids (we set names to
-        ``"{title} ({kind})"`` when loading).
+        str}``. Caller matches the names back to dance Track ids (we set
+        names to ``"{title} ({source} {side})"`` when loading).
 
-        Used by the resync endpoint to adopt clips that were placed in
-        Live before the bridge knew about them — e.g. after a backend
-        restart with persistence missing.
+        Used by the resync endpoint to adopt clips that were in Live before
+        the bridge knew about them — e.g. after a backend restart.
+
+        Fires ONE ``/live/track/get/clips/name`` per deck column and collects
+        the replies in a single window. The per-slot walk this replaced cost
+        a full timeout for every EMPTY slot — the overwhelmingly common case —
+        because an empty slot simply never replies. Measured against the
+        real rig: 30.3 s for 12 tracks, versus ~0.1 s batched.
+
+        The win is structural, not just a constant factor. Live's control
+        surface pumps its OSC socket once per ~100 ms tick, so sequential
+        queries each wait for their own tick while a batch is drained by
+        one. That same tick made the old 0.15 s per-slot timeout a
+        correctness bug: barely over one tick of margin, so a busy Live
+        would silently drop populated clips from the scan and resync would
+        under-report.
+
+        Falls back to the per-slot walk when the batch comes back empty, so
+        an AbletonOSC without the bulk handler still works.
         """
         if self._deck_columns is None:
             return []
+        batched = self._scan_cells_batched(timeout=batch_timeout)
+        if batched is not None:
+            return batched
+        logger.warning(
+            "Bulk clip-name scan got no reply; falling back to the slow "
+            "per-slot walk (~%.0f s). Is AbletonOSC current?",
+            len(self._deck_columns) * num_slots * timeout_per_slot,
+        )
         found: list[dict[str, Any]] = []
         for kind, track_idx in self._deck_columns.items():
             for slot in range(num_slots):
@@ -1015,6 +1062,67 @@ class AbletonBridge:
                     found.append(
                         {"scene_index": slot, "kind": kind, "clip_name": name}
                     )
+        return found
+
+    def _scan_cells_batched(
+        self, *, timeout: float = 1.5, poll: float = 0.01
+    ) -> list[dict[str, Any]] | None:
+        """Fire one bulk clip-name query per deck column, collect together.
+
+        Returns the populated cells, or ``None`` when not a single column
+        answered — which means the handler is missing or Live is unreachable,
+        and the caller should fall back rather than report an empty session.
+
+        A partial result is returned rather than discarded: columns that did
+        answer are real information, and the alternative (falling back to a
+        30 s walk because one reply was dropped) is worse. Unanswered columns
+        are logged.
+        """
+        columns = self._deck_columns or {}
+        if not columns:
+            return None
+        wanted = {idx: kind for kind, idx in columns.items()}
+        with self._clip_names_lock:
+            self._clip_names_batch.clear()
+        for track_idx in wanted:
+            try:
+                self.client.get_track_clip_names(track_idx)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._clip_names_lock:
+                if wanted.keys() <= self._clip_names_batch.keys():
+                    break
+            time.sleep(poll)
+        with self._clip_names_lock:
+            replies = {
+                idx: names
+                for idx, names in self._clip_names_batch.items()
+                if idx in wanted
+            }
+            self._clip_names_batch.clear()
+        if not replies:
+            return None
+        missing = sorted(set(wanted) - set(replies))
+        if missing:
+            logger.warning(
+                "Bulk clip-name scan: %d of %d deck columns did not answer "
+                "(tracks %s). Their clips are absent from this resync.",
+                len(missing), len(wanted), missing,
+            )
+        found: list[dict[str, Any]] = []
+        for track_idx, names in replies.items():
+            for slot, name in enumerate(names):
+                if name:
+                    found.append(
+                        {
+                            "scene_index": slot,
+                            "kind": wanted[track_idx],
+                            "clip_name": name,
+                        }
+                    )
+        found.sort(key=lambda c: (c["scene_index"], c["kind"]))
         return found
 
     def _get_clip_name(

@@ -708,6 +708,59 @@ def test_resync_adopts_legacy_kind_clip_names(
     assert fake_bridge.adopted_cells == {(0, "drums_a"): t.id}
 
 
+def test_resync_survives_duplicate_titles(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    """A title carried by more than one row must not 500 the resync.
+
+    The per-clip ``.one_or_none()`` this replaced raised MultipleResultsFound
+    on any repeated title — and the real library has 80 of them, so resync was
+    a coin flip. The canonical (non-duplicate) row wins.
+    """
+    dup = make_track(title="Twice")
+    session.commit()
+    canonical = make_track(title="Twice")
+    session.commit()
+    dup.duplicate_of = canonical.id
+    session.commit()
+
+    fake_bridge.scan_return = [
+        {"scene_index": 0, "kind": "drums_a", "clip_name": "Twice (drums A)"},
+    ]
+    r = client.post("/api/v1/ableton/decks/resync")
+    assert r.status_code == 200
+    assert r.json()["adopted"] == 1
+    assert fake_bridge.adopted_cells == {(0, "drums_a"): canonical.id}
+
+
+def test_resync_keeps_titles_that_end_in_brackets(
+    client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
+) -> None:
+    """Only a parenthetical naming THIS cell's deck kind is stripped.
+
+    Real titles end in brackets — "Tres Hermanos [Feat. Dan Auerbach]",
+    "... (Radio Edit)" — and must survive the parse intact.
+    """
+    t = make_track(title="Deep Cut (Radio Edit)")
+    session.commit()
+    fake_bridge.scan_return = [
+        {
+            "scene_index": 0,
+            "kind": "drums_a",
+            "clip_name": "Deep Cut (Radio Edit) (drums A)",
+        },
+        # No deck-kind suffix at all: the whole name is the title.
+        {"scene_index": 1, "kind": "bass_a", "clip_name": "Deep Cut (Radio Edit)"},
+    ]
+    r = client.post("/api/v1/ableton/decks/resync")
+    assert r.status_code == 200
+    assert r.json()["adopted"] == 2
+    assert fake_bridge.adopted_cells == {
+        (0, "drums_a"): t.id,
+        (1, "bass_a"): t.id,
+    }
+
+
 def test_load_track_without_stems_creates_one_track(
     client: TestClient, fake_bridge: FakeAbletonBridge, session, make_track
 ) -> None:

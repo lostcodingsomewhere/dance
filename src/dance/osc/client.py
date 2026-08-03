@@ -394,6 +394,19 @@ class AbletonOSCClient:
         Reply args: (track, slot, name) or no reply if the slot is empty."""
         self._send("/live/clip/get/name", track, slot)
 
+    def get_track_clip_names(self, track: int) -> None:
+        """Ask Live for EVERY clip name on one track in a single reply.
+
+        Reply addressed to ``/live/track/get/clips/name`` with args
+        ``(track, name_or_nil, name_or_nil, ...)`` — one entry per clip slot,
+        OSC-Nil for empty ones. Stock AbletonOSC handler.
+
+        Prefer this over looping :meth:`get_clip_name` per slot: an empty
+        slot never replies to the per-slot query, so scanning costs a full
+        timeout for each empty slot — the common case. See
+        ``AbletonBridge.scan_live_for_cells``."""
+        self._send("/live/track/get/clips/name", track)
+
     def get_clip_slot_has_clip(self, track: int, slot: int) -> None:
         """Ask Live whether a clip slot currently holds a clip.
 
