@@ -2186,3 +2186,59 @@ def test_cue_index_refuses_to_guess_when_live_is_silent():
     bridge._cue_track_idx = 4
     bridge._cue_idx_verified = False
     assert bridge._ensure_cue_track(num_tracks_timeout=0.05) is None
+
+
+def test_stale_deck_columns_are_rederived_when_live_grew(tmp_path):
+    """Cached deck-column indices must be checked by NAME, not by whether
+    they still fit.
+
+    The old test was `cached_max >= base` — re-derive only when Live SHRANK.
+    If Live grew, or the user opened a different Set, or tracks were
+    reordered, the stale map survived and clips were written to whatever now
+    occupies those indices, potentially the user's own tracks. Growth is the
+    normal case here: the bridge itself adds a Cue track and a Recorder track
+    beyond the ten deck columns.
+    """
+    drums = tmp_path / "drums.wav"
+    drums.write_bytes(b"RIFF")
+    mix = tmp_path / "song.wav"
+    mix.write_bytes(b"RIFF")
+
+    # Live's layout: three of the user's own tracks FIRST, deck columns after.
+    names = ["My Vocals", "My Bass", "My Perc"] + list(_PREFIXED_DECK_NAMES)
+    with _FakeLive(initial_names=names) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            # Simulate a restore describing a PREVIOUS Set where the deck
+            # columns were the first ten tracks.
+            bridge._deck_columns = {
+                k: i for i, k in enumerate(bridge._DECK_KINDS)
+            }
+            bridge._deck_columns_verified = False
+            live.received.clear()
+            bridge.push_track_to_live(
+                _stub_track(id=7, file_path=str(mix)),
+                [_stub_stem("drums", str(drums))],
+                kinds=["drums"], side="a",
+            )
+        finally:
+            bridge.stop()
+
+        drums_a = bridge._deck_columns["drums_a"]
+        assert drums_a >= 3, (
+            f"drums_a resolved to {drums_a} — that is one of the user's own "
+            f"tracks, not a deck column"
+        )
+        assert names[drums_a] in bridge._DECK_RECOVERY_NAMES["drums_a"]
+        # And the clip really went to the corrected index.
+        created = [a for a in live.args_for("/live/clip_slot/create_audio_clip")]
+        assert any(a[0] == drums_a for a in created)
+
+
+def test_deck_columns_are_left_alone_when_live_is_silent(tmp_path):
+    """An unverifiable map must not be churned on a guess — the offline
+    best-effort path other tests depend on."""
+    bridge = AbletonBridge(send_port=_free_port(), listen_port=_free_port())
+    bridge._deck_columns = {k: i for i, k in enumerate(bridge._DECK_KINDS)}
+    assert bridge._deck_columns_match_live(timeout=0.05) is True
