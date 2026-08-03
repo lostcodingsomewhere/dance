@@ -55,11 +55,25 @@ export function BoothColumnHeaders() {
       className="grid grid-cols-8 gap-1"
       data-testid="booth-column-headers"
     >
-      {TWO_DECK_COLUMN_ORDER.map((deckKind, i) => (
+      {TWO_DECK_COLUMN_ORDER.map((deckKind) => (
         <ColumnHeaderChip
           key={deckKind}
           deckKind={deckKind}
-          faderNumber={i + 1}
+          // Derive the fader number from the ABLETON TRACK INDEX, not from
+          // this column's position on screen.
+          //
+          // The APC40 mk2's eight channel strips address Live's first eight
+          // tracks. This used to print `i + 1` — the on-screen order — which
+          // asserts a hardware mapping the app cannot guarantee: deck columns
+          // are appended wherever Live's track count happens to be, so if
+          // anything precedes them (the user's own tracks, a different Set)
+          // the badge confidently names a strip that controls something else.
+          // Undefined here renders no badge rather than a wrong one.
+          faderNumber={
+            columns[deckKind] != null && columns[deckKind] < 8
+              ? columns[deckKind] + 1
+              : undefined
+          }
           trackIdx={columns[deckKind]}
           isSoloed={soloed.has(deckKind)}
           onSoloToggle={() => {
@@ -80,8 +94,9 @@ function ColumnHeaderChip({
   onSoloToggle,
 }: {
   deckKind: string;
-  /** APC40 fader strip number (1–8) this column maps to. */
-  faderNumber: number;
+  /** APC40 fader strip number (1–8), or undefined when this column is not
+   *  within the APC40's reach — in which case no badge is shown at all. */
+  faderNumber: number | undefined;
   trackIdx: number | undefined;
   isSoloed: boolean;
   onSoloToggle: () => void;
@@ -99,15 +114,25 @@ function ColumnHeaderChip({
   const visibleLabel = roleLabel(role);
   return (
     <div
-      title={`${deckColumnLabel(deckKind)} · APC40 fader ${faderNumber} — routes to crossfader ${sideBadge}`}
+      title={
+        faderNumber != null
+          ? `${deckColumnLabel(deckKind)} · APC40 fader ${faderNumber} — routes to crossfader ${sideBadge}`
+          : `${deckColumnLabel(deckKind)} · Ableton track ${trackIdx ?? "?"} — beyond the APC40's 8 strips, so no hardware fader controls it`
+      }
       className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-[10px] uppercase tracking-wider font-semibold transition-all ${
         styles.header
       } ${side === "b" ? "opacity-75" : ""}`}
     >
-      {/* Fader-number badge — makes the screen→hand mapping explicit
-          (column N → APC40 strip N). */}
-      <span className="text-[8px] font-mono tabular-nums text-neutral-500/80 shrink-0 leading-none">
-        {faderNumber}
+      {/* Fader-number badge — the APC40 strip that really controls this
+          column. Absent when the column sits outside the first eight Ableton
+          tracks, because then no strip does. */}
+      <span
+        className={`text-[8px] font-mono tabular-nums shrink-0 leading-none ${
+          faderNumber != null ? "text-neutral-500/80" : "text-amber-500/80"
+        }`}
+        data-testid={`fader-badge-${deckKind}`}
+      >
+        {faderNumber ?? "—"}
       </span>
       <RoleIcon role={role} size={12} />
       <span className="flex-1 truncate text-[10px]">
