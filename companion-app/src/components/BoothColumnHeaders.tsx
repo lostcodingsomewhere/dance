@@ -117,7 +117,7 @@ function ColumnHeaderChip({
       title={
         faderNumber != null
           ? `${deckColumnLabel(deckKind)} · APC40 fader ${faderNumber} — routes to crossfader ${sideBadge}`
-          : `${deckColumnLabel(deckKind)} · Ableton track ${trackIdx ?? "?"} — beyond the APC40's 8 strips, so no hardware fader controls it`
+          : `${deckColumnLabel(deckKind)} · Ableton track ${trackIdx ?? "?"} — outside the APC40's 8-strip window at its default position. Press Bank Select ▶ to bring it into reach (the faders and the pad grid move together).`
       }
       className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-[10px] uppercase tracking-wider font-semibold transition-all ${
         styles.header

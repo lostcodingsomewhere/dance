@@ -2242,3 +2242,27 @@ def test_deck_columns_are_left_alone_when_live_is_silent(tmp_path):
     bridge = AbletonBridge(send_port=_free_port(), listen_port=_free_port())
     bridge._deck_columns = {k: i for i, k in enumerate(bridge._DECK_KINDS)}
     assert bridge._deck_columns_match_live(timeout=0.05) is True
+
+
+def test_clean_live_decks_also_removes_the_recorder_track():
+    """The Recorder must be cleaned along with the decks and the Cue.
+
+    It is appended AFTER the ten deck columns, so leaving it behind makes it
+    the lowest-indexed survivor of a clean: it slides to index 0 and the decks
+    recreated afterwards land at 1-10. The APC40's session ring still starts
+    at track 0, so fader 1 would control a silent Resampling track and the
+    last stem column would fall outside the ring entirely.
+    """
+    names = list(_PREFIXED_DECK_NAMES) + ["Cue", "Recorder", "My Own Track"]
+    with _FakeLive(initial_names=names) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            bridge.clean_live_decks(timeout=1.0)
+        finally:
+            bridge.stop()
+        deleted = {a[0] for a in live.args_for("/live/song/delete_track")}
+        assert names.index("Recorder") in deleted, "Recorder survived the clean"
+        assert names.index("Cue") in deleted
+        # The user's own track is never touched.
+        assert names.index("My Own Track") not in deleted
