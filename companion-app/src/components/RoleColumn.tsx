@@ -1,17 +1,68 @@
 import type React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
-import { pushTrackToLive } from "../api";
 import { useColumnRecs } from "../hooks/useColumnRecs";
+import { useLoadToDeck } from "../hooks/useLoadToDeck";
 import { useSetPlan, usePlanMutations, usePlanRecs } from "../hooks/useSetPlan";
 import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePreview";
-import { useWarpCheck } from "../hooks/useWarpCheck";
-import { ROLE_STYLES, roleLabel, sideTrackIndices, type StemRole } from "../lib/roles";
-import { store } from "../store";
+import { publishZone } from "../lib/gridShape";
+import { isFocused, type Zone } from "../lib/gridNav";
+import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { store, useAppStore } from "../store";
 import type { ColumnRec, PlanItem, PlanRole } from "../types";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 
 type Mode = "plan" | "live";
+
+/**
+ * Keep the keyboard cursor on screen as it walks a long column.
+ *
+ * Fires only when focus ARRIVES, not on every render, and instantly rather
+ * than smoothly — held arrow keys outrun a smooth scroll, leaving the cursor
+ * chasing a viewport that's still animating to where it was two cards ago.
+ * Optional-called because not every environment implements it (jsdom).
+ */
+function useScrollIntoViewWhenFocused(focused: boolean | undefined) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [focused]);
+  return ref;
+}
+
+/** Publish a zone's track ids so keyboard navigation knows the grid's shape.
+ *  In an effect (not during render) because it notifies subscribers. */
+function usePublishZone(
+  role: PlanRole,
+  zone: Zone,
+  ids: number[],
+  /** Skip publishing while the list is in flight. "Unknown" is NOT "empty":
+   *  reporting [] mid-refetch makes the cursor think the zone vanished and
+   *  relocate — so committing a rec would bounce focus up into the plan and
+   *  you'd have to arrow back down for every single pick. */
+  loading = false,
+): void {
+  const key = ids.join(",");
+  useEffect(() => {
+    if (loading) return;
+    publishZone(role, zone, ids);
+    // ``key`` is the identity of the list; ``ids`` is a fresh array each
+    // render and would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, zone, key, loading]);
+
+  // Clear on unmount ONLY — a zone that stops rendering (the plan band with
+  // no active set) must not leave ids behind for the cursor to walk into.
+  //
+  // Deliberately a separate effect keyed on [role, zone]. Folding this into
+  // the publish effect above makes its cleanup run on every LIST CHANGE, not
+  // just unmount, so each new set of recs was preceded by a transient "this
+  // zone is empty" — which relocated the cursor into the plan on every
+  // commit, the exact stutter the loop exists to avoid.
+  useEffect(() => {
+    return () => publishZone(role, zone, []);
+  }, [role, zone]);
+}
 
 function visRole(role: PlanRole): StemRole {
   return role === "song" ? "mix" : role;
@@ -41,6 +92,8 @@ function StemRow({
   action,
   tooltip,
   accent,
+  focused,
+  onFocus,
 }: {
   trackId: number;
   title: string | null;
@@ -55,51 +108,33 @@ function StemRow({
   action: React.ReactNode;
   tooltip?: string;
   accent?: boolean;
+  /** Under the keyboard cursor — draws the focus ring and scrolls into view. */
+  focused?: boolean;
+  /** Clicking a card moves the keyboard cursor here, so mouse and keyboard
+   *  compose instead of fighting over which one owns "the current card". */
+  onFocus?: () => void;
 }) {
-  const qc = useQueryClient();
   const styles = ROLE_STYLES[visRole(role)];
   const startPreview = useStartPreview();
   const stopPreview = useStopPreview();
   const previewing = usePreviewState();
-  const scheduleWarpCheck = useWarpCheck();
   const previewColumn = visRole(role);
   const isPreviewing =
     previewing?.trackId === trackId && previewing?.column === previewColumn;
-  const load = useMutation({
-    mutationFn: (side: "a" | "b") =>
-      pushTrackToLive(trackId, { includeStems: true, kinds: loadKinds(role), side }),
-    onSuccess: (result, side) => {
-      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
-      const label = `${title ?? `Track #${trackId}`} → Deck ${side.toUpperCase()}`;
-      // Immediate misses (missing stem file, Live unreachable) surface now…
-      store.setLoadWarnings(label, result.warnings);
-      // …and the warp audit follows once Live's analysis settles.
-      scheduleWarpCheck(result.scene_index, label);
-      // Point that deck's ▶ at what we just put there.
-      store.armDeck(result.side ?? side, result.scene_index);
-      // Register the deck so the play can be LOGGED. ⤒A/⤒B is the Booth's
-      // primary load button and it was the one load path that never did
-      // this — useAutoLog reads useNowPlayingTrack, which only recognises a
-      // playing clip if its deck is in `loadedDecks`, so nothing fired from
-      // the plan grid could ever be recorded. That is why the whole project
-      // has 6 logged plays: the only ones that counted came from ⌘K.
-      store.registerDeck({
-        track_id: trackId,
-        scene_index: result.scene_index,
-        side: result.side ?? side,
-        stem_track_indices: sideTrackIndices(result.track_indices, result.side ?? side),
-        loaded_at: Date.now(),
-      });
-    },
-  });
+  const load = useLoadToDeck();
+  const cardRef = useScrollIntoViewWhenFocused(focused);
   const togglePreview = () => {
     if (isPreviewing) stopPreview.mutate();
     else startPreview.mutate({ trackId, column: previewColumn });
   };
   return (
     <div
+      ref={cardRef}
+      onMouseDown={onFocus}
       className={`rounded-md border px-2 py-1.5 text-xs ${
         accent ? "border-l-2 border-l-emerald-500/70 " : ""
+      }${
+        focused ? "ring-2 ring-amber-300/80 ring-offset-1 ring-offset-neutral-950 " : ""
       }${
         isPreviewing
           ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
@@ -150,7 +185,7 @@ function StemRow({
           <button
             type="button"
             disabled={load.isPending}
-            onClick={() => load.mutate("a")}
+            onClick={() => load.mutate({ trackId, role, title, side: "a" })}
             className="h-7 text-xs font-bold rounded bg-violet-700/70 hover:bg-violet-600 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
             title="Load → Deck A"
           >
@@ -159,7 +194,7 @@ function StemRow({
           <button
             type="button"
             disabled={load.isPending}
-            onClick={() => load.mutate("b")}
+            onClick={() => load.mutate({ trackId, role, title, side: "b" })}
             className="h-7 text-xs font-bold rounded bg-violet-900/70 hover:bg-violet-800 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
             title="Load → Deck B"
           >
@@ -177,12 +212,16 @@ function QueueCard({
   role,
   mode,
   index,
+  focused,
+  onFocus,
   onRemove,
 }: {
   item: PlanItem;
   role: PlanRole;
   mode: Mode;
   index: number;
+  focused?: boolean;
+  onFocus?: () => void;
   onRemove: () => void;
 }) {
   return (
@@ -196,6 +235,8 @@ function QueueCard({
       role={role}
       mode={mode}
       accent
+      focused={focused}
+      onFocus={onFocus}
       leading={`${index + 1}`}
       action={
         <button
@@ -216,11 +257,15 @@ function PlanRecCard({
   rec,
   role,
   mode,
+  focused,
+  onFocus,
   onAdd,
 }: {
   rec: ColumnRec;
   role: PlanRole;
   mode: Mode;
+  focused?: boolean;
+  onFocus?: () => void;
   onAdd?: () => void;
 }) {
   return (
@@ -233,6 +278,8 @@ function PlanRecCard({
       energy={rec.floor_energy}
       role={role}
       mode={mode}
+      focused={focused}
+      onFocus={onFocus}
       leading={`${Math.round(rec.score * 100)}`}
       breakdown={rec.score_breakdown}
       tooltip={rec.reasons.join(" · ")}
@@ -351,6 +398,8 @@ function RecsList({
    *  wondering why the Booth is showing plan-scored picks. */
   note?: string;
 }) {
+  const focus = useAppStore((s) => s.gridFocus);
+  usePublishZone(role, "recs", recs.map((r) => r.track_id), loading);
   return (
     <div className="flex flex-col gap-1">
       {note && !loading && recs.length > 0 && (
@@ -362,12 +411,14 @@ function RecsList({
       {!loading && recs.length === 0 && (
         <div className="text-[10px] text-neutral-600 italic px-1">no candidates</div>
       )}
-      {recs.map((rec) => (
+      {recs.map((rec, i) => (
         <PlanRecCard
           key={rec.stem_file_id ?? rec.track_id}
           rec={rec}
           role={role}
           mode={mode}
+          focused={isFocused(focus, role, "recs", i)}
+          onFocus={() => store.setGridFocus({ role, zone: "recs", index: i })}
           onAdd={onAdd ? () => onAdd(rec.track_id) : undefined}
         />
       ))}
@@ -455,6 +506,8 @@ function PlanZone({
   className?: string;
 }) {
   const { removeFromRole } = usePlanMutations(setId);
+  const focus = useAppStore((s) => s.gridFocus);
+  usePublishZone(role, "plan", queue.map((q) => q.track_id));
   if (queue.length === 0) {
     return (
       <div
@@ -473,6 +526,8 @@ function PlanZone({
           role={role}
           mode={mode}
           index={i}
+          focused={isFocused(focus, role, "plan", i)}
+          onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
           onRemove={() => removeFromRole(role, i)}
         />
       ))}
