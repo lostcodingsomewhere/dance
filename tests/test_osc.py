@@ -2133,3 +2133,56 @@ def test_load_within_the_existing_scenes_creates_none(tmp_path):
             bridge.stop()
         assert live.count("/live/song/create_scene") == 0
         assert live.num_scenes == 8
+
+
+def test_stale_persisted_cue_index_is_discarded_not_trusted(tmp_path, monkeypatch):
+    """A Cue index restored from disk must be confirmed against the CURRENT
+    Live set before anything is fired into it.
+
+    Getting this wrong is destructive, not just wrong: preview_audio deletes
+    whatever clip occupies (cue_idx, _CUE_SLOT) before writing its own. A
+    stale index pointing at a deck column would delete a loaded stem at scene
+    1 and then play the preview through the MASTER — the exact "leaked
+    previews into a deck track" failure _ensure_cue_track's docstring says it
+    exists to prevent, arriving from disk instead of from a prediction.
+    """
+    names = list(_PREFIXED_DECK_NAMES) + ["Cue"]
+    with _FakeLive(initial_names=names) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            # Simulate a restore from a PREVIOUS Live set: the Cue really
+            # lives at index 10 here, but disk says 0 (a deck column).
+            bridge._cue_track_idx = 0
+            bridge._cue_idx_verified = False
+            idx = bridge._ensure_cue_track()
+        finally:
+            bridge.stop()
+
+        assert idx != 0, "fired into a deck column on a stale cached index"
+        assert idx == names.index("Cue")
+
+
+def test_verified_cue_index_is_reused_without_a_extra_lookup():
+    """Once confirmed, don't pay a track-names roundtrip on every preview."""
+    names = list(_PREFIXED_DECK_NAMES) + ["Cue"]
+    with _FakeLive(initial_names=names) as live:
+        bridge = live.make_bridge()
+        bridge.start()
+        try:
+            first = bridge._ensure_cue_track()
+            before = live.count("/live/song/get/track_names")
+            second = bridge._ensure_cue_track()
+            after = live.count("/live/song/get/track_names")
+        finally:
+            bridge.stop()
+        assert first == second == names.index("Cue")
+        assert after == before, "re-verified an already-confirmed index"
+
+
+def test_cue_index_refuses_to_guess_when_live_is_silent():
+    """Unverified index + unreachable Live must return None, not the guess."""
+    bridge = AbletonBridge(send_port=_free_port(), listen_port=_free_port())
+    bridge._cue_track_idx = 4
+    bridge._cue_idx_verified = False
+    assert bridge._ensure_cue_track(num_tracks_timeout=0.05) is None
