@@ -499,6 +499,49 @@ def test_child_adopts_inherited_lock_and_strangers_stay_out(settings, spawn, chi
     assert after.expect("ACQUIRED") == "ACQUIRED inherited=False"
 
 
+# Takes the lock, hands it to a child (like the API does), then dies without
+# releasing (like a killed API). The child keeps running until stdin says go.
+_DYING_PARENT = """
+    import os, subprocess, sys
+    from dance.pipeline.dispatcher_lock import INHERITED_FD_ENV, DispatcherLock
+
+    lock = DispatcherLock(sys.argv[1], command="test-api").acquire()
+    child = '''
+    import sys
+    from dance.pipeline.dispatcher_lock import DispatcherLock
+    lock = DispatcherLock(sys.argv[1]).acquire()
+    print(f"CHILD adopted={lock.inherited}", flush=True)
+    sys.stdin.readline()
+    '''
+    env = dict(os.environ, **{INHERITED_FD_ENV: str(lock.fileno())})
+    c = subprocess.Popen([sys.executable, "-c", child, sys.argv[1]],
+                         env=env, pass_fds=(lock.fileno(),))
+    print(f"CHILDPID {c.pid}", flush=True)
+    os._exit(0)
+"""
+
+
+def test_holder_died_but_its_child_still_holds_the_lock(settings, spawn):
+    parent = spawn(_DYING_PARENT, settings.data_dir)
+    try:
+        lines = {parent.expect("CHILD"), parent.expect("CHILD")}
+        assert "CHILD adopted=True" in lines
+        assert any(line.startswith("CHILDPID ") for line in lines)
+        assert parent.finish() == 0  # the "API" is gone...
+
+        # ...but its child still owns the run, and the message says so.
+        with pytest.raises(DispatcherBusyError) as excinfo:
+            DispatcherLock(settings.data_dir).acquire()
+        assert excinfo.value.holder.pid == parent.pid
+        assert excinfo.value.holder.alive is False
+        assert "no longer running; a process it started still holds the lock" in str(excinfo.value)
+    finally:
+        parent.send()  # the child shares the stdin pipe: let it exit
+
+    lock = DispatcherLock(settings.data_dir).acquire(wait=True, poll_s=0.05, timeout_s=10)
+    lock.release()
+
+
 # ---------------------------------------------------------------------------
 # Placeholder rows (Spotify download still in flight) are never claimed
 # ---------------------------------------------------------------------------

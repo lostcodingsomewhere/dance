@@ -90,6 +90,10 @@ class LockHolder:
             parts.append(f"`{self.command}`")
         if self.started_at:
             parts.append(f"started {self.started_at}")
+        if self.alive is False:
+            # The lock is held, so someone has it: e.g. the API died and the
+            # `dance process` child it handed the lock to is still running.
+            parts.append("no longer running; a process it started still holds the lock")
         return ", ".join(parts)
 
 
