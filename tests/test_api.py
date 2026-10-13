@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from dance.api import create_app
-from dance.config import get_settings
 from dance.core import database as db
 from dance.core.database import (
     AudioAnalysis,
@@ -879,7 +878,7 @@ def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
     from dance.core.serialization import encode_embedding
 
     # Use the same settings the app does so the model_name filter matches.
-    settings = get_settings()
+    settings = app.state.settings
     model = settings.clap_model
 
     session = app.state.session_factory()
@@ -961,7 +960,7 @@ def test_recommend_by_text_exclude(client, app, fake_bridge):
     from dance.core.database import TrackEmbedding
     from dance.core.serialization import encode_embedding
 
-    settings = get_settings()
+    settings = app.state.settings
     session = app.state.session_factory()
     try:
         a = Track(
@@ -1078,7 +1077,7 @@ def test_tag_endpoint_zeroshot(client, app, fake_bridge):
     from dance.core.database import TrackEmbedding
     from dance.core.serialization import encode_embedding
 
-    settings = get_settings()
+    settings = app.state.settings
     session = app.state.session_factory()
     try:
         t = Track(
