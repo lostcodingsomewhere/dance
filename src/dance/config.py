@@ -4,11 +4,24 @@ Configuration management for Dance.
 Uses pydantic-settings to load from environment variables and ~/.dance/.env.
 """
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Any, Optional
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Local API origin guard (``dance.api.origin_guard``): the loopback hostnames
+# the API answers to, and the browser origins allowed to call it — the
+# companion's Vite dev server (default port and ``vite --port 5174``) under
+# both loopback spellings. The origin list doubles as the CORS allowlist.
+DEFAULT_API_ALLOWED_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost", "::1")
+DEFAULT_API_ALLOWED_ORIGINS: tuple[str, ...] = (
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+)
 
 
 def _get_env_file() -> Path:
@@ -120,6 +133,27 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = Field(default="INFO")
+
+    # Local API origin guard. Env values are comma-separated (or a JSON list)
+    # and REPLACE the defaults, e.g. a second companion on port 5175:
+    # DANCE_API_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5175
+    # "*" turns the respective check off.
+    api_allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_API_ALLOWED_HOSTS)
+    )
+    api_allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_API_ALLOWED_ORIGINS)
+    )
+
+    @field_validator("api_allowed_hosts", "api_allowed_origins", mode="before")
+    @classmethod
+    def split_csv(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            text = v.strip()
+            if text.startswith("["):
+                return json.loads(text)
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return v
 
     @field_validator(
         "library_dir", "stems_dir", "data_dir", "als_output_dir", mode="before"

@@ -14,7 +14,7 @@ dependencies = [
 
     # Configuration & validation
     "pydantic>=2.0",
-    "pydantic-settings>=2.0",
+    "pydantic-settings>=2.7",  # NoDecode (comma-separated list settings)
 
     # Database
     "sqlalchemy>=2.0",

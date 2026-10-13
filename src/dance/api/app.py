@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import sessionmaker
 
 from dance.api.jobs import init_persisted_registry
+from dance.api.origin_guard import OriginGuardMiddleware
 from dance.api.routers import (
     ableton,
     files,
@@ -108,15 +109,18 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-        ],
+        allow_origins=list(settings.api_allowed_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    # Added last so it runs first: CORS only hides responses from foreign
+    # pages, it doesn't stop a simple cross-origin POST from firing a clip,
+    # and it doesn't cover websockets or DNS rebinding at all.
+    app.add_middleware(
+        OriginGuardMiddleware,
+        allowed_hosts=settings.api_allowed_hosts,
+        allowed_origins=settings.api_allowed_origins,
     )
 
     app.include_router(tracks.router, prefix=API_PREFIX)

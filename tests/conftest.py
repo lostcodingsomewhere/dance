@@ -33,6 +33,13 @@ def _isolate_from_real_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("DANCE_LIBRARY_DIR", str(home / "library"))
     monkeypatch.setenv("DANCE_STEMS_DIR", str(home / "stems"))
     monkeypatch.setenv("DANCE_ALS_OUTPUT_DIR", str(home / "sets"))
+    # Starlette's TestClient sends ``Host: testserver``; the API's origin
+    # guard only answers to loopback names. tests/test_origin_guard.py pins
+    # the real defaults explicitly.
+    monkeypatch.setenv(
+        "DANCE_API_ALLOWED_HOSTS",
+        ",".join([*config.DEFAULT_API_ALLOWED_HOSTS, "testserver"]),
+    )
     config._settings = None
     db._reset_engine_for_tests()
     yield

@@ -247,6 +247,10 @@ DANCE_LOG_LEVEL=DEBUG uvicorn dance.api:create_app --factory
 # look for "create_engine sqlite:///..." in the logs
 ```
 
+## 403 "Origin ... is not allowed" / "Host ... is not a loopback address"
+
+The API's origin guard refused a browser request (see [`api.md`](api.md) "Origin guard and CORS"). The backend log names the setting to change. Usual causes: the companion runs on a port other than 5173/5174 (add it to `DANCE_API_ALLOWED_ORIGINS`), or you're reaching the backend by LAN IP or hostname (add it to `DANCE_API_ALLOWED_HOSTS`). The env value replaces the defaults, so list those too.
+
 ## Companion app shows blank "Now Playing"
 
 `NowPlaying.tsx` currently keys off the most recent `SessionPlay` row (`companion-app/src/views/NowPlaying.tsx:21-24`). If you have no active DJ session, it'll be empty — start one via the Top Bar's "New Session" button or `POST /api/v1/sessions`.
