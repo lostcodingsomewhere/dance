@@ -15,12 +15,21 @@ hard on duration, and only accept something that scores well":
    the primary artist as a fallback when nothing qualifies).
 2. :func:`parse_search_results` — turn ``yt-dlp --flat-playlist -J`` output
    into :class:`Candidate` rows.
-3. :func:`rank_candidates` — score, apply the duration gate and the minimum
+3. :func:`rank_candidates` — score, apply the hard gates and the minimum
    score, and order eligible candidates best-first.
 
-The duration gate is **never relaxed** on retry. A track that has no
-eligible candidate fails with a message naming the best near-miss; a human
-can then decide. Better no file than a confident wrong one.
+Hard gates, checked before the score and **never relaxed** on retry:
+
+- duration within max(30 s, 10 %) of Spotify's (or at most 12 min when
+  Spotify's is unknown);
+- no unrequested different-audio marker in the title (live, cover, remix,
+  slowed, VIP, ...) — :data:`HARD_VERSION_MARKERS`;
+- the requested artists are credited in the title or own the channel —
+  :func:`artist_credited`.
+
+A track that has no eligible candidate fails with a message naming the best
+near-miss; a human can then decide. Better no file than a confident wrong
+one.
 
 Scoring weights, version-marker penalties, the minimum score, the duration
 gate and the post-download tolerance are ported from djbooth (MIT licence,
@@ -50,6 +59,10 @@ OFFICIAL_BONUS = 0.04
 MIN_SCORE = 0.78
 #: Results requested per search (``ytsearch10:``).
 SEARCH_LIMIT = 10
+#: dance: the longest upload accepted when there is no expected duration to
+#: gate on (see :func:`passes_duration_gate`). Club and progressive cuts run
+#: to ~10 min; past 12 it is a mix, a set or a loop.
+UNKNOWN_TARGET_MAX_S = 720.0
 #: Never download more than this many candidates for one track. Each failed
 #: attempt costs YouTube a full media fetch; three is plenty to route around
 #: one broken upload without hammering the service.
@@ -78,8 +91,93 @@ VERSION_PENALTIES: tuple[tuple[str, float], ...] = (
     ("a cappella", 0.18),
     ("8d", 0.18),
     ("hour", 0.18),
+    # dance: producer variants — different audio under the same title.
+    # "VIP Mix" at the studio length otherwise scored 0.98.
+    ("vip", 0.18),
+    ("bootleg", 0.18),
+    ("rework", 0.18),
+    ("flip", 0.18),
+    ("dub", 0.18),
+    # Hard-rejected as a phrase (below); "dub" already carries the penalty.
+    ("dub mix", 0.0),
+    # dance: partial audio. A "(Preview)" of "Vision Blurred" ran 202 s vs
+    # Spotify's 186 s — inside the search gate — and scored 0.92 in the
+    # live search results.
+    ("preview", 0.18),
+    ("snippet", 0.18),
+    ("teaser", 0.18),
 )
 MAX_VERSION_PENALTY = 0.45
+_SINGLE_WORD_MARKERS = frozenset(m for m, _ in VERSION_PENALTIES if " " not in m)
+
+#: dance: markers that are *always* different audio — a hard rejection, not
+#: just a penalty, when the request does not name them. djbooth only
+#: penalises, so a live take or an unrequested remix of about the right
+#: length still cleared the bar ("One More Time (Live)" at 322 s scored
+#: 0.80 for the 320 s studio cut, a "VIP Mix" 0.98). The softer markers
+#: stay score-only: "extended" and "hour" uploads are caught by the duration
+#: gate anyway; "mixed" / "hour" also occur in legitimate titles ("Rush Hour
+#: Records"), and a bare "dub" in genre tags ("[Dub Techno]") — only the
+#: phrase "dub mix" is a hard rejection.
+HARD_VERSION_MARKERS = frozenset(
+    {
+        "live",
+        "cover",
+        "karaoke",
+        "slowed",
+        "sped up",
+        "nightcore",
+        "remix",
+        "instrumental",
+        "acapella",
+        "a cappella",
+        "8d",
+        "vip",
+        "bootleg",
+        "rework",
+        "flip",
+        "dub mix",
+        "preview",
+        "snippet",
+        "teaser",
+    }
+)
+#: Phrases containing a marker word that do not describe the audio. Removed
+#: from upload titles before markers are looked for: "(Cover Art)" is how
+#: many official audio-only uploads label their still image.
+_BENIGN_PHRASES: tuple[str, ...] = ("cover art", "album cover")
+
+#: dance: hard identity gate (djbooth has none). An exact title, a matching
+#: length and an official-looking uploader add up to 0.79 — above
+#: :data:`MIN_SCORE` with *zero* artist match — so "Surrender" by a
+#: different act on a "- Topic" channel was eligible. A candidate must show
+#: the credited artists in its title (more than this share of their words),
+#: or name only credited artists before the title's " - ", or come from a
+#: channel named only for credited artists (``Sian - Topic``).
+MIN_TITLE_ARTIST_COVERAGE = 0.5
+#: Channel-name words that say what kind of channel it is, not whose.
+_CHANNEL_WORDS = frozenset(
+    {
+        "topic",
+        "official",
+        "vevo",
+        "music",
+        "records",
+        "record",
+        "recordings",
+        "tv",
+        "channel",
+        "youtube",
+        "and",
+        "the",
+        "x",
+        "vs",
+    }
+)
+#: The same words glued on without a space: ``CamelPhatVEVO``.
+_CHANNEL_SUFFIX_RE = re.compile(r"(?:vevo|official|music|tv|records?)+$")
+#: "Artist - Title" separators (hyphen, en dash, em dash, bar) with spaces.
+_CREDIT_SEPARATOR_RE = re.compile(r"\s[-–—|]\s")
 
 #: yt-dlp ``live_status`` values that can never be the studio recording.
 _LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
@@ -94,7 +192,6 @@ _OFFICIAL_UPLOADER_RE = re.compile(
     re.IGNORECASE,
 )
 _FEAT_RE = re.compile(r"\b(?:feat|featuring|ft)\b\.?")
-_NON_WORD_RE = re.compile(r"[^0-9a-z]+")
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +243,8 @@ class ScoredCandidate:
     rejection: str = ""
     #: Version markers found in the upload title that the target lacks.
     unwanted_markers: tuple[str, ...] = field(default_factory=tuple)
+    #: Whether the upload credits the requested artists (title or channel).
+    artist_ok: bool = True
 
     @property
     def eligible(self) -> bool:
@@ -161,17 +260,22 @@ class ScoredCandidate:
 
 
 def normalize_match_text(value: str | None) -> str:
-    """Lowercase, ASCII-fold, ``&`` -> ``and``, drop ``feat.``, words only.
+    """Lowercase, strip accents, ``&`` -> ``and``, drop ``feat.``, words only.
 
-    Ported from djbooth ``normalizeMatchText``.
+    Ported from djbooth ``normalizeMatchText``: every Unicode letter and
+    number is kept (``[^\\p{Letter}\\p{Number}]+`` -> space), so Cyrillic,
+    CJK, Greek or Arabic titles normalise to themselves rather than to an
+    empty string. dance: recomposed with NFC after the accents are dropped,
+    so Hangul stays as syllables instead of loose jamo.
     """
     if not value:
         return ""
     folded = unicodedata.normalize("NFKD", value)
     folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = unicodedata.normalize("NFC", folded)
     folded = folded.lower().replace("&", " and ")
     folded = _FEAT_RE.sub(" ", folded)
-    folded = _NON_WORD_RE.sub(" ", folded)
+    folded = "".join(ch if unicodedata.category(ch)[0] in "LN" else " " for ch in folded)
     return " ".join(folded.split())
 
 
@@ -223,10 +327,26 @@ def text_similarity(expected: str, actual: str) -> float:
     return min(1.0, jaccard * 0.45 + coverage * 0.55)
 
 
+_IGNORED_ARTIST_TOKENS = frozenset({"and", "the", "vs"})
+
+
+def _artist_tokens(normalized: str) -> list[str]:
+    """Meaningful words of a normalised artist credit, de-duplicated.
+
+    Single Latin letters and joiners ("and", "the", "vs") carry no identity.
+    dance: a single *non-ASCII* character is kept — in CJK one character
+    can be a whole name.
+    """
+    return [
+        t
+        for t in dict.fromkeys(normalized.split())
+        if (len(t) > 1 or not t.isascii()) and t not in _IGNORED_ARTIST_TOKENS
+    ]
+
+
 def token_coverage(expected: str, actual: str) -> float:
     """Share of expected artist tokens present anywhere in ``actual``."""
-    ignored = {"and", "the", "vs"}
-    exp_tokens = [t for t in dict.fromkeys(expected.split()) if len(t) > 1 and t not in ignored]
+    exp_tokens = _artist_tokens(expected)
     if not exp_tokens:
         return 0.5
     act_tokens = set(actual.split())
@@ -248,20 +368,83 @@ def unwanted_markers(target: Target, candidate_title: str) -> tuple[str, ...]:
     """Version markers in the upload title that the request does not ask for.
 
     dance: the request is the title *and* the artist credit, so a band
-    called "Live" is not penalised for its own name.
+    called "Live" is not penalised for its own name. A phrase marker counts
+    as requested when a single-word marker inside it is (a "... - Dub"
+    request accepts a "(Dub Mix)" upload).
     """
     requested = normalize_match_text(" ".join((target.title, *target.artists)))
-    actual = normalize_match_text(candidate_title)
+    actual = f" {normalize_match_text(candidate_title)} "
+    for phrase in _BENIGN_PHRASES:
+        actual = actual.replace(f" {phrase} ", " ")
+    actual = actual.strip()
+
+    def is_requested(marker: str) -> bool:
+        return _contains_phrase(requested, marker) or any(
+            word in _SINGLE_WORD_MARKERS and _contains_phrase(requested, word)
+            for word in marker.split()
+        )
+
     return tuple(
         marker
         for marker, _ in VERSION_PENALTIES
-        if _contains_phrase(actual, marker) and not _contains_phrase(requested, marker)
+        if _contains_phrase(actual, marker) and not is_requested(marker)
     )
 
 
 def version_penalty(markers: Iterable[str]) -> float:
     weights = dict(VERSION_PENALTIES)
     return min(MAX_VERSION_PENALTY, sum(weights.get(m, 0.0) for m in markers))
+
+
+def _names_only_artists(text: str | None, artist_words: set[str], ignore: frozenset[str]) -> bool:
+    """True when every meaningful word of ``text`` is a credited-artist word.
+
+    ``ignore`` words (channel decoration, joiners) are skipped; a word with
+    a channel suffix glued on (``camelphatvevo``) counts by its stem. At
+    least one artist word must be present.
+    """
+    found = False
+    for word in normalize_match_text(text).split():
+        if word in ignore or (len(word) == 1 and word.isascii()):
+            continue
+        stem = _CHANNEL_SUFFIX_RE.sub("", word)
+        if word in artist_words or (stem and stem in artist_words):
+            found = True
+            continue
+        return False
+    return found
+
+
+def artist_credited(target: Target, candidate: Candidate) -> bool:
+    """Hard identity gate: does this upload credit the requested artists?
+
+    dance: not in djbooth (see :data:`MIN_TITLE_ARTIST_COVERAGE`). Passes
+    when any of these holds:
+
+    1. more than half of the credited artists' words appear in the title
+       (``Sian, KASIA & Burko - Surrender``);
+    2. the part of the title before the first `` - `` names only credited
+       artists (``Kaskade - Vision Blurred`` for a three-artist credit);
+    3. the channel is named only for credited artists, ignoring channel
+       words (``Sian - Topic``, ``CamelPhatVEVO``).
+
+    A channel that merely *contains* an artist's word does not count:
+    ``Dr Tammy Sian`` is not ``Sian``.
+    """
+    words = _artist_tokens(normalize_match_text(" ".join(target.artists)))
+    if not words:
+        return True  # nothing identifying to check (e.g. a one-letter act)
+    artist_words = set(words)
+    title_words = set(normalize_match_text(candidate.title).split())
+    coverage = sum(1 for w in words if w in title_words) / len(words)
+    if coverage > MIN_TITLE_ARTIST_COVERAGE:
+        return True
+    parts = _CREDIT_SEPARATOR_RE.split(candidate.title, maxsplit=1)
+    if len(parts) == 2 and _names_only_artists(
+        parts[0], artist_words, _IGNORED_ARTIST_TOKENS | {"x"}
+    ):
+        return True
+    return _names_only_artists(candidate.uploader, artist_words, _CHANNEL_WORDS)
 
 
 def score_candidate(target: Target, candidate: Candidate) -> float:
@@ -304,18 +487,26 @@ def duration_gate_s(expected_s: float) -> float:
     return max(30.0, expected_s * 0.10)
 
 
+def _known(seconds: float | None) -> bool:
+    return seconds is not None and seconds > 0
+
+
 def passes_duration_gate(expected_s: float | None, actual_s: float | None) -> bool:
     """Hard pre-download gate. Never relaxed.
 
-    No expected duration (a CSV row without one) means there is nothing to
-    gate on. dance: an *unknown candidate* duration fails the gate when the
-    target is known — djbooth lets it through, but an unmeasurable upload is
-    exactly how an hour-long set slips past a filter.
+    dance: an *unknown candidate* duration always fails — djbooth lets it
+    through, but an unmeasurable upload is exactly how an hour-long set
+    slips past a filter. With no expected duration (a CSV row without one,
+    a Spotify ``duration_ms`` of 0) the candidate must still be at most
+    :data:`UNKNOWN_TARGET_MAX_S` long: otherwise "Artist - Title (Full Set)"
+    scores 0.85 on name alone.
     """
-    if expected_s is None or expected_s <= 0:
-        return True
-    if actual_s is None or actual_s <= 0:
+    if not _known(actual_s):
         return False
+    assert actual_s is not None
+    if not _known(expected_s):
+        return actual_s <= UNKNOWN_TARGET_MAX_S
+    assert expected_s is not None
     return abs(expected_s - actual_s) <= duration_gate_s(expected_s)
 
 
@@ -325,8 +516,10 @@ def verify_tolerance_s(expected_s: float) -> float:
 
 
 def passes_verification(expected_s: float | None, measured_s: float) -> bool:
-    if expected_s is None or expected_s <= 0:
-        return True
+    """Post-download length check. Unknown expected → the length cap."""
+    if not _known(expected_s):
+        return measured_s <= UNKNOWN_TARGET_MAX_S + verify_tolerance_s(UNKNOWN_TARGET_MAX_S)
+    assert expected_s is not None
     return abs(expected_s - measured_s) <= verify_tolerance_s(expected_s)
 
 
@@ -354,17 +547,28 @@ def rank_candidates(
         score = score_candidate(target, cand)
         duration_ok = passes_duration_gate(target.duration_s, cand.duration_s)
         markers = unwanted_markers(target, cand.title)
+        hard_markers = [m for m in markers if m in HARD_VERSION_MARKERS]
+        artist_ok = artist_credited(target, cand)
         if cand.live_status in _LIVE_STATUSES:
             rejection = f"live stream ({cand.live_status})"
         elif not duration_ok:
-            if cand.duration_s is None:
+            if not _known(cand.duration_s):
                 rejection = "duration unknown"
+            elif not _known(target.duration_s):
+                rejection = (
+                    f"duration {cand.duration_s:.0f}s > {UNKNOWN_TARGET_MAX_S:.0f}s cap "
+                    "(no expected duration)"
+                )
             else:
                 assert target.duration_s is not None
                 rejection = (
                     f"duration {cand.duration_s:.0f}s vs {target.duration_s:.0f}s "
                     f"(gate ±{duration_gate_s(target.duration_s):.0f}s)"
                 )
+        elif hard_markers:
+            rejection = f"different version ({', '.join(hard_markers)})"
+        elif not artist_ok:
+            rejection = "artist not credited in title or channel"
         elif score < min_score:
             rejection = f"score {score:.2f} < {min_score:.2f}"
         else:
@@ -376,6 +580,7 @@ def rank_candidates(
                 duration_ok=duration_ok,
                 rejection=rejection,
                 unwanted_markers=markers,
+                artist_ok=artist_ok,
             )
         )
     scored.sort(key=lambda s: (not s.eligible, -s.score, s.candidate.rank, s.candidate.video_id))
@@ -468,12 +673,15 @@ def parse_search_results(payload: Any, rank_offset: int = 0) -> list[Candidate]:
 
 
 __all__ = [
+    "HARD_VERSION_MARKERS",
     "MAX_DOWNLOAD_ATTEMPTS",
     "MIN_SCORE",
     "SEARCH_LIMIT",
+    "UNKNOWN_TARGET_MAX_S",
     "Candidate",
     "ScoredCandidate",
     "Target",
+    "artist_credited",
     "duration_gate_s",
     "eligible",
     "no_candidate_message",

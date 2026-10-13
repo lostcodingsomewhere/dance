@@ -42,6 +42,7 @@ from typing import Any, Literal
 from dance.spotify.matching import (
     MAX_DOWNLOAD_ATTEMPTS,
     SEARCH_LIMIT,
+    UNKNOWN_TARGET_MAX_S,
     Candidate,
     ScoredCandidate,
     Target,
@@ -371,12 +372,17 @@ def _truncation_tolerance_s(header_s: float) -> float:
 
 
 def _check_expected(measured_s: float, expected_s: float | None, what: str) -> None:
-    if not passes_verification(expected_s, measured_s):
-        assert expected_s is not None
+    if passes_verification(expected_s, measured_s):
+        return
+    if expected_s is None or expected_s <= 0:
         raise AttemptError(
-            f"{what} {measured_s:.1f}s vs {expected_s:.1f}s expected "
-            f"(tolerance ±{verify_tolerance_s(expected_s):.0f}s)"
+            f"{what} {measured_s:.1f}s over the {UNKNOWN_TARGET_MAX_S:.0f}s cap "
+            "(no expected duration)"
         )
+    raise AttemptError(
+        f"{what} {measured_s:.1f}s vs {expected_s:.1f}s expected "
+        f"(tolerance ±{verify_tolerance_s(expected_s):.0f}s)"
+    )
 
 
 def verify_audio(

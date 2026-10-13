@@ -30,6 +30,7 @@ from dance.spotify.acquire import (
 )
 from dance.spotify.matching import (
     MIN_SCORE,
+    UNKNOWN_TARGET_MAX_S,
     Candidate,
     Target,
     duration_gate_s,
@@ -267,10 +268,14 @@ def test_scoring_table_realistic_titles() -> None:
     # Wrong-length versions die at the hard gate, whatever their score.
     assert "duration 414s" in by_id["EXTENDEDmix"].rejection
     assert "duration 3600s" in by_id["HOURLONGmix"].rejection
-    # Right-length but wrong *version* uploads die on the version penalty.
+    # Right-length but wrong *version* uploads die on the hard version gate
+    # (and would also score below the bar).
     assert by_id["LIVEatPrint"].duration_ok and by_id["LIVEatPrint"].score < MIN_SCORE
     assert by_id["NIGHTCOREcy"].duration_ok and by_id["NIGHTCOREcy"].score < MIN_SCORE
     assert by_id["SLOWEDreverb"].duration_ok and by_id["SLOWEDreverb"].score < MIN_SCORE
+    assert by_id["LIVEatPrint"].rejection == "different version (live)"
+    assert by_id["NIGHTCOREcy"].rejection == "different version (nightcore)"
+    assert by_id["SLOWEDreverb"].rejection == "different version (slowed)"
     assert by_id["LIVEatPrint"].unwanted_markers == ("live",)
     assert by_id["EXTENDEDmix"].unwanted_markers == ("extended",)
     assert by_id["NIGHTCOREcy"].unwanted_markers == ("nightcore",)
@@ -319,10 +324,13 @@ def test_duration_gate_bounds_and_unknowns() -> None:
     assert duration_gate_s(600.0) == pytest.approx(60.0)
     assert passes_duration_gate(185.8, 215.0)
     assert not passes_duration_gate(185.8, 216.0)
-    # An unmeasurable upload never passes when we know what we want…
+    # An unmeasurable upload never passes, whether or not we know what we want…
     assert not passes_duration_gate(185.8, None)
-    # …and with nothing to gate on, nothing is gated.
-    assert passes_duration_gate(None, 3600.0)
+    assert not passes_duration_gate(None, None)
+    # …and with no expected duration, the 12-minute cap still stops a set.
+    assert passes_duration_gate(None, 600.0)
+    assert passes_duration_gate(0, UNKNOWN_TARGET_MAX_S)
+    assert not passes_duration_gate(None, 3600.0)
     assert verify_tolerance_s(185.8) == 10.0
     assert verify_tolerance_s(600.0) == pytest.approx(21.0)
 
