@@ -54,6 +54,12 @@ CPU separation is slower (a few minutes per track instead of ~1–3) but stable 
 
 If you need MPS speed, the durable fix is to run the pipeline on a spec-compliant Python 3.10 interpreter (see the Python-3.14 memory note); CPU separation is the right move when you just need the run to finish.
 
+## "Another pipeline run is already in progress" (exit 75 / HTTP 409)
+
+Only one dispatcher may run at a time: a second one would reset the first one's in-flight tracks, process them twice, and could wrongly flag them ERROR "repeated native crash". The message names the holder (pid, command, start time). Either wait for it, re-run with `--wait`, or stop the process it names. The API's "Process now" holds the lock for all of its passes, so a terminal `dance process` is refused until that job finishes.
+
+`<data_dir>/dispatcher.lock` is never stale: it's an `flock`, which dies with its process, so there's nothing to delete after a crash. If the named pid isn't running, the lock is held by a child it handed it to (the API's `dance process` subprocess). Check with `lsof ~/.dance/dispatcher.lock`.
+
 ## OSC firewall on macOS
 
 The first time the backend starts and the OSC listener binds to UDP `127.0.0.1:11001`, macOS may prompt:
