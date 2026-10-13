@@ -1,294 +1,349 @@
-# Plan edits must not silently drop another writer's picks
+# Plan writes: a stale whole-plan PUT must not erase another writer's picks
 
 **Status:** proposal, not implemented (2026-10-13)
-**Touches:** the plan API (`/sets/{id}/plan*`) request/response shapes, so
-CLAUDE.md rule 1 applies. No SQLAlchemy model change in the recommendation.
-**Builds on:** `4b2b509` "sets: stop losing plan picks to concurrent writes"
+**Touches:** the plan API's request/response shapes (`/sets/{id}/plan*`), so
+CLAUDE.md rule 1 applies. The recommendation needs no SQLAlchemy model change,
+no Alembic revision and no WebSocket change.
+**Builds on:** `4b2b509` "sets: stop losing plan picks to concurrent writes".
+**Related:** the dance-mcp proposal (branch `claude/proposal-dance-mcp`,
+unmerged) lists this as a prerequisite for agent writes.
 
 ---
 
-## What 4b2b509 already fixed (not re-proposed here)
+## What 4b2b509 already fixed (not re-proposed)
 
-- Adds go through `POST /plan/append`, which merges server-side. The UI no
-  longer adds with read-modify-PUT.
-- A cold cache is no longer treated as an empty plan: `currentQueues()` returns
-  `null` and callers refuse to run (`useSetPlan.ts:42-50`).
-- `PUT` validates track ids before it persists anything.
-- Every plan write holds a process-wide `_PLAN_WRITE_LOCK`, and append re-reads
-  the row inside it (`sets.py:47-60`, `:620-632`).
+- Adds go through `POST /plan/append`, a server-side merge
+  (`useSetPlan.ts:60-63`). The UI no longer adds by read-modify-PUT.
+- A cold cache is not treated as an empty plan: `currentQueues()` returns
+  `null` and the callers refuse to run (`useSetPlan.ts:42-50`).
+- `PUT` rejects unknown track ids (`sets.py:589-600`).
+- Every plan write holds the process-wide `_PLAN_WRITE_LOCK`, and append
+  re-reads the row inside it (`sets.py:47-60`, `:620-632`).
 
-The lock serialises the writers. It cannot help a writer whose body was built
-from a stale snapshot, and `PUT` is that writer.
+The lock serialises writers. It cannot help a writer whose body was built from
+a stale snapshot, and `PUT` is exactly that writer: it loads the `Set` row but
+never looks at the plan already stored in it (`sets.py:567-606`). It takes the
+lock only to overwrite.
 
 ## The remaining hole
 
-`PUT /sets/{id}/plan` (`sets.py:567-606`) replaces the whole plan. It never
-reads the row, so it takes the lock only to overwrite whatever is there. Its
-body comes from the tab's react-query cache (`useSetPlan.ts:65-72`). That
-cache refreshes only on mount when more than 5 s stale (`staleTime`,
-`useSetPlan.ts:17`), on network reconnect (react-query default), or when this
-same tab invalidates a `["sets", …]` key: its own plan writes
-(`useSetPlan.ts:32`, `:97`) and a few other local actions (`SetMenu.tsx:132`,
-`StackMigrationPrompt.tsx:78`, `CommandBar.tsx:585`). Nothing refreshes it
-because *another* writer changed the row: refetch-on-focus is off
-(`main.tsx:11`) and `useSetPlan` has no `refetchInterval`
-(`useSetPlan.ts:13-18`). `useActiveSet` does poll every 5 s, with the comment
-"other tabs / ⌘K add to the plan" (`useSets.ts:30-31`), but it refreshes
-`["sets","active"]`, not `["sets",id,"plan"]`, so that poll never reaches the
-grid.
-
-| Writer | Path | Safe? |
+| Writer | Path | Loses others' picks? |
 |---|---|---|
-| Grid ＋ / `enter` (`RoleColumn.tsx:316,350`, `RoleColumnsGrid.tsx:85`) | `POST /plan/append` | yes |
-| ⌘K (`CommandBar.tsx:504,577`) | `POST /plan/append` | yes |
-| Grid × (`RoleColumn.tsx:531`, passes the row **index**) | `PUT /plan` built from the cache | **no** |
-| `moveInRole` (`useSetPlan.ts:74-83`) | `PUT /plan` | no, but nothing calls it |
-| the proposed dance-mcp sidecar (`claude/proposal-dance-mcp`, unmerged), a second tab, `curl` | append only today | |
+| Grid ＋ / `enter` (`RoleColumn.tsx:323,361,379`, `RoleColumnsGrid.tsx:85`) | `POST /plan/append` | no |
+| ⌘K (`CommandBar.tsx:504,577`) | `POST /plan/append` | no |
+| Grid × (`RoleColumn.tsx:531` passes the row **index**) | `PUT /plan` built from the tab's cache (`useSetPlan.ts:65-72`) | **yes** |
+| `moveInRole` (`useSetPlan.ts:74-83`) | `PUT /plan` | yes, but nothing calls it |
+| dance-mcp sidecar, a second tab, `curl` | append only today | no |
 
-The result: a tab that has been open for twenty minutes can wipe everything
-another writer appended in that time with a single × click. The other writer
-got a 200 with its pick included. The clicking tab then writes the PUT
-response into its cache (`useSetPlan.ts:31`), so its user never sees the pick
-at all. Nobody gets an error.
+The × path is the only `PUT` caller. Its body comes from the react-query cache,
+and nothing refreshes that cache when *another* writer changes the row.
+`refetchOnWindowFocus` is off app-wide (`main.tsx:11`; the TanStack default is
+on, per the [docs](https://tanstack.com/query/v5/docs/framework/react/guides/window-focus-refetching)).
+`useSetPlan` has no `refetchInterval` (`useSetPlan.ts:13-18`). `useActiveSet`
+does poll every 5 s, with the comment "other tabs / ⌘K add to the plan"
+(`useSets.ts:30-31`), but it refreshes `["sets","active"]`, not
+`["sets",id,"plan"]`, so the poll never reaches the grid. The cache refreshes
+only on mount after 5 s (`staleTime`, `useSetPlan.ts:17`), on network
+reconnect, or when this tab itself invalidates a `["sets", …]` prefix: its own
+plan writes (`useSetPlan.ts:31-32`, `:96-97`), its own set create / activate /
+rename / delete (`useSets.ts:52,65,75,93`), and three other local actions
+(`CommandBar.tsx:585`, `SetMenu.tsx:132`, `StackMigrationPrompt.tsx:78`). All
+of these start in the same tab, so none of them notices another writer.
 
-### Measured, not theorised
+So a Set view left open while an agent or a second tab appends will erase
+every one of those picks the next time its user clicks ×. The other writer got
+a 200. The clicking tab writes the PUT response into its cache, so its user
+never sees the lost pick. Nobody gets an error.
 
-Author's run: the real `create_app` under uvicorn (sync endpoints in its
-threadpool, as in production) against a throwaway DB in a scratch `HOME`,
-never `~/.dance`. The script is scratch and not committed. It also ran
-throwaway prototypes of options C and A′ next to the real routes:
+The same mechanism also bites within one tab: two × clicks inside one
+round-trip both read the same snapshot, and the second PUT puts back the
+first-removed pick.
+
+### Measured
+
+Scratch probe, not committed. It served the real `create_app()` from this
+worktree under uvicorn on `127.0.0.1:8771`, against a throwaway `HOME`/data
+dir/DB with a socket-free bridge stub. It drove the endpoints over TCP with
+httpx. It also mounted two throwaway prototype routes next to the real ones:
+option C's remove op and option A′'s hash-guarded PUT, both under the real
+`_PLAN_WRITE_LOCK`.
 
 ```
-[1] tab A has cached song=[1,2,3]; another client appends 4; tab A clicks × on index 0
-    POST /plan/append 4 -> 200, song=[1,2,3,4]
-    PUT  /plan          -> 200, song=[2,3]
-    final song=[2,3]    -> track 4 LOST, no error to anyone
-    GET /sets/active updated_at changed on the append: True
-
-[2] append(9) and remove(1) released together by a threading.Barrier, 100 trials/row, two runs
-    today: remove = whole-plan PUT                      append lost  47 | 69
-    option C prototype: POST /plan/remove op            append lost   0 |  0
-    option A' prototype: PUT + expected_revision (hash)  append lost   0 |  0   (409 on 15 | 12)
-
-[3] PUT /plan round-trip on localhost: median 2.1-2.9 ms
+$ export PYTHONPATH=$PWD/src   # this worktree
+$ /Users/arya/git/dance/.venv/bin/python $SCRATCHPAD/planrev/probe.py 8771
+[1] agent POST /plan/append 4 -> 200 song = [1, 2, 3, 4]
+[1] tab   PUT  /plan (x on index 0, from cache) -> 200 song = [2, 3]
+[1] final song = [2, 3] | track 4 lost: True
+[1] /sets/active updated_at changed on the agent append: True
+[2] intended drums = [3]; got [1, 3] (track 1 resurrected)
+[3] today_put        append lost  75/100   409s   0/100
+[3] C_remove_op      append lost   0/100   409s   0/100
+[3] Aprime_hash_put  append lost   0/100   409s  16/100
+[4] GET /plan, 40 picks, 200 calls: median 1.80 ms, p95 2.21 ms
+[5] PUT /plan with Content-Type text/plain -> 422 {"detail":[{"type":"model_attributes_type",...
 ```
 
-Fact-check re-run (2026-10-13, this worktree, FastAPI `TestClient` with the
-`tests/test_api.py` fixtures rather than uvicorn): [1] reproduced exactly
-(final `[2, 3]`, `updated_at` changed on the append), and the "today" row of
-[2] lost the append in **63/100** trials. The prototype rows and [3] were not
-re-run.
-
-Row [3] shows that within one tab the in-flight window is a few milliseconds,
-so racing your own ⌘K by hand is unlikely. The real exposure is
-**cross-writer staleness, and that is unbounded**. A second tab is a mild case
-of it. An MCP agent appending while the Set view stays open is the case it was
-built for.
+Row [3] releases `append(9)` and "remove track 1" together through a
+`threading.Barrier`, 100 fresh sets per row. Across three runs the losses were
+75–77 / 0 / 0, and A′ refused 10–16 of the 100 racing PUTs; row [4]'s median
+was 1.8–2.1 ms. Row [3] is the worst case. The common case is row [1]:
+a cache that is minutes old, where today's path loses the pick every time.
 
 ## Options
 
 ### A. Revision counter + `expected_revision` on PUT → 409
 
-`sets.plan_revision INTEGER NOT NULL DEFAULT 0`. This needs an Alembic
-revision on head `e4a91c7b2d05`, using `batch_alter_table` like
-`b7d4e2f1a9c3`. Every plan write bumps the counter inside the lock.
-`SetPlanOut.revision` carries it. `SetPlanUpdateRequest.expected_revision`
-must match, otherwise the response is
-`409 {"detail":"plan_changed","plan":<SetPlanOut>}`. On a 409 the client seeds
-its cache from the body, re-applies its intent, and retries once.
+`sets.plan_revision INTEGER NOT NULL DEFAULT 0`, bumped by every plan write
+inside the lock. `SetPlanOut.revision` carries it. `PUT` requires
+`expected_revision` and answers `409 {"detail": {"error": "plan_changed",
+"plan": <SetPlanOut>}}` on a mismatch. The client seeds its cache from the
+409 body, re-applies its intent, and retries once.
 
-- **For:** general. It works for any edit, including bulk replace and undo.
-  The closest in-repo pattern is `deck_map_revision`
-  (`src/dance/osc/bridge.py:60-64`), but that is an in-memory change
-  notification, not a persisted precondition, so it is a naming precedent only.
-- **Against:** a migration, and nothing in the app applies it.
-  `init_db` only runs `create_all` (`database.py:832-836`), which never adds a
-  column to an existing table; `alembic upgrade head` runs from
-  `bin/setup.sh:60` or by hand (`README.md:169`, `docs/dev.md:133`). A DB that
-  misses the upgrade would fail every `Set` query with SQLite's "no such
-  column" (expected, not tested), which breaks both the Booth and the Set view.
-- **Against:** every client (the UI, an MCP server) has to write
-  rebase-and-retry code. For every edit the UI makes, "re-apply the intent"
-  means "remove track X from role R", and that is option C done on the client
-  instead of once under the lock the server already holds.
+- **For:** general. It protects any whole-plan edit, including future bulk
+  replace, undo and import.
+- **Against:** a migration that nothing applies automatically. It needs an
+  Alembic revision on head `e4a91c7b2d05` using `batch_alter_table` like
+  `b7d4e2f1a9c3_add_sets_plan.py:34`. `init_db` only runs `create_all`
+  (`database.py:837-841`), which never adds a column to an existing table.
+  Checked in a scratch DB: once the column is mapped, an un-migrated DB fails
+  every `Set` query with `sqlite3.OperationalError: no such column:
+  sets.plan_revision`. Both the Booth and the Set view would break until the
+  user runs `alembic upgrade head`. (`dance doctor` would flag it:
+  `doctor.py:231`.)
+- **Against:** every write path must remember to bump the counter. A missed
+  bump silently re-opens the hole.
+- **Against:** for the only edit the UI makes, "re-apply the intent" means
+  "remove track X from role R". That is option C, done on the client instead of
+  once under the lock the server already holds.
 
-**A′ (no column):** make the revision a content hash of the canonical
-encoding, e.g. `sha256((encode_plan(parse_plan(s.plan)) or "").encode())[:16]`,
-computed in `_plan_out` (`encode_plan` returns `None` for an empty plan, and
-its key order is fixed by `PLAN_ROLES`, so the hash is deterministic). This
-needs no migration. The ABA case (the plan changes and then changes back) is
-harmless for a whole-value precondition: if the current content equals the
-client's base, the client's replacement is exactly correct. Prototype [2]
-showed no silent losses, and a guarded PUT from a pre-append snapshot
-returned 409. **If a guarded PUT is ever needed, use A′, not A.**
+**A′, the same thing without a column:** make the revision a content hash,
+`sha256((encode_plan(parse_plan(s.plan)) or "").encode()).hexdigest()[:16]`,
+computed in `_plan_out` (`sets.py:521`). `encode_plan` emits roles in fixed
+`PLAN_ROLES` order and returns `None` for an empty plan (`set_queues.py:53`),
+so the hash is deterministic. This needs no migration and has no bump to
+forget. The ABA case (the plan changes and then changes back) is harmless for a
+whole-value precondition: if the content equals what the client edited, its
+replacement is exactly what it meant. Row [3] above is this variant: 0 losses,
+with 16% of the racing PUTs refused.
 
-### B. ETag / If-Match
+### B. ETag / If-Match → 412
 
-This is A′ moved into headers: `ETag` on GET, append and PUT, `If-Match` on
-PUT, and `412` on a mismatch ([RFC 9110 §13.1.1](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.1),
-[§15.5.13](https://www.rfc-editor.org/rfc/rfc9110#section-15.5.13)), plus
-optionally `428` when the header is missing
-([RFC 6585 §3](https://www.rfc-editor.org/rfc/rfc6585#section-3)).
+The same token (A or A′) travels as a strong `ETag` on plan responses, and
+`PUT` sends `If-Match`. A mismatch returns 412 Precondition Failed
+([RFC 9110 §13.1.1](https://www.rfc-editor.org/rfc/rfc9110.html#name-if-match),
+[§15.5.13](https://www.rfc-editor.org/rfc/rfc9110.html#name-412-precondition-failed)).
+A missing header can return 428
+([RFC 6585 §3](https://www.rfc-editor.org/rfc/rfc6585.html#section-3)).
 
-- **For:** it is the HTTP-standard way to do this.
-- **Against:** react-query caches the body, not the headers, so `getPlan`
-  would have to return `{plan, etag}`. Every plan handler would also need a
-  `Response` parameter to set the header.
-- **Against:** `request()` spreads `...init` *after* `headers`
-  (`api.ts:47-53`), so a caller that passes any header (e.g. `If-Match`)
-  silently loses `Content-Type: application/json`. Checked on FastAPI 0.103.2
-  (the pinned `>=0.103,<0.104`): a JSON body sent as `text/plain` gets `422`.
-  That is a latent bug worth fixing regardless.
-- **Against:** MCP tool calls carry JSON arguments, not headers.
+- **For:** HTTP-native, and the semantics are the same as A.
+- **Against:** it fits this client poorly.
+  - `request()` throws response headers away (`api.ts:42-66`), so reading the
+    `ETag` needs a second helper.
+  - `request()` also drops `Content-Type` whenever a caller passes
+    `init.headers`, because `...init` comes after the merged `headers` object
+    (`api.ts:47-52`). Checked in node:
+    `{headers:{"Content-Type":…,...init.headers},...init}.headers` →
+    `{"If-Match":"\"abc\""}`. With fetch's default `text/plain` body type,
+    FastAPI 0.103.2 answers 422 (row [5]). That latent bug is worth fixing
+    regardless.
+  - Every plan endpoint would need a `Response` parameter to set the header.
+  - The token would be invisible in the OpenAPI schema and to an MCP tool's
+    JSON result.
+- Nothing B does is unavailable to A′ as a body field.
 
-There is no gain over A′ here, and it costs more.
+### C. Server-side ops only (add / remove / move), no client snapshot
 
-### C. Server-side ops only (add / remove / move); retire the whole-plan PUT
+Add `POST /sets/{id}/plan/remove` `{role, track_id}`, the twin of `append`
+(`sets.py:609-632`): take the lock, re-read the row, filter, commit. Add
+`/plan/move` `{role, track_id, to_index}` when a reorder gesture actually
+ships. The UI stops sending whole plans.
 
-`POST /plan/remove {role, track_id}` and `POST /plan/move {role, track_id,
-to_index}` work like append: they take the lock, re-read the row, apply the
-op, and write it back.
+- **For:** it closes the hole for every writer that exists, with no schema
+  change: row [3] lost 0/100 and refused nothing. The double-× case resolves
+  correctly ("remove 1", "remove 2" → `[3]`), and so does the agent case
+  (remove commutes with append).
+- **For:** ops key on `track_id`, not on an index into a possibly stale list.
+  Within a role, ids are unique in practice: `append` dedupes (`sets.py:626`)
+  and the UI never duplicates.
+- **For:** the dance-mcp tools are already "append, never PUT".
+- **Against:** it protects only the ops it defines. `PUT` still exists for
+  scripts and future bulk edits, and on its own it stays a blind overwrite.
+- **Against:** the UI still *displays* a stale plan until it refetches. Nothing
+  is lost any more, but a pick appended elsewhere doesn't show up.
 
-- **For:** no update can be lost, by construction, and no client needs merge
-  code. Prototype [2] measured 0 lost.
-- **For:** it finishes what 4b2b509 started. Its own comment says "No
-  server-side remove endpoint exists, so this stays read-modify-PUT"
-  (`useSetPlan.ts:67`).
-- **For:** the ops are the same size as MCP tool calls. No schema or migration
-  change.
-- **Against:** an op addressed by index breaks when the client's list is stale.
-  So ops address by `track_id`, and a stale `to_index` is clamped into the
-  current list. Append de-duplicates (`sets.py:626-627`) and the pre-4b2b509
-  UI add did too, so a `track_id` is unique within a role for UI-written
-  plans; only a hand-written PUT could have stored a duplicate, which is why
-  remove drops every occurrence.
-- **Against:** with PUT retired there is no bulk replace. Undo, "import this
-  plan" or an MCP "write me a whole plan" tool would each need a new endpoint,
-  and that endpoint would be a guarded PUT using A′. (The dance-mcp proposal
-  currently plans only `plan_append` and says "never `PUT /plan`".)
+### D. Last-write-wins + WS `plan_changed` broadcast + refetch
 
-### D. Last-write-wins + a `set_changed` WS broadcast + refetch
+After each plan commit, broadcast
+`{"type": "plan_changed", "set_id": 7, "revision": "…", "op": "append"}`. The
+client invalidates `["sets", set_id, "plan"]` when `revision` differs from its
+cache.
 
-- **For:** it fixes *display* staleness, which A, B and C do not. An MCP pick
-  would appear in an open grid without a remount.
-- **Against:** it only shrinks the window; it does not close it. Row [2] above
-  lost 47–69% with a cache that was a few milliseconds old.
-- **WS shape:** a discrete frame does not work on `/ws`, for two reasons:
-  - `useAbletonState.ts:24-28` assigns *every* frame to `AbletonState`, so a
-    `{"type":"set_changed"}` frame would blank tempo and clips until the next
-    push.
-  - The unmerged `claude/ws-shared-socket` branch (`f4852e0`) coalesces `/ws`
-    to newest-wins at ≤30 Hz, so a discrete frame can be dropped.
-- **WS shape that does survive:** a counter inside a snapshot, the way
-  `deck_map_revision` does it (`src/dance/osc/bridge.py:540-549`,
-  `useDeckMap.ts:24,34-36`). For example, `AbletonState.plan_revision`, bumped
-  after a commit. This changes `AbletonStateOut` (`schemas.py:415`) and makes a
-  DB concern ride on the OSC bridge state. The alternative is a new
-  `/ws/sets` channel on the unthrottled `broadcast_threadsafe`
-  (`routers/ws.py:55`), like `/ws/pipeline` (`routers/ws.py:101`).
-- **D-lite, with no backend change:** the 5 s `useActiveSet` poll already
-  returns `updated_at` (`SetOut`, `schemas.py:290`), and every plan write bumps
-  it (`sets.py:603`, `:629`; confirmed in [1]). The plan grid always shows the
-  active set (`Booth.tsx:51,68`, `SetEditor.tsx:20,33`). So invalidating the
-  plan query whenever that value changes caps the staleness at about 5 s while
-  the tab is visible (react-query pauses `refetchInterval` in background tabs
-  by default; the poll resumes when the tab is shown).
+- **The channel must be new.** The `/ws` reducer replaces the whole
+  `AbletonState` with each frame (`useAbletonState.ts:11-15`), so a plan event
+  there would blank tempo and playing clips. That leaves two choices:
+  - A `/ws/sets` channel. It would be one more `WSManager` (the
+    `app.py:71-72,78-79,109-110` pattern, `broadcast_threadsafe` from the sync
+    endpoint thread, `routers/ws.py:66-72`) and a `createSharedSocket`
+    consumer. Vite
+    already proxies the `/ws` prefix (`vite.config.ts:17`), and the origin
+    guard covers every websocket scope (`origin_guard.py:119`).
+  - Piggybacking a counter on `AbletonState`, the way `deck_map_revision`
+    drives `useDeckMap` (`bridge.py:60-64`, `useDeckMap.ts:14-36`). That puts
+    DB plan state into the OSC bridge's state object.
+- **For:** near-instant freshness in every open tab.
+- **Against:** it is still last-write-wins. It shrinks the staleness window
+  while the socket is up, but row [3] shows that even a few milliseconds of
+  overlap loses most races. A missed frame leaves the window unbounded again:
+  the socket reconnects after 2 s with no replay (`sharedSocket.ts:44`,
+  `:166-170`), so the client must also refetch on every reconnect.
+- **Against:** roughly 100 lines (estimate, not counted) across backend,
+  frontend and tests, to take
+  freshness from ≤5 s (a one-line `refetchInterval`, below) to sub-second.
+  Plan prep doesn't need that.
+
+### Summary
+
+| | Stops loss: stale tab | Stops loss: race | Same-tab double × | Schema / Alembic | Client work |
+|---|---|---|---|---|---|
+| A (counter) | yes, via 409 | yes | 409 then retry | **column + migration** | rebase-and-retry |
+| A′ (hash) | yes, via 409 | yes | 409 then retry | none | rebase-and-retry |
+| B (If-Match) | as A/A′ | as A/A′ | as A/A′ | as A/A′ | header plumbing + `api.ts` fix |
+| C (ops) | **yes, no error** | **yes** | **correct** | none | smaller than today |
+| D (WS) | narrows it | no | no | none | new socket consumer |
 
 ## Recommendation
 
-**C + D-lite.** C closes the loss. D-lite closes the visible staleness. Neither
-needs a migration or a WS contract change.
+**C for the UI, A′ on the PUT that remains, and a 5 s plan poll for
+freshness. No D for now.**
 
-**Backend (`sets.py`, `schemas.py`).** Add one helper,
-`_mutate_plan(session, set_id, fn)`. It takes the lock, re-reads the row,
-parses the plan, applies `fn`, encodes the result, bumps `updated_at`, commits
-and returns `_plan_out`. Move append onto it, and add:
+1. **`POST /sets/{id}/plan/remove`** `{role, track_id}` → `SetPlanOut`.
+   - It removes every occurrence of `track_id` from that role, under
+     `_PLAN_WRITE_LOCK`, re-reading inside it (copy `sets.py:620-632`).
+   - Absent track → 200, unchanged (idempotent, mirroring append's no-op).
+   - Bad role → 400; unknown set → 404.
+2. **`SetPlanOut.revision: str`** (the A′ hash), returned by GET, PUT, append
+   and remove. This is free for agents too: an MCP `get_plan` can quote it.
+3. **`SetPlanUpdateRequest.expected_revision: str`, required.**
+   - `put_plan` moves its `_require_set` + `session.refresh` inside the lock and
+     compares before writing. Checking outside the lock would re-open the race.
+   - A mismatch returns `409 {"detail": {"error": "plan_changed", "plan":
+     <current SetPlanOut>}}`.
+   - After step 4 the UI never calls PUT. Requiring the field means updating
+     the five existing tests that PUT the plan (`test_api.py:3418`, `:3451`,
+     `:3459`, `:3602`, `:3652`; `:3459` ignores the PUT's status, so it would
+     silently test an empty plan if left alone). It turns any future script's
+     blind overwrite into a 422 instead of silent data loss.
+4. **Client** (`companion-app/`):
+   - `api.ts`: add `removeFromPlan(setId, role, trackId)`. Delete `putPlan`
+     (no caller left), or give it an `expectedRevision` argument if you keep it.
+   - `useSetPlan.ts`: `removeFromRole(role, trackId)` becomes a mutation on
+     `removeFromPlan` with the same `onSuccess` as `useAppendToPlan`
+     (`:95-98`). Delete `put`, `currentQueues` and the uncalled `moveInRole`.
+     Add `refetchInterval: 5_000` to `useSetPlan`, matching `useActiveSet`.
+     Row [4] puts one such GET at ~2 ms round-trip on localhost with 40
+     picks. Two caveats, read from `@tanstack/query-core` 5.100.9
+     (`queryObserver.js`, `query.js`): each of the five `PlanBand`s
+     (`RoleColumn.tsx:461`, `RoleColumnsGrid.tsx:122`) is its own observer
+     with its own timer. Their ticks usually coalesce into one request because
+     a fetch already in flight is shared, but up to five per tick is possible.
+     And the interval pauses while the window is unfocused
+     (`refetchIntervalInBackground` defaults to false), so a tab you return to
+     catches up within one tick, not instantly.
+   - `RoleColumn.tsx:531`: `removeFromRole(role, item.track_id)`.
+   - `types.ts`: add `SetPlan.revision` and
+     `SetPlanUpdateRequest.expected_revision`.
+5. **`/plan/move`** waits for a reorder gesture. It is "a new endpoint following
+   an existing pattern" under rule 1, so it won't need another proposal.
 
-| Endpoint | Body | Absent track |
-|---|---|---|
-| `POST /sets/{id}/plan/remove` | `SetPlanRemoveRequest{role, track_id}`, removes every occurrence | 200, no-op |
-| `POST /sets/{id}/plan/move` | `SetPlanMoveRequest{role, track_id, to_index}`, index clamped | 200, no-op |
-| `PUT /sets/{id}/plan` | **deleted**, along with `SetPlanUpdateRequest` (`schemas.py:395-399`) | |
-
-A no-op returns 200 rather than 404 so that a stale tab clicking × on an
-already-removed pick ends up in the right state instead of raising an error.
-`SetPlanOut` is unchanged.
-
-**Frontend.**
-- `api.ts` gains `removeFromPlan` and `moveInPlan`, and drops `putPlan`.
-- In `useSetPlan.ts`, `removeFromRole(role, trackId)` and
-  `moveInRole(role, trackId, to)` call the ops. `currentQueues` and the `put`
-  mutation are deleted.
-- `RoleColumn.tsx:531` passes `item.track_id` instead of `i`.
-- For D-lite, `useSetPlan` adds roughly 8 lines: an effect on
-  `useActiveSet().data?.updated_at` that runs
-  `invalidateQueries({queryKey: ["sets", id]})`. That prefix also refetches
-  the mounted `["sets", id, "plan-recs", …]` queries (`useSetPlan.ts:109`),
-  which is wanted, since recs exclude what is queued. So each change of
-  `updated_at` costs one plan GET plus up to five plan-recs GETs. The tab's own
-  writes also move `updated_at`, so they trigger one redundant refetch on the
-  next poll; acceptable, or skip it by remembering the `updated_at` the tab
-  last wrote.
-- Optional, same PR: fix the `request()` header merge (`api.ts:47-53`).
-
-**Tests.**
-- New file `tests/test_set_plan_ops.py`:
-  - remove and move by `track_id`;
-  - no-op on an absent track;
-  - 400 on a bad role, 404 on a missing set;
-  - a `Barrier` race of append ‖ remove that never loses the append. As in
-    4b2b509, this test must be shown to **fail** when remove is routed through
-    a whole-plan write.
-- `tests/test_api.py` tests that move onto append/remove or are deleted with
-  PUT: `test_put_plan_persists_queues` (`:3418`), `test_put_plan_bad_role`
-  (`:3451`), `test_plan_recs_scored_against_plan` (`:3459`, seeds through PUT
-  at `:3467`), `test_put_plan_rejects_unknown_track_ids` (`:3602`),
-  `test_put_plan_still_replaces_wholesale` (`:3652`).
-- vitest:
-  - `removeFromRole` sends the `track_id`;
-  - a change in the active set's `updated_at` invalidates the plan query;
-  - update the `usePlanMutations` mocks that return `put`
-    (`companion-app/tests/gridKeys.test.tsx:33`,
-    `companion-app/tests/RoleColumnsGrid.test.tsx:21`).
-
-**Migration cost.** No data migration and no Alembic revision. The companion
-app is the only API client in the repo (dance-mcp is an unmerged proposal that
-uses only append), so deleting PUT breaks nothing outside this repo. A
-hand-written script or `curl` that PUTs the plan would get `405`. The backend
-and frontend ship in one PR. Estimate: roughly +60 lines of backend and −40
-lines of frontend, before tests.
-
-The multi-worker caveat in the lock comment (`sets.py:55-59`) still applies
-unchanged.
+WS: no change. Schema: no change. Alembic: no revision.
 
 ## Decisions for the user
 
-1. **C + D-lite (recommended), or A′?** A′ keeps client-side editing and adds
-   a content-hash `expected_revision` to PUT, with client rebase and retry.
-2. **Retire PUT now (recommended), or keep it guarded with A′?** Keeping it
-   only makes sense if an MCP "replace the whole plan" tool or undo is
-   definitely coming.
-3. **Build `/plan/move` now (recommended; it lets PUT go and gives an MCP a
-   reorder), or delete the dead `moveInRole` and defer?**
-4. **Remove/move on an absent track: 200 no-op (recommended), or 404?**
-5. **Freshness: D-lite keyed on `updated_at` (recommended), a plain
-   `refetchInterval: 5_000` on `useSetPlan`, or a WS push?** A WS push means
-   a counter in a snapshot, which changes `AbletonStateOut` and needs its own
-   go-ahead.
-6. **dance-mcp scope:** once remove/move exist, should that proposal grow
-   `plan_remove` / `plan_move` tools, or stay append-only? (Not decided here.)
+1. **C + A′ (recommended)**, A with a real counter column, or D on its own.
+2. **PUT's future.** Options: `expected_revision` required (recommended);
+   optional (old scripts keep working, but stay a footgun); or delete `PUT
+   /plan` outright, since nothing in the UI or the MCP proposal needs it after
+   this change.
+3. **Remove semantics:** idempotent 200 when the track is absent (recommended),
+   or 404. With 404, a double-click shows an error toast for the second click.
+4. **Freshness:** `refetchInterval: 5_000` on the plan (recommended, one line).
+   Alternatives: invalidate the plan when the polled `active.updated_at`
+   changes (zero extra requests, but rename/activate also bump it:
+   `sets.py:231,256`, `database.py:699`), or D's WebSocket.
+5. **Should `PUT` also reject duplicate ids within a role** (400)? It accepts
+   them today (`sets.py:586-587`). Rejecting them makes "remove by id"
+   exactly match what the user sees. Recommended, though no current client
+   sends duplicates.
+
+## Migration cost
+
+- **Backend:** `sets.py` ≈ +40 lines (remove endpoint, hash helper, guarded
+  PUT, `revision` in `_plan_out`). `schemas.py` ≈ +12 (`SetPlanRemoveRequest`,
+  two fields).
+- **Frontend:** `api.ts` ≈ +10/−10, `useSetPlan.ts` ≈ +15/−35,
+  `RoleColumn.tsx` 1 line, `types.ts` 2 fields. Two test mocks return a
+  `put` member (`RoleColumnsGrid.test.tsx:21`, `gridKeys.test.tsx:33`); drop
+  it.
+- **Data:** none. Existing `sets.plan` values hash as they are, and no
+  `alembic upgrade` is needed.
+- **Docs:** `docs/api.md:107-120` (add the endpoint row, note
+  `revision`/`expected_revision`, drop "the frontend edits locally and PUTs").
+  Update the docstrings at `useSetPlan.ts:1-4` and `schemas.py:395-399`.
+- **Tests** (new file `tests/test_set_plan_revision.py`, about 150 lines):
+  - remove removes, and repeats as a 200 no-op;
+  - remove and append released by a `threading.Barrier`, 20 rounds, append
+    never lost;
+  - row [1] replayed through PUT with the stale revision → 409, the body's plan
+    contains the agent's pick, and the DB is unchanged;
+  - PUT with the current revision → 200 and a new revision;
+  - the revision is stable across GETs, changes on every write, is equal for
+    equal content (ABA), and is constant for the empty plan;
+  - PUT without `expected_revision` → 422.
+
+  Plus one vitest (`companion-app/tests/planMutations.test.tsx`): × calls
+  `removeFromPlan` with the track id, never `putPlan`. Plus the five existing
+  PUT tests in `test_api.py`, which gain an `expected_revision` (step 3).
 
 ## Verification plan
 
-1. From this worktree (it has no `.venv`; use the main checkout's):
-   `PYTHONPATH=$PWD/src /Users/arya/git/dance/.venv/bin/python -m pytest -q tests/test_set_plan_ops.py tests/test_api.py -k plan`.
-   Include the fail-first check on the race test.
-2. Re-run the scratch race against the real endpoints, with the prototype routes
-   swapped out. Expect `append lost 0` over 100 trials, against 47–69 (63 in
-   the fact-check re-run) today.
-3. Browser check against a scratch backend: point `DANCE_API_TARGET` at it
-   (`vite.config.ts:7`). With the Set view open, `curl` an append and confirm
-   it shows up in the grid within 5 s. Then click × on a different pick and
-   confirm the curled pick survives. Repeat once on the real active set.
-4. In `companion-app/` (after `npm ci`; the worktree has no `node_modules`):
-   `npx tsc -p tsconfig.json && npx vitest run`.
+1. Run the new and the old plan tests, then the whole suite:
+   `PYTHONPATH=$PWD/src /Users/arya/git/dance/.venv/bin/python -m pytest -q tests/test_set_plan_revision.py`,
+   then the same with `tests/test_api.py -k plan`, then the full suite. (The
+   worktree has no `.venv` of its own.)
+   In `companion-app/`, run `npm ci` first (the worktree has no
+   `node_modules`), then `npx tsc -p tsconfig.json && npx vitest run`.
+2. Re-run the scratch probe against the real routes (`/plan/remove`, and the
+   guarded `/plan`). Expected:
+   - [1] the stale PUT gets 409 and track 4 survives;
+   - [2] two removes give `[3]`;
+   - [3] 0/100 lost on the remove-op row.
+3. Real UI, throwaway backend. Serve with a serve-only copy of the probe's
+   setup (stub bridge, scratch `HOME`, port 8765). The probe itself runs its
+   scenarios and exits, so this copy still has to be written. Don't use
+   `uvicorn dance.api:create_app`: it reads `~/.dance/.env` and binds the OSC
+   listen port (UDP 11001, `bridge.py:106`, `osc/client.py:23`) that the real
+   backend holds. Then run `DANCE_API_TARGET=http://127.0.0.1:8765
+   PORT=5174 npx vite` and open the Set view in two windows.
+   1. `curl -X POST …/plan/append` a pick. Within 5 s it shows in both windows.
+   2. Click × on a different pick in window 1. The curl pick survives.
+   3. Double-click × across two picks. Both go.
+   4. `curl -X PUT` with an old revision → 409.
+
+## Not in scope
+
+- Per-pick provenance ("Claude added this") needs a plan-shape change. That is
+  its own proposal (dance-mcp decision 6).
+- Multi-worker uvicorn. `_PLAN_WRITE_LOCK` is per process (`sets.py:57-59`).
+  A′'s check happens under that lock, so it inherits the same limit.
+
+## Prior art
+
+[gakonst/djbooth](https://github.com/gakonst/djbooth) (`apps/djbooth`, read
+at `452c46f`; that app is MIT per its own `LICENSE` and `package.json`, while
+the repo root's `package.json` says `UNLICENSED`; shape only, no code taken)
+edits playlists with ops: `add-track` by content id, then `remove-track` and
+`move-track` keyed by a stable membership id
+(`src/shared/types.ts:260-267`). Its one whole-list op carries an
+`expectedMembershipIds` precondition (`:268-273`, checked at
+`src/server/library.ts:1325-1332`) and maps a mismatch to HTTP 409
+(`src/server/server.ts:1254-1255`). That is C plus A′.
