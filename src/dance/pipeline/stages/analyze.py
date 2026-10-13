@@ -193,9 +193,10 @@ class AnalysisStage:
         """
         Detect BPM with a confidence in [0, 1].
 
-        Essentia's multifeature tracker first (its 0..5.32 confidence is
-        normalised), with a robust beat-grid fit on librosa beats as the
-        fallback. Half/double time is folded by ``normalize_bpm``. See
+        Essentia's multifeature tracker first (confidence: its 0..5.32
+        value normalised, raised to the share of ticks on the fitted beat
+        grid when that grid confirms the tempo), with a robust beat-grid fit
+        on librosa beats as the fallback. Half/double time is folded by ``normalize_bpm``. See
         :func:`dance.pipeline.utils.tempo.estimate_bpm`.
         """
         return estimate_bpm(audio, sr)

@@ -79,13 +79,15 @@ dance reprocess --from analyze_stems -t 12 -t 40     # specific tracks
 
 `--from` takes a stage name: `analyze`, `separate`, `analyze_stems`, `detect_regions`, `embed`. Exactly one of `--all` / `--track-id` is required.
 
+`--from separate` does **not** re-run Demucs on a track whose four stems are still on disk: `separate` keeps existing stems, so for those tracks it only re-runs the stages after it. The plan says how many selected tracks that applies to. To redo a bad separation, delete that track's stem files first.
+
 What it does (logic in `src/dance/pipeline/reprocess.py`):
 
 1. Selects tracks whose state is **at or after** the stage's `input_state` (pipeline order = `TrackState` declaration order). Tracks still upstream are left alone — rewinding them "back" to a later stage would skip work they never had. Lowest ids first, capped by `--limit`.
 2. Leaves out tracks with `duplicate_of` set unless `--include-duplicates`, and tracks in `error` unless `--include-errors` (their failure point isn't recorded in their state).
 3. `--dry-run` prints the selection and the skip reasons, then exits without touching anything.
-4. Otherwise rewinds the selection to the stage's `input_state` (clearing `error_message` and the heal-ledger entry), then runs the normal parallel dispatcher — the same path as `dance process` (no library scan). `separate` short-circuits when all four stems are already on disk, so `--from analyze` does not re-run Demucs. The dispatcher is re-run while passes still make progress, so a single command carries the selection back to `complete`.
-5. `--skip-embeddings` auto-advances `embed` instead of re-running CLAP. Embeddings depend only on the audio, so this is safe after an analysis fix.
+4. Otherwise rewinds the selection to the stage's `input_state` (clearing `error_message` and the heal-ledger entry), then runs the normal parallel dispatcher — the same path as `dance process` (no library scan) — scoped to the selection: tracks it didn't select (new downloads in `pending`, tracks parked mid-pipeline) are neither processed nor auto-advanced, and wait for the next `dance process`. `separate` short-circuits when all four stems are already on disk, so `--from analyze` does not re-run Demucs. The dispatcher is re-run while passes still make progress, so a single command carries the selection back to `complete`.
+5. `--skip-embeddings` auto-advances `embed` instead of re-running CLAP — for the selected tracks only. Embeddings depend only on the audio, so this is safe after an analysis fix.
 
 Afterwards run `dance build-graph` (tempo / harmonic edges use BPM and key) and `dance export-als --all` (Live Sets carry the tempo and warp markers).
 

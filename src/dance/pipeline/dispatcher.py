@@ -26,11 +26,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Optional
 
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from dance.config import Settings
 from dance.core.database import Track, TrackState
@@ -63,6 +64,21 @@ _GPU_SEMAPHORE = GPU_SEMAPHORE
 # that ``dance process`` exits in reasonable time when truly done.
 _IDLE_GRACE_S = 30.0
 _POLL_INTERVAL_S = 0.5
+
+
+#: What a run can be restricted to: one track id, a collection of ids (how
+#: ``dance reprocess`` keeps a run to exactly the tracks it rewound), or
+#: ``None`` for every track. Startup orphan healing ignores the scope — it
+#: repairs what a crashed run left behind; it never advances a track.
+TrackScope = int | Collection[int] | None
+
+
+def _scope_clause(scope: int | Collection[int]) -> ColumnElement[bool]:
+    """SQL filter for a non-``None`` :data:`TrackScope`. An empty collection
+    matches nothing."""
+    if isinstance(scope, int):
+        return Track.id == scope
+    return Track.id.in_(sorted({int(t) for t in scope}))
 
 
 class Dispatcher:
@@ -199,14 +215,15 @@ class Dispatcher:
         self,
         limit: int | None = None,
         skip: Iterable[str] | None = None,
-        track_id: int | None = None,
+        track_id: TrackScope = None,
     ) -> dict[str, dict[str, int]]:
         """Drain every registered stage's queue.
 
         Args:
             limit: Max tracks per stage per pass (sequential mode only).
             skip: Stage names to skip (auto-advances their state).
-            track_id: Restrict to a single track.
+            track_id: Restrict to one track id, or to a collection of ids
+                (skipped stages auto-advance only those tracks too).
 
         Returns:
             Dict of stage_name -> {processed, errors, skipped}.
@@ -233,7 +250,7 @@ class Dispatcher:
         self,
         limit: int | None,
         skip: Iterable[str] | None,
-        track_id: int | None,
+        track_id: TrackScope,
     ) -> dict[str, dict[str, int]]:
         assert self.session is not None
         skip_set = {s for s in (skip or []) if s}
@@ -269,19 +286,19 @@ class Dispatcher:
         return totals
 
     def _pending_query_seq(
-        self, stage: Stage, track_id: int | None, limit: int | None
+        self, stage: Stage, track_id: TrackScope, limit: int | None
     ):
         q = self.session.query(Track).filter(
             Track.state == stage.input_state.value, not_placeholder()
         )
         if track_id is not None:
-            q = q.filter(Track.id == track_id)
+            q = q.filter(_scope_clause(track_id))
         if limit is not None:
             q = q.limit(limit)
         return q
 
     def _run_stage_seq(
-        self, stage: Stage, track_id: int | None, limit: int | None
+        self, stage: Stage, track_id: TrackScope, limit: int | None
     ) -> tuple[int, int]:
         tracks = self._pending_query_seq(stage, track_id, limit).all()
         processed = 0
@@ -320,7 +337,7 @@ class Dispatcher:
         return processed, errors
 
     def _auto_advance_seq(
-        self, stage: Stage, track_id: int | None, limit: int | None
+        self, stage: Stage, track_id: TrackScope, limit: int | None
     ) -> int:
         tracks = self._pending_query_seq(stage, track_id, limit).all()
         for track in tracks:
@@ -336,7 +353,7 @@ class Dispatcher:
     def _run_parallel(
         self,
         skip: Iterable[str] | None,
-        track_id: int | None,
+        track_id: TrackScope,
     ) -> dict[str, dict[str, int]]:
         assert self.session_factory is not None
         skip_set = {s for s in (skip or []) if s}
@@ -425,7 +442,7 @@ class Dispatcher:
         totals: dict[str, dict[str, int]],
         totals_lock: threading.Lock,
         stop_event: threading.Event,
-        track_id: int | None,
+        track_id: TrackScope,
     ) -> None:
         """One worker. Claims tracks, processes them, repeats until idle."""
         assert self.session_factory is not None
@@ -502,7 +519,7 @@ class Dispatcher:
         self,
         stage: Stage,
         session: Session,
-        track_id: int | None = None,
+        track_id: TrackScope = None,
     ) -> Track | None:
         """Atomically pick a track in ``input_state`` and flip it to
         ``inflight_state``. Returns the (now-claimed) Track row, or None
@@ -522,7 +539,7 @@ class Dispatcher:
             Track.state == stage.input_state.value, not_placeholder()
         )
         if track_id is not None:
-            q = q.filter(Track.id == track_id)
+            q = q.filter(_scope_clause(track_id))
         candidate = q.order_by(Track.id).first()
         if candidate is None:
             return None
@@ -640,13 +657,13 @@ class Dispatcher:
         return healed
 
     def _auto_advance_par(
-        self, stage: Stage, session: Session, track_id: int | None
+        self, stage: Stage, session: Session, track_id: TrackScope
     ) -> None:
         q = session.query(Track).filter(
             Track.state == stage.input_state.value, not_placeholder()
         )
         if track_id is not None:
-            q = q.filter(Track.id == track_id)
+            q = q.filter(_scope_clause(track_id))
         tracks = q.all()
         for t in tracks:
             t.state = stage.output_state.value

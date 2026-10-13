@@ -10,6 +10,8 @@ Two jobs:
   from librosa's own ``tempo`` value, which is quantised to onset-envelope lag
   bins (at 44.1 kHz / hop 512 the only values near 124 BPM are 123.05 and
   126.05, so every track in that neighbourhood collapsed onto two numbers).
+  Its confidence is the larger of Essentia's normalised confidence and the
+  share of ticks on the fitted grid (see :func:`_essentia_bpm`).
 
 - :func:`tempo_coherence` — how strongly one stem's rhythm sits on the
   track's beat grid, in ``[0, 1]``. Stems are sample-aligned with the mix, so
@@ -63,8 +65,8 @@ ESSENTIA_SAMPLE_RATE = 44100
 
 #: Ceiling for the librosa fallback's confidence. The fallback is precise when
 #: the beat tracker is (the fit removes lag quantisation) but it is a single
-#: onset function with no agreement check, so it never claims more than
-#: Essentia's "good" band (~0.28-0.66 after normalisation).
+#: onset function with no agreement check, so it is capped well below what
+#: the Essentia path gave three real house tracks (0.56-0.85).
 LIBROSA_FIT_MAX_CONFIDENCE = 0.4
 
 #: Confidence for the last-resort path: librosa's quantised global tempo,
@@ -272,6 +274,7 @@ def _essentia_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:
         )
     extractor = es.RhythmExtractor2013(method="multifeature")
     bpm, ticks, confidence, _estimates, _intervals = extractor(signal)
+    bpm_confidence = essentia_confidence(confidence)
     bpm = float(bpm)
     if not np.isfinite(bpm) or not _PLAUSIBLE_BPM[0] <= bpm <= _PLAUSIBLE_BPM[1]:
         raise RuntimeError(f"essentia returned an implausible tempo (bpm={bpm})")
@@ -289,9 +292,18 @@ def _essentia_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:
             100 * fit.inlier_ratio,
         )
         bpm = fit.bpm
+        # Essentia's confidence grades how well its five beat trackers agree
+        # tick by tick (breakdowns and fills pull it down), not whether the
+        # tempo is right: real tracks whose fitted BPM is exact to 0.002 get
+        # 0.2-0.5 from it. The share of ticks sitting on one constant grid at
+        # this tempo is direct evidence for the BPM itself, and the fit is
+        # only accepted when it is >= 35 % (~3x chance) and agrees with
+        # Essentia within 1 %. The recommender multiplies BPM scores by this
+        # value, so an exact BPM shouldn't read as a shaky one.
+        bpm_confidence = max(bpm_confidence, fit.inlier_ratio)
     else:
         logger.debug("essentia bpm %.4f kept; tick-grid fit rejected: %s", bpm, fit)
-    return normalize_bpm(bpm), essentia_confidence(confidence)
+    return normalize_bpm(bpm), float(bpm_confidence)
 
 
 def _librosa_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:

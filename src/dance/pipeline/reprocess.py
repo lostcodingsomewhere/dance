@@ -23,7 +23,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from dance.core.database import Track, TrackState
+from dance.core.database import StemFile, Track, TrackState
 from dance.pipeline.stage import Stage
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,8 @@ class ReprocessPlan:
     selected: list[ReprocessRow] = field(default_factory=list)
     #: reason -> tracks left untouched for that reason
     skipped: dict[str, list[ReprocessRow]] = field(default_factory=dict)
+    #: Caveats the operator should see before running (printed by the CLI).
+    notes: list[str] = field(default_factory=list)
 
     @property
     def track_ids(self) -> list[int]:
@@ -71,6 +73,10 @@ SKIP_DUPLICATE = "duplicate_of set (use --include-duplicates)"
 SKIP_ERROR = "in error (use --include-errors)"
 SKIP_LIMIT = "over --limit"
 SKIP_MISSING = "no such track"
+
+#: Stems a track needs on disk for ``separate`` to skip Demucs
+#: (``StemSeparationStage.process``'s idempotency check).
+_STEMS_PER_TRACK = 4
 
 
 def find_stage(stages: Sequence[Stage], name: str) -> Stage:
@@ -133,7 +139,35 @@ def plan_reprocess(
             plan.skip(SKIP_LIMIT, row)
             continue
         plan.selected.append(row)
+
+    if stage.name == "separate":
+        kept = tracks_with_stems_on_disk(session, plan.track_ids)
+        if kept:
+            plan.notes.append(
+                f"{len(kept)} of {len(plan.selected)} selected track(s) already have all "
+                f"{_STEMS_PER_TRACK} stems on disk. `separate` keeps existing stems and does "
+                "not re-run Demucs for them, so for those tracks this only re-runs the stages "
+                "after it. To re-separate a track, delete its stem files first."
+            )
     return plan
+
+
+def tracks_with_stems_on_disk(session: Session, track_ids: Iterable[int]) -> list[int]:
+    """Ids among ``track_ids`` whose four stems all exist on disk — the
+    tracks ``separate`` would short-circuit instead of running Demucs."""
+    ids = sorted({int(t) for t in track_ids})
+    if not ids:
+        return []
+    paths: dict[int, list[str]] = {}
+    for tid, path in session.query(StemFile.track_id, StemFile.path).filter(
+        StemFile.track_id.in_(ids)
+    ):
+        paths.setdefault(int(tid), []).append(str(path))
+    return [
+        tid
+        for tid in ids
+        if len(paths.get(tid, ())) == _STEMS_PER_TRACK and all(Path(p).exists() for p in paths[tid])
+    ]
 
 
 def apply_reprocess(session: Session, plan: ReprocessPlan, *, data_dir: Path | None = None) -> int:
@@ -185,7 +219,13 @@ def run_until_settled(
     *,
     skip: Iterable[str] | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Run the dispatcher until every rewound track is complete/error.
+    """Run the dispatcher on exactly ``track_ids`` until each is complete/error.
+
+    Every pass is scoped to the selection (``Dispatcher.run(track_id=<ids>)``),
+    so tracks the reprocess didn't select — new downloads waiting in
+    ``pending``, tracks parked in ``regions_detected``, anything a crashed run
+    left mid-stage — are neither processed nor auto-advanced past a skipped
+    stage. They stay where they are for the next ``dance process``.
 
     One parallel ``Dispatcher.run`` pass can end with tracks still
     mid-pipeline: a downstream stage's workers give up after an idle grace
@@ -194,31 +234,82 @@ def run_until_settled(
     leaves that to a manual re-run; here we re-run while passes still make
     progress, bounded by the number of stages (every pass advances each
     unsettled track by at least one stage, since it starts in some stage's
-    input state). Returns per-stage totals across passes.
+    input state). Selected tracks waiting at a skipped stage are advanced
+    past it here, before and after every pass (the dispatcher does it only
+    at the start of a pass, and doesn't count it). Returns per-stage totals
+    across passes.
     """
+    scope = frozenset(int(t) for t in track_ids)
+    if not scope:
+        return {}
     skip_set = set(skip or ())
-    only = track_ids[0] if len(track_ids) == 1 else None
     totals: dict[str, dict[str, int]] = {}
-    for _ in range(len(dispatcher.stages) + 1):
-        result = dispatcher.run(skip=skip_set, track_id=only)
-        moved = 0
-        for name, counts in result.items():
-            agg = totals.setdefault(name, {"processed": 0, "errors": 0, "skipped": 0})
-            for key, value in counts.items():
-                agg[key] = agg.get(key, 0) + int(value)
-                moved += int(value)
+
+    def _tally(name: str, key: str, value: int) -> None:
+        agg = totals.setdefault(name, {"processed": 0, "errors": 0, "skipped": 0})
+        agg[key] = agg.get(key, 0) + int(value)
+
+    def _settle_skipped() -> tuple[int, int]:
+        """Advance the selection past skipped stages (counted here — the
+        dispatcher's own parallel auto-advance isn't). Returns
+        ``(advanced, still_unsettled)``."""
         session = (
             dispatcher.session if dispatcher.session is not None else dispatcher.session_factory()
         )
         try:
-            remaining = unsettled_count(session, track_ids)
+            advanced = advance_skipped(session, dispatcher.stages, skip_set, scope)
+            for name, n in advanced.items():
+                _tally(name, "skipped", n)
+            return sum(advanced.values()), unsettled_count(session, scope)
         finally:
             if dispatcher.session is None:
                 session.close()
+
+    _, remaining = _settle_skipped()
+    for _ in range(len(dispatcher.stages) + 1):
+        if not remaining:
+            break
+        result = dispatcher.run(skip=skip_set, track_id=scope)
+        moved = 0
+        for name, counts in result.items():
+            for key, value in counts.items():
+                _tally(name, key, value)
+                moved += int(value)
+        advanced, remaining = _settle_skipped()
+        moved += advanced
         if not moved or not remaining:
             break
         logger.info("Reprocess: %d track(s) still mid-pipeline; running another pass", remaining)
     return totals
+
+
+def advance_skipped(
+    session: Session,
+    stages: Sequence[Stage],
+    skip: Iterable[str],
+    track_ids: Iterable[int],
+) -> dict[str, int]:
+    """Move ``track_ids`` waiting at a skipped stage straight to its output
+    state — and only those ids. Stages are walked in pipeline order, so
+    consecutive skipped stages chain. Returns ``{stage_name: n_advanced}``."""
+    ids = sorted({int(t) for t in track_ids})
+    skip_set = set(skip)
+    out: dict[str, int] = {}
+    if not ids or not skip_set:
+        return out
+    for stage in stages:
+        if stage.name not in skip_set:
+            continue
+        n = (
+            session.query(Track)
+            .filter(Track.id.in_(ids), Track.state == stage.input_state.value)
+            .update({Track.state: stage.output_state.value}, synchronize_session=False)
+        )
+        if n:
+            out[stage.name] = int(n)
+    if out:
+        session.commit()
+    return out
 
 
 def inflight_states(stages: Sequence[Stage]) -> set[str]:
