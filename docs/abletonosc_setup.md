@@ -27,6 +27,8 @@ Live will load AbletonOSC. The default ports are:
 
 ## Verifying
 
+`dance doctor` reads the installed Remote Script without touching it. It reports the upstream commit and lists every OSC address dance sends that has no handler (static scan), each paired with the patch section below that fixes it. It can't see what Live has actually loaded, so after any patch, fully quit and reopen Live. The installed commit and patch state are recorded in [`live-compat.md`](live-compat.md).
+
 With AbletonOSC loaded, run the dance backend (Phase 2.2) and check the logs for an `OSC listener bound on 127.0.0.1:11001` line. From the Python REPL:
 
 ```python

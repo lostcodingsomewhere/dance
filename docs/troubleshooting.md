@@ -1,13 +1,15 @@
 # Troubleshooting
 
-Friction points you'll hit, in roughly the order you'll hit them.
+Friction points you'll hit, in roughly the order you'll hit them. Start with `dance doctor` — a read-only check of DB migrations, ffmpeg, Live installs, AbletonOSC patches, model weights and the backend, each with a fix hint ([`cli.md`](cli.md#dance-doctor)).
 
 ## Model weights download on first run
 
 The first time you run `dance process`, two model archives stream from Hugging Face / torch.hub:
 
-- **Demucs** (`htdemucs_ft`, the `dance.config.Settings.demucs_model` default) — ~80 MB. Cached under `~/.cache/torch/hub/checkpoints/`.
-- **CLAP** (`laion/clap-htsat-unfused`) — ~500 MB. Cached under `~/.cache/huggingface/hub/`.
+- **Demucs** (`htdemucs_ft`, the `dance.config.Settings.demucs_model` default) — a bag of 4 specialist models, one checkpoint each, ~84 MB apiece (~337 MB total). Cached under `~/.cache/torch/hub/checkpoints/`.
+- **CLAP** (`laion/clap-htsat-unfused`) — ~615 MB. Cached under `~/.cache/huggingface/hub/`.
+
+`dance doctor` reports whether both are already cached (presence only — it never downloads).
 
 On a slow connection the first track can take 5-10 minutes before any audio work happens. The log line `Loading CLAP model laion/clap-htsat-unfused on ...` (or `Loading Demucs model ...`) appears once per process — if those lines hang, the download is stuck. Bandwidth-limit your terminal, retry, or set `HF_HUB_OFFLINE=1` after a manual fetch.
 
@@ -210,6 +212,8 @@ gunzip -c "~/Music/Dance/Sets/Title - Artist.als" | grep -E '<Path Value=' | hea
 
 If Live fails to load the Set (not "missing media" but a hard parse error), `src/dance/als/writer.py` is mis-injecting into the template (`src/dance/als/templates/blank_live12.xml`).
 
+First rule out the wrong Live: Lite 12.0.2 and Standard 12.4 share a bundle id, so `open x.als` may have launched Lite, which is older than the template. Open it with `open -a "Ableton Live 12 Standard" x.als`; `dance doctor` lists every install.
+
 What to do:
 
 1. Capture the exact Live error — Live 12 typically gives a line and column in the decompressed XML.
@@ -225,6 +229,7 @@ What to do:
    ```bash
    gunzip -c ~/Desktop/Untitled.als > src/dance/als/templates/blank_live12.xml
    ```
+   Then copy the new root attributes into `ABLETON_ROOT_ATTRS` in `writer.py` (`test_writer_emits_root_ableton_with_known_attrs` checks them) and add the new template SHA-256 + Live build to [`live-compat.md`](live-compat.md).
 
 Tests (`tests/test_als_generator.py`) only validate well-formedness and shape — they cannot assert "Live will accept this." Only Live can.
 

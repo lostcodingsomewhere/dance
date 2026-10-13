@@ -16,6 +16,7 @@ The repo has three pieces:
 - [docs/api.md](docs/api.md) — REST + WebSocket reference (auto-generated `/docs` at runtime)
 - [docs/tagging.md](docs/tagging.md) — CLAP zero-shot vs Qwen2-Audio, vocabulary, tuning
 - [docs/als-export.md](docs/als-export.md) — generated Live Set contents, color palette, limitations
+- [docs/live-compat.md](docs/live-compat.md) — pinned Live build / template hash / AbletonOSC commit, and which `.als` features were verified in real Live
 - [docs/abletonosc_setup.md](docs/abletonosc_setup.md) — installing AbletonOSC + what works / doesn't
 - [docs/troubleshooting.md](docs/troubleshooting.md) — MPS quirks, OSC firewall, spotDL auth, Live errors
 - [docs/dev.md](docs/dev.md) — adding stages, endpoints, migrations; pre-commit hygiene
