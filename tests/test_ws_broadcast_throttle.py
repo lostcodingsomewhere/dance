@@ -384,7 +384,7 @@ def test_latest_broadcast_reaches_every_connection() -> None:
         for s in socks:
             manager.connections.add(s)  # type: ignore[arg-type]
         for i in range(100):
-            manager.broadcast_latest_threadsafe({"beat": i})
+            manager.broadcast_latest_threadsafe(lambda i=i: {"beat": i})
         for _ in range(200):
             if all(s.sent and s.sent[-1]["beat"] == 99 for s in socks):
                 break
@@ -394,3 +394,35 @@ def test_latest_broadcast_reaches_every_connection() -> None:
     for s in socks:
         assert s.sent[-1] == {"beat": 99}
         assert len(s.sent) <= 2  # leading {beat: 0} + trailing {beat: 99}
+
+
+def test_latest_broadcast_snapshots_at_send_time() -> None:
+    """The OSC server handles each datagram on its own thread, so two
+    handlers can mutate-then-submit in either order. Taking the snapshot at
+    send time means a submit that lost that race can't ship a stale state."""
+    sock = _RecordingSocket()
+    live = {"beat": 0}
+    calls = 0
+
+    def snapshot() -> dict:
+        nonlocal calls
+        calls += 1
+        return dict(live)
+
+    async def main() -> None:
+        manager = WSManager()
+        manager.loop = asyncio.get_running_loop()
+        manager.broadcast_latest_threadsafe(snapshot)  # nobody connected yet
+        await asyncio.sleep(0.05)
+        assert calls == 0  # no clients: no snapshot, no serialization
+
+        manager.connections.add(sock)  # type: ignore[arg-type]
+        manager.broadcast_latest_threadsafe(snapshot)
+        live["beat"] = 42  # mutated after the submit, before the send
+        for _ in range(100):
+            if sock.sent:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(main())
+    assert sock.sent == [{"beat": 42}]

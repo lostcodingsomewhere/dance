@@ -78,10 +78,11 @@ def create_app(
         pipeline_ws_manager.loop = loop
 
         def _on_state(state: AbletonState) -> None:
-            # Coalesced to <= ~30 Hz (trailing edge kept): the bridge fires
-            # this per OSC message, hundreds of times a second mid-set. The
-            # snapshot is still taken on the calling thread, as before.
-            ws_manager.broadcast_latest_threadsafe(state.to_dict())
+            # Coalesced to <= ~30 Hz: the bridge fires this per OSC message,
+            # hundreds of times a second mid-set. ``to_dict`` is passed, not
+            # called — the snapshot is taken at send time, so the newest
+            # state is what goes out (and the final one always does).
+            ws_manager.broadcast_latest_threadsafe(state.to_dict)
 
         bridge.subscribe(_on_state)
         if own_bridge:

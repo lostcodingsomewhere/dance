@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -42,8 +43,8 @@ class WSManager:
         self.loop: asyncio.AbstractEventLoop | None = None
         # Coalesces ``broadcast_latest_threadsafe`` (AbletonState pushes) to
         # ``state_max_hz``; see ``dance.api.broadcast_throttle``.
-        self._latest_throttle: LatestValueThrottle[dict] = LatestValueThrottle(
-            self._send_to_all, max_hz=state_max_hz
+        self._latest_throttle: LatestValueThrottle[Callable[[], dict]] = LatestValueThrottle(
+            self._send_snapshot_to_all, max_hz=state_max_hz
         )
         # Strong refs to in-flight send tasks — the loop only keeps weak ones.
         self._send_tasks: set[asyncio.Task[None]] = set()
@@ -70,21 +71,27 @@ class WSManager:
         for ws in list(self.connections):
             asyncio.run_coroutine_threadsafe(self._send_one(ws, payload), loop)
 
-    def broadcast_latest_threadsafe(self, payload: dict) -> None:
-        """Coalescing broadcast from a non-asyncio thread.
+    def broadcast_latest_threadsafe(self, snapshot: Callable[[], dict]) -> None:
+        """Coalescing broadcast of "the state changed", from any thread.
 
         For snapshot streams where only the newest payload matters (the full
         AbletonState): bursts collapse to at most ``state_max_hz`` sends a
-        second, and the last payload of a burst is always delivered. Not for
-        event streams like job updates — an intermediate payload is dropped.
+        second. ``snapshot`` is called on the event loop at SEND time, so
+        what goes out is the state as of the send — never an older snapshot
+        that lost a race between OSC handler threads — and the state after
+        the last change of a burst is always delivered. Not for event streams
+        like job updates, where every payload is distinct.
         """
         loop = self.loop
         if loop is None or loop.is_closed():
             return
-        self._latest_throttle.submit_threadsafe(payload, loop)
+        self._latest_throttle.submit_threadsafe(snapshot, loop)
 
-    def _send_to_all(self, payload: dict) -> None:
+    def _send_snapshot_to_all(self, snapshot: Callable[[], dict]) -> None:
         # Runs on the event loop (the throttle's flush), so schedule directly.
+        if not self.connections:
+            return
+        payload = snapshot()
         for ws in list(self.connections):
             task = asyncio.ensure_future(self._send_one(ws, payload))
             self._send_tasks.add(task)
