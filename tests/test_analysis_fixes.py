@@ -74,6 +74,27 @@ LIBROSA_LAG_BINS = (
 
 TEMPO_LOGGER = "dance.pipeline.utils.tempo"
 
+_CAPLOG_LOGGERS = (
+    TEMPO_LOGGER,
+    "dance.pipeline.utils.camelot",
+    "dance.pipeline.stages.analyze",
+    "dance.pipeline.stages.analyze_stems",
+)
+
+
+@pytest.fixture(autouse=True)
+def _our_loggers_enabled():
+    """alembic's env.py calls ``logging.config.fileConfig``, which disables
+    every logger that already exists — ours included when test_alembic runs
+    earlier in the session. These tests assert on warnings via caplog, so
+    re-enable the loggers they read (and restore afterwards)."""
+    saved = {name: logging.getLogger(name).disabled for name in _CAPLOG_LOGGERS}
+    for name in _CAPLOG_LOGGERS:
+        logging.getLogger(name).disabled = False
+    yield
+    for name, disabled in saved.items():
+        logging.getLogger(name).disabled = disabled
+
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
