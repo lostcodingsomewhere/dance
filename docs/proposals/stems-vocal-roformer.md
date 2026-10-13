@@ -43,7 +43,9 @@ MSST tables on MVSEP's Multisong set ([pretrained_models.md](https://github.com/
 | Mel-RoFormer, Kim (vocals only) | | | | **10.98** | |
 | BS-RoFormer, viperx (vocals only) | | | | 10.87 | |
 
-¹ This is the mean of the four rows. MSST lists no 4-stem average for the fine-tuned bag.
+¹ This is the mean of the four rows. MSST lists no 4-stem average for the fine-tuned bag. Its
+single-stem table does not name a dataset for the drums, bass and other rows. They line up with
+plain htdemucs's Multisong row (10.88 / 11.76 / 5.74 / 8.24), so I read them as Multisong.
 
 djbooth uses **MelBandRoformer4StemFTLarge**. Its [model card](https://huggingface.co/SYH99999/MelBandRoformer4StemFTLarge)
 reports MUSDB18 test drums 10.43, bass **7.74**, other 7.10, vocals 10.70, avg 8.99. The card does
