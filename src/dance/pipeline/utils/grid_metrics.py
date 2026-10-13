@@ -19,14 +19,18 @@ method follows djbooth's analyzer differential:
    baseline. The discipline is djbooth's: a grid change ships only if no
    track regresses. Every worsened metric past its tolerance is a
    regression, with ONE narrow waiver: on a track that already failed, when
-   the beats table's own tempo got measurably better in the same run
-   (:data:`TEMPO_FIX_METRICS` improved past tolerance), its F1, timing error
+   the beats table's own grid-tempo error shrank past its tolerance and by
+   at least a fifth in the same run (:data:`TEMPO_FIX_METRICS`,
+   :data:`TEMPO_FIX_MIN_RELATIVE`), its F1, timing error
    and bar phase are reported as warnings instead — once a grid slips more
    than half a beat those numbers swing with where the phase sawtooth
    lands, so a 0.5 % -> 0.1 % tempo fix can lower F1. Tempo error, drift
    and coverage (:data:`FAILING_TRACK_GATED`) are never waived. Without a
    tempo change there is no sawtooth argument, so a phase shift or a broken
-   downbeat detector on a failing track still fails the gate. Pass
+   downbeat detector on a failing track still fails the gate — except on a
+   grid with a perfectly uniform tempo error, whose wrapped error is a full
+   sawtooth that a constant shift barely moves (real beat grids slip in
+   steps, and there a shift is caught). Pass
    ``failing_track_gated=STRICT_GATED`` (``grid_diff --strict``) to waive
    nothing.
 
@@ -106,11 +110,14 @@ FAILING_TRACK_GATED: frozenset[str] = frozenset(
         "reference_coverage",
     }
 )
-# The beats table's own tempo, seen two ways. The waiver above applies only
-# when one of these improved by more than its tolerance in the same run —
-# the only case in which the phase sawtooth moves. Both describe the BEATS
-# (not audio_analysis.bpm), because F1 / timing depend on the beats alone.
-TEMPO_FIX_METRICS: tuple[str, ...] = ("abs_grid_bpm_error_pct", "abs_drift_ms_per_100_beats")
+# What counts as a tempo fix for the waiver above: the BEATS' own grid tempo
+# error (not audio_analysis.bpm — F1 / timing depend on the beats alone) must
+# shrink by more than its tolerance AND by at least TEMPO_FIX_MIN_RELATIVE.
+# Drift is deliberately not a trigger: its 2 ms/100-beat tolerance is ~0.004 %
+# tempo at 125 BPM, so a nudge far too small to move the sawtooth would
+# otherwise waive a 100+ ms phase regression.
+TEMPO_FIX_METRICS: tuple[str, ...] = ("abs_grid_bpm_error_pct",)
+TEMPO_FIX_MIN_RELATIVE = 0.20
 # Waive nothing: every track is held to every metric (``grid_diff --strict``).
 STRICT_GATED: frozenset[str] = frozenset(REGRESSION_TOLERANCES)
 # Metrics where a bigger number is better. Everything else: smaller is better.
@@ -732,17 +739,19 @@ def _tempo_fix(
 ) -> str | None:
     """Why the sawtooth waiver applies to this track, or None.
 
-    It applies when the beats table's own tempo got better by more than its
-    tolerance (:data:`TEMPO_FIX_METRICS`) — then F1 / timing / bar phase of a
-    grid that is already off move with the phase sawtooth, not with quality.
+    It applies when the beats table's own grid tempo error shrank by more than
+    its tolerance and by at least :data:`TEMPO_FIX_MIN_RELATIVE` — then F1 /
+    timing / bar phase of a grid that is already off move with the phase
+    sawtooth, not with quality.
     """
     for metric in TEMPO_FIX_METRICS:
         b, c = base_m.get(metric), cur_m.get(metric)
         if b is None or c is None:
             continue
+        b, c = float(b), float(c)
         tol = tolerances.get(metric, 0.0)
-        if _worse(metric, float(c), float(b), tol):  # base is worse than current
-            return f"{metric} improved {float(b):.4g} -> {float(c):.4g}"
+        if b - c > tol and c <= b * (1.0 - TEMPO_FIX_MIN_RELATIVE):
+            return f"{metric} improved {b:.4g} -> {c:.4g}"
     return None
 
 
@@ -889,6 +898,7 @@ __all__ = [
     "ReferenceGrid",
     "Regression",
     "STRICT_GATED",
+    "TEMPO_FIX_MIN_RELATIVE",
     "TEMPO_FIX_METRICS",
     "WarpMarker",
     "align_beats",

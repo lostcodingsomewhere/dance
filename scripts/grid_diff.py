@@ -64,8 +64,8 @@ THE GATE
     warning). Ship a grid change only on exit 0.
 
     One waiver: a track that already FAILED and whose beats-table tempo got
-    better in the same run (grid-BPM error or drift improved past
-    tolerance). Its F1 / timing / bar-phase / downbeat changes are printed
+    better in the same run (grid-BPM error shrank past tolerance AND by at
+    least a fifth; drift alone never triggers it). Its F1 / timing / bar-phase / downbeat changes are printed
     as warnings — once a grid slips more than half a beat those swing with
     where the phase sawtooth lands, so a real tempo fix can lower them. Its
     tempo error, drift and coverage are still gated. With no tempo change
@@ -73,10 +73,11 @@ THE GATE
     --strict drops the waiver (expect it to reject tempo fixes on tracks
     that are still off by more than half a beat).
 
-The DB is opened read-only and never created: ``--db`` takes a path
-(opened as ``file:<path>?mode=ro&immutable=1``) or a ``file:`` URI (``mode``
-is forced to ``ro``). Default: ``~/.dance/dance.db``. Immutable reads
-ignore an un-checkpointed WAL, so stop the pipeline before measuring.
+The DB is opened read-only and never created: ``--db`` takes a path or a
+``file:`` URI (``mode`` is forced to ``ro``). Default: ``~/.dance/dance.db``.
+A path is opened ``immutable=1`` when its WAL is empty, and plain ``mode=ro``
+(which reads through the WAL) when another process holds un-checkpointed
+commits — so a running backend can't make the gate measure stale beats.
 
 Exit codes: 0 ok · 1 regression (or nothing to compare against the baseline)
 · 2 usage / input error.
@@ -129,7 +130,8 @@ class DbPathError(ValueError):
 def db_uri(arg: str | None) -> str:
     """Normalise ``--db`` to a read-only SQLite URI for an EXISTING file.
 
-    A plain path becomes ``file:<abs path>?mode=ro&immutable=1``. A ``file:``
+    A plain path becomes ``file:<abs path>?mode=ro`` plus ``&immutable=1``
+    unless its ``-wal`` file holds un-checkpointed commits. A ``file:``
     URI keeps its other parameters but always gets ``mode=ro``. Without
     ``mode=ro`` SQLite opens URIs read-write-create, so a typo (or a missing
     ``~/.dance/dance.db``) would leave an empty database behind that dance
@@ -143,7 +145,14 @@ def db_uri(arg: str | None) -> str:
         uri = f"{base}?{urlencode([('mode', 'ro'), *params])}"
     else:
         path = Path(arg).expanduser() if arg else Path.home() / ".dance" / "dance.db"
-        uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+        # immutable=1 skips SQLite's locking AND the WAL. dance runs in WAL
+        # mode, so while any connection (the backend's pool, a pipeline run)
+        # holds un-checkpointed commits, an immutable read sees the OLD beats
+        # and the gate can pass a regressed grid. With a non-empty -wal, open
+        # plain mode=ro, which reads through the WAL.
+        wal = path.with_name(path.name + "-wal")
+        live_wal = wal.is_file() and wal.stat().st_size > 0
+        uri = f"{path.resolve().as_uri()}?mode=ro" + ("" if live_wal else "&immutable=1")
     if not path.is_file():
         raise DbPathError(f"no such database: {path}")
     return uri

@@ -1484,3 +1484,75 @@ def test_warp_probe_repair_rewrites_each_grid_to_the_target_bpm(capsys) -> None:
     out = capsys.readouterr().out
     after = out.split("After repair:")[1]
     assert after.count("126.00 BPM  OK") == 3 and "STILL WRONG" not in after
+
+
+def test_tiny_tempo_nudge_does_not_waive_a_phase_regression() -> None:
+    """Review finding: a 0.006 % tempo nudge moved drift past its 2 ms/100
+    tolerance, which used to switch the waiver on and let a +120 ms phase
+    shift (F1 0.74 -> 0.21) pass. Drift no longer triggers the waiver, and the
+    grid-tempo improvement must be past tolerance AND at least a fifth."""
+    base = {
+        "1": _m(
+            f1_70=0.739,
+            median_abs_error_ms=50.8,
+            abs_bpm_error_pct=0.33,
+            abs_grid_bpm_error_pct=0.333,
+            abs_drift_ms_per_100_beats=159.6,
+            passes=False,
+        )
+    }
+    nudged = {
+        "1": _m(
+            f1_70=0.206,
+            median_abs_error_ms=176.4,
+            abs_bpm_error_pct=0.33,
+            abs_grid_bpm_error_pct=0.327,
+            abs_drift_ms_per_100_beats=156.6,
+            passes=False,
+        )
+    }
+    report = find_regressions(base, nudged)
+    assert {r.metric for r in report.regressions} >= {"f1_70", "median_abs_error_ms"}
+    assert report.warnings == []
+
+    # Past tolerance but under a fifth (0.333 -> 0.28): still not a fix.
+    small = {
+        "1": _m(
+            f1_70=0.206,
+            median_abs_error_ms=176.4,
+            abs_bpm_error_pct=0.33,
+            abs_grid_bpm_error_pct=0.28,
+            abs_drift_ms_per_100_beats=156.6,
+            passes=False,
+        )
+    }
+    assert find_regressions(base, small).warnings == []
+
+
+def test_db_uri_reads_through_a_live_wal(grid_diff: ModuleType, tmp_path: Path) -> None:
+    """Review finding: immutable=1 ignored the WAL, so beats committed by a
+    process still holding the DB open (the backend, a reprocess) were invisible
+    and the gate measured the old grid. A non-empty -wal must switch to plain
+    mode=ro, which sees the new rows."""
+    import sqlite3
+
+    db = tmp_path / "dance.db"
+    writer = sqlite3.connect(db)
+    writer.execute("pragma journal_mode=wal")
+    writer.execute("pragma wal_autocheckpoint=0")
+    writer.execute("create table beats (position_ms integer)")
+    writer.execute("insert into beats values (0)")
+    writer.commit()
+    writer.execute("pragma wal_checkpoint(truncate)")
+    assert "immutable=1" in grid_diff.db_uri(str(db))  # empty WAL: immutable is safe
+
+    writer.execute("update beats set position_ms = 90")
+    writer.commit()  # stays in the WAL while the writer is open
+    uri = grid_diff.db_uri(str(db))
+    assert "immutable=1" not in uri and "mode=ro" in uri
+    reader = sqlite3.connect(uri, uri=True)
+    try:
+        assert reader.execute("select position_ms from beats").fetchone() == (90,)
+    finally:
+        reader.close()
+        writer.close()
