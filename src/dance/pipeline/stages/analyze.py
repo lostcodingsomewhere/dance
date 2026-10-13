@@ -17,12 +17,18 @@ from dance.core.database import now_utc, Analysis, Track, TrackState
 from dance.pipeline.utils.audio import (
     aggregate_rms,
     detect_key_from_chroma,
-    normalize_bpm,
 )
-from dance.pipeline.utils.camelot import key_to_camelot
+from dance.pipeline.utils.camelot import format_standard_key, key_to_camelot
 from dance.pipeline.utils.db import upsert
+from dance.pipeline.utils.tempo import estimate_bpm
 
 logger = logging.getLogger(__name__)
+
+# A stored duration that disagrees with the decoded audio by more than
+# max(10 s, 3.5 %) usually means the file on disk is a different version
+# (radio edit vs extended mix) from the metadata it was ingested with.
+DURATION_MISMATCH_ABS_S = 10.0
+DURATION_MISMATCH_REL = 0.035
 
 # Try to import essentia - it has complex deps
 try:
@@ -90,9 +96,9 @@ class AnalysisStage:
             logger.info(f"Analyzing: {track.artist} - {track.title}")
             audio, sr = self._load_audio(file_path)
 
-            # Update duration if not set
-            if not track.duration_seconds:
-                track.duration_seconds = len(audio) / sr
+            # Duration: the decoded audio is what Live plays, so it wins over
+            # whatever metadata the row was ingested with.
+            self._reconcile_duration(track, len(audio) / sr)
 
             # Analyze BPM
             bpm, bpm_confidence = self._analyze_bpm(audio, sr)
@@ -100,7 +106,9 @@ class AnalysisStage:
             # Analyze key
             key, mode, key_confidence = self._analyze_key(audio, sr)
             camelot = key_to_camelot(key, mode)
-            standard_key = f"{key}{mode[0]}"  # e.g., "Am" or "C"
+            standard_key = format_standard_key(key, mode)  # "Am" or "C"
+            if camelot is None:
+                key_confidence = None
 
             # Analyze energy
             energy_stats = self._analyze_energy(audio, sr)
@@ -160,29 +168,37 @@ class AnalysisStage:
         else:
             raise RuntimeError("No audio loading library available (need librosa or essentia)")
 
+    @staticmethod
+    def _reconcile_duration(track: Track, decoded_s: float) -> None:
+        """Set ``track.duration_seconds`` from the decoded audio, warning
+        when the previous value was far off (a wrong-version signal)."""
+        previous = track.duration_seconds
+        if previous:
+            delta = abs(float(previous) - decoded_s)
+            if delta > max(DURATION_MISMATCH_ABS_S, DURATION_MISMATCH_REL * decoded_s):
+                logger.warning(
+                    "Duration mismatch for track %s (%s - %s): stored %.1f s, "
+                    "decoded audio is %.1f s (off by %.1f s) — the file may be a "
+                    "different version than its metadata. Using the audio length.",
+                    track.id,
+                    track.artist,
+                    track.title,
+                    float(previous),
+                    decoded_s,
+                    delta,
+                )
+        track.duration_seconds = decoded_s
+
     def _analyze_bpm(self, audio: np.ndarray, sr: int) -> tuple[float, float]:
         """
-        Detect BPM with confidence.
+        Detect BPM with a confidence in [0, 1].
 
-        For house/techno, BPM should typically be 118-145.
-        Handles half/double time detection.
+        Essentia's multifeature tracker first (its 0..5.32 confidence is
+        normalised), with a robust beat-grid fit on librosa beats as the
+        fallback. Half/double time is folded by ``normalize_bpm``. See
+        :func:`dance.pipeline.utils.tempo.estimate_bpm`.
         """
-        if ESSENTIA_AVAILABLE:
-            try:
-                rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
-                bpm, beats, beats_confidence, _, _ = rhythm_extractor(audio)
-                confidence = float(np.mean(beats_confidence)) if len(beats_confidence) > 0 else 0.5
-                return normalize_bpm(bpm), confidence
-            except Exception as e:
-                logger.warning(f"Essentia BPM failed, falling back to librosa: {e}")
-
-        if LIBROSA_AVAILABLE:
-            tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr)
-            # tempo can be a float or ndarray depending on librosa version
-            bpm = float(tempo[0]) if hasattr(tempo, '__len__') else float(tempo)
-            return normalize_bpm(bpm), 0.7  # Default confidence for librosa
-
-        raise RuntimeError("No BPM detection available")
+        return estimate_bpm(audio, sr)
 
     def _analyze_key(self, audio: np.ndarray, sr: int) -> tuple[str, str, float]:
         """

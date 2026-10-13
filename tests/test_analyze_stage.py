@@ -42,9 +42,10 @@ def test_analyze_real_synthetic_track(tmp_path, session, make_track, settings):
         .filter_by(track_id=track.id, stem_file_id=None)
         .one()
     )
-    # BPM may be half/double — allow either.
-    candidates = [analysis.bpm, analysis.bpm * 2, analysis.bpm / 2]
-    assert min(abs(c - 128.0) for c in candidates) < 4.0
+    # normalize_bpm folds half/double time, and the tick-grid fit removes
+    # lag-bin quantisation (librosa alone says 129.20 here), so this is tight.
+    assert abs(analysis.bpm - 128.0) < 0.15
+    assert 0.0 <= analysis.bpm_confidence <= 1.0
     assert analysis.key_camelot is not None
     assert 1 <= analysis.floor_energy <= 10
     assert 0.0 <= analysis.energy_overall <= 1.0
