@@ -8,7 +8,10 @@ overlapping jobs stacked on top of each other.
 
 All three now submit to this pool, so the number of simultaneous downloads
 is ``settings.download_workers`` (default 3) process-wide, however many jobs
-are in flight. Work beyond that queues in submission order.
+are in flight. Work beyond that queues: interactive single-track adds
+(Cmd-K, :meth:`DownloadPool.submit_interactive`) go ahead of bulk playlist /
+CSV work, each class in submission order. Without that, a track added
+live from the Booth waited behind every download of a 300-track playlist.
 
 The workers are daemon threads (unlike ``ThreadPoolExecutor``'s, which the
 interpreter joins at exit): the API used daemon threads before so that
@@ -17,6 +20,7 @@ stopping uvicorn never blocks on an in-flight download, and that is kept.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import queue
 import threading
@@ -30,15 +34,24 @@ T = TypeVar("T")
 
 DEFAULT_DOWNLOAD_WORKERS = 3
 
+#: Queue priorities — lower runs first. The pool size never changes; an
+#: interactive job only jumps the *queue*, it never preempts a download.
+PRIORITY_INTERACTIVE = 0
+PRIORITY_BULK = 10
+_PRIORITY_STOP = 100
+
+_Work = tuple[Future[Any], Callable[..., Any], tuple, dict]
+
 
 class DownloadPool:
     """Fixed-size daemon-thread pool returning ``concurrent.futures.Future``s."""
 
     def __init__(self, max_workers: int, name: str = "dance-download") -> None:
         self.max_workers = max(1, int(max_workers))
-        self._queue: queue.Queue[tuple[Future[Any], Callable[..., Any], tuple, dict] | None] = (
-            queue.Queue()
-        )
+        # (priority, sequence, work): the sequence keeps FIFO order within a
+        # priority and means two entries never compare their work items.
+        self._queue: queue.PriorityQueue[tuple[int, int, _Work | None]] = queue.PriorityQueue()
+        self._seq = itertools.count()
         self._threads = [
             threading.Thread(target=self._worker, name=f"{name}-{i}", daemon=True)
             for i in range(self.max_workers)
@@ -47,18 +60,26 @@ class DownloadPool:
             t.start()
 
     def submit(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> Future[T]:
+        """Queue bulk work (playlist / CSV rows) in submission order."""
+        return self._submit(PRIORITY_BULK, fn, args, kwargs)
+
+    def submit_interactive(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> Future[T]:
+        """Queue a user-initiated single download ahead of all bulk work."""
+        return self._submit(PRIORITY_INTERACTIVE, fn, args, kwargs)
+
+    def _submit(self, priority: int, fn: Callable[..., T], args: tuple, kwargs: dict) -> Future[T]:
         fut: Future[T] = Future()
-        self._queue.put((fut, fn, args, kwargs))
+        self._queue.put((priority, next(self._seq), (fut, fn, args, kwargs)))
         return fut
 
     def shutdown(self) -> None:
         """Stop the workers after the queued work drains (tests only)."""
         for _ in self._threads:
-            self._queue.put(None)
+            self._queue.put((_PRIORITY_STOP, next(self._seq), None))
 
     def _worker(self) -> None:
         while True:
-            item = self._queue.get()
+            _, _, item = self._queue.get()
             if item is None:
                 return
             fut, fn, args, kwargs = item
@@ -105,4 +126,10 @@ def _reset_download_pool_for_tests() -> None:
         _POOL = None
 
 
-__all__ = ["DEFAULT_DOWNLOAD_WORKERS", "DownloadPool", "get_download_pool"]
+__all__ = [
+    "DEFAULT_DOWNLOAD_WORKERS",
+    "PRIORITY_BULK",
+    "PRIORITY_INTERACTIVE",
+    "DownloadPool",
+    "get_download_pool",
+]

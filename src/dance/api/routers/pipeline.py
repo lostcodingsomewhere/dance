@@ -549,8 +549,9 @@ def ingest_track(
     registry = get_job_registry()
     job = registry.create("spotify_ingest", [f"{artist} - {title}"])
 
-    # Shared bounded pool — the job sits in ``queued`` until a slot frees.
-    get_download_pool(settings.download_workers).submit(
+    # Shared bounded pool — the job sits in ``queued`` until a slot frees,
+    # ahead of any bulk playlist / CSV downloads still waiting.
+    get_download_pool(settings.download_workers).submit_interactive(
         _run_spotify_ingest_job,
         job.id,
         int(track.id),

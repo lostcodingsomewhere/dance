@@ -205,3 +205,85 @@ def test_single_track_ingest_queues_on_the_same_pool(api, monkeypatch) -> None:
     # audio_format + the claimed destination ride along to the worker.
     assert args[-2] == "mp3"
     assert args[-1].name == "Act - Song.mp3"
+
+
+# ---------------------------------------------------------------------------
+# Interactive adds jump the queue (never the bound)
+# ---------------------------------------------------------------------------
+
+
+def test_interactive_work_runs_before_queued_bulk_work() -> None:
+    pool = DownloadPool(1)
+    gate = threading.Event()
+    order: list[str] = []
+    blocker = pool.submit(lambda: gate.wait(5))
+    bulk = [pool.submit(order.append, f"bulk{i}") for i in range(3)]
+    live = pool.submit_interactive(order.append, "interactive")
+    later_bulk = pool.submit(order.append, "bulk3")
+    gate.set()
+    for f in (blocker, *bulk, live, later_bulk):
+        f.result(timeout=5)
+    # The running download is never preempted; the interactive job is next,
+    # then bulk work in submission order.
+    assert order == ["interactive", "bulk0", "bulk1", "bulk2", "bulk3"]
+    pool.shutdown()
+
+
+def test_interactive_work_respects_the_pool_size() -> None:
+    pool = DownloadPool(2)
+    probe = _ConcurrencyProbe()
+    futures = [pool.submit(probe) for _ in range(4)]
+    futures += [pool.submit_interactive(probe) for _ in range(4)]
+    for f in futures:
+        f.result(timeout=5)
+    assert probe.calls == 8 and probe.peak == 2
+    pool.shutdown()
+
+
+def test_single_track_add_jumps_a_queued_playlist(api, monkeypatch) -> None:
+    """A Cmd-K add during a 6-track playlist ingest (2 workers) starts as
+    soon as a slot frees, not after the whole playlist."""
+    from dance.api.routers import pipeline as pipeline_mod
+
+    gate = threading.Event()
+    order: list[str] = []
+    finished: list[str] = []
+    lock = threading.Lock()
+    all_done = threading.Event()
+
+    def _job(job_id, track_id, csv_row, *rest):
+        with lock:
+            order.append(csv_row.title)  # start order
+        gate.wait(5)
+        with lock:
+            finished.append(csv_row.title)
+            if len(finished) == 7:
+                all_done.set()
+
+    monkeypatch.setattr(pipeline_mod, "_run_spotify_ingest_job", _job)
+    _fake_playlist(monkeypatch, 6)
+    r = api.post(
+        "/api/v1/pipeline/ingest/playlist",
+        json={"playlist_url": "https://open.spotify.com/playlist/priority1"},
+    )
+    assert r.status_code == 200 and r.json()["added"] == 6
+    deadline = time.monotonic() + 5
+    while len(order) < 2 and time.monotonic() < deadline:  # both workers busy
+        time.sleep(0.005)
+    r = api.post(
+        "/api/v1/pipeline/ingest/track",
+        json={
+            "spotify_id": "live0001",
+            "title": "Live Add",
+            "artist": "DJ",
+            "duration_ms": 200_000,
+        },
+    )
+    assert r.status_code == 200, r.text
+    gate.set()
+    assert all_done.wait(5)
+    # Two playlist jobs were already running when the add arrived; the add
+    # starts next, before any of the four still queued.
+    assert sorted(order[:2]) == ["Song 0", "Song 1"]
+    assert order[2] == "Live Add"
+    assert sorted(order[3:]) == ["Song 2", "Song 3", "Song 4", "Song 5"]
