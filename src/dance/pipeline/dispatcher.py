@@ -35,8 +35,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from dance.config import Settings
 from dance.core.database import Track, TrackState
 from dance.pipeline._gpu import GPU_SEMAPHORE
+from dance.pipeline.dispatcher_lock import dispatcher_lock
 from dance.pipeline.events import EventBus, StageEvent
 from dance.pipeline.heal_ledger import HealLedger
+from dance.pipeline.placeholders import not_placeholder
 from dance.pipeline.stage import Stage
 
 logger = logging.getLogger(__name__)
@@ -208,10 +210,20 @@ class Dispatcher:
 
         Returns:
             Dict of stage_name -> {processed, errors, skipped}.
+
+        Raises:
+            DispatcherBusyError: another dispatcher (any process) holds
+                ``<data_dir>/dispatcher.lock``. Raised before anything is
+                read or written, so that run's in-flight tracks are left
+                alone. See :mod:`dance.pipeline.dispatcher_lock`.
         """
-        if self.session_factory is not None:
-            return self._run_parallel(skip=skip, track_id=track_id)
-        return self._run_sequential(limit=limit, skip=skip, track_id=track_id)
+        # Held for the whole run, so the inflight-orphan heal below only
+        # ever resets tracks no live dispatcher owns. Re-entrant: the CLI
+        # takes it for the whole command before calling us.
+        with dispatcher_lock(self.settings.data_dir):
+            if self.session_factory is not None:
+                return self._run_parallel(skip=skip, track_id=track_id)
+            return self._run_sequential(limit=limit, skip=skip, track_id=track_id)
 
     # ------------------------------------------------------------------
     # Sequential mode (legacy — unchanged behavior)
@@ -259,7 +271,9 @@ class Dispatcher:
     def _pending_query_seq(
         self, stage: Stage, track_id: int | None, limit: int | None
     ):
-        q = self.session.query(Track).filter(Track.state == stage.input_state.value)
+        q = self.session.query(Track).filter(
+            Track.state == stage.input_state.value, not_placeholder()
+        )
         if track_id is not None:
             q = q.filter(Track.id == track_id)
         if limit is not None:
@@ -329,7 +343,8 @@ class Dispatcher:
 
         # First: heal any tracks left stuck in *-ing states by a previous
         # crashed / killed run. No stage uses *-ing as its input_state, so
-        # without this they'd sit there forever.
+        # without this they'd sit there forever. Safe only because run()
+        # holds the dispatcher lock: no other live dispatcher can own them.
         heal_session = self.session_factory()
         try:
             healed = self._heal_inflight_orphans(heal_session)
@@ -498,9 +513,13 @@ class Dispatcher:
         race; we try again on the next loop iteration. SQLite serializes
         UPDATEs so two workers can't both increment rowcount on the same
         row.
+
+        Placeholder rows (``file_hash`` ``pending:...``, a Spotify download
+        still in flight) are never candidates; see
+        :mod:`dance.pipeline.placeholders`.
         """
         q = session.query(Track.id).filter(
-            Track.state == stage.input_state.value
+            Track.state == stage.input_state.value, not_placeholder()
         )
         if track_id is not None:
             q = q.filter(Track.id == track_id)
@@ -623,7 +642,9 @@ class Dispatcher:
     def _auto_advance_par(
         self, stage: Stage, session: Session, track_id: int | None
     ) -> None:
-        q = session.query(Track).filter(Track.state == stage.input_state.value)
+        q = session.query(Track).filter(
+            Track.state == stage.input_state.value, not_placeholder()
+        )
         if track_id is not None:
             q = q.filter(Track.id == track_id)
         tracks = q.all()
