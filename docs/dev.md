@@ -178,6 +178,19 @@ wav_path = write_track(tmp_path / "test.wav", spec)
 
 Use it any time you need real audio without committing real audio. Keep durations short — 8 bars at 128 BPM is ~15 s and the analyze + separate stages take ~2 s on M1.
 
+## Beat-grid differential (the grid gate)
+
+Any change to how beats / BPM are computed is judged against **Ableton's** grid (rule 3), with djbooth's method: monotonic DP alignment (gap = 0.45 × median period), F1 at 70/100 ms, median/p95 timing error, phase, drift per 100 beats, BPM error (analysis BPM *and* the `beats` table's own tempo), bar-phase accuracy. Metrics: `src/dance/pipeline/utils/grid_metrics.py`; references: `src/dance/als/reader.py` (warp markers out of a `.als`) and `src/dance/osc/warp_grid.py` (live, shared with `scripts/warp_probe.py`).
+
+```bash
+# reference = a Live Set saved after fixing warps by ear (or --live --scene N)
+python scripts/grid_diff.py --als fixed.als --json base.json
+# ... change the grid code, reprocess ...
+python scripts/grid_diff.py --als fixed.als --json new.json --baseline base.json   # exit 1 = regression
+```
+
+The DB is opened read-only and never created (`file:…?mode=ro`, plus `immutable=1` only when its `-wal` is empty, so a running backend can't hide fresh beats). Ship a grid change only when the gate exits 0. Every track the baseline measured is judged again (a reference that stopped matching is a `grid_missing` regression; `--track` narrows on purpose), every metric that worsens past its tolerance fails, and so does a track measured against a different reference than its baseline (`reference_changed`: other warp markers, clip kind or sample end; `--allow-reference-change` demotes it). One waiver: on a track that already fails, when the beats table's own grid-tempo error shrank past its tolerance and by at least a fifth in the same run (drift alone never triggers it), its F1 / timing / bar-phase drops are printed as warnings, because once a grid slips past half a beat those numbers swing with the phase sawtooth (a 0.5 % → 0.1 % tempo fix can lower F1). Without a tempo change nothing is waived; `--strict` waives nothing at all. Stem clips are judged against that stem's own `audio_analysis.bpm`, and a NULL BPM fails rather than falling back. Live's grid is clipped to the span of dance's beats, and how much of it is covered is reported as `reference_coverage`; its end is the sample's real length (Set or file header), with `tracks.duration_seconds` only as a flagged fallback. Two same-kind clips with different warps make a track `ambiguous_reference` until `--ref-source` picks one. A dance-exported `.als` works as a reference too, but it only encodes `audio_analysis.bpm` from 0:00 — it is a plumbing check, not ground truth.
+
 ## Repo layout (developer cheat-sheet)
 
 ```

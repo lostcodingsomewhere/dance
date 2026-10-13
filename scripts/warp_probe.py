@@ -35,26 +35,22 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Sequence
+from typing import Any
 
-from dance.osc.client import AbletonOSCClient
-from dance.osc.listener import AbletonOSCListener
+from dance.osc.client import ABLETON_RECEIVE_PORT, ABLETON_SEND_PORT
 
-# Deck columns as the bridge provisions them (see AbletonBridge._DECK_*).
-DECK_COLUMNS = {
-    "drums_a": 0,
-    "drums_b": 1,
-    "bass_a": 2,
-    "bass_b": 3,
-    "vocals_a": 4,
-    "vocals_b": 5,
-    "other_a": 6,
-    "other_b": 7,
-    "mix_a": 8,
-    "mix_b": 9,
-}
+# The ask/reply helper and deck-column map are shared with
+# scripts/grid_diff.py --live (see dance.osc.warp_grid).
+from dance.osc.warp_grid import (
+    CLIP_LENGTH,
+    DECK_COLUMNS,
+    WARP_MARKER_TIMES,
+    OscAsker,
+)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--scene", type=int, required=True, help="Scene number as shown in the app (1-based)."
@@ -71,32 +67,32 @@ def main() -> int:
         default=None,
         help="Target BPM. Default: read from the DB for this track.",
     )
-    args = ap.parse_args()
+    # Defaults are AbletonOSC's; overridable so the probe can be driven
+    # against a fake server in tests.
+    ap.add_argument("--osc-host", default="127.0.0.1")
+    ap.add_argument("--osc-port", type=int, default=ABLETON_RECEIVE_PORT)
+    ap.add_argument("--osc-reply-port", type=int, default=ABLETON_SEND_PORT)
+    ap.add_argument("--wait", type=float, default=0.8, help="Seconds to wait per OSC reply.")
+    args = ap.parse_args(argv)
     slot = args.scene - 1
 
-    replies: list[tuple[str, tuple]] = []
-    listener = AbletonOSCListener(port=11001)
-    listener.on_any(lambda addr, a: replies.append((addr, a)))
+    asker = OscAsker(host=args.osc_host, port=args.osc_port, reply_port=args.osc_reply_port)
     try:
-        listener.start()
+        asker.start()
     except OSError:
         print(
-            "ERROR: OSC reply port 11001 is busy — stop the backend first "
+            f"ERROR: OSC reply port {args.osc_reply_port} is busy — stop the backend first "
             "(the uvicorn process owns it).",
             file=sys.stderr,
         )
         return 2
-    client = AbletonOSCClient(host="127.0.0.1", port=11000)
-    time.sleep(0.3)
+    client = asker.client
 
-    def ask(addr: str, *a, wait: float = 0.8) -> list[tuple]:
-        replies.clear()
-        client._send(addr, *a)
-        time.sleep(wait)
-        return [r[1] for r in replies if r[0] == addr]
+    def ask(address: str, *a: Any) -> list[tuple[Any, ...]]:
+        return asker.ask(address, *a, wait=args.wait)
 
     # --- 1. Is the fork patch active? -------------------------------------
-    probe = ask("/live/clip/get/warp_marker_times", DECK_COLUMNS["drums_a"], slot)
+    probe = ask(WARP_MARKER_TIMES, DECK_COLUMNS["drums_a"], slot)
     if not probe:
         print(
             "The patched warp-marker handlers did NOT answer.\n"
@@ -108,7 +104,7 @@ def main() -> int:
             "Check ~/Music/Ableton/User Library/Remote Scripts/AbletonOSC/"
             "logs/abletonosc.log for 'Unknown OSC address'."
         )
-        listener.stop()
+        asker.stop()
         return 1
     print("Patched handlers are ACTIVE.\n")
 
@@ -118,14 +114,14 @@ def main() -> int:
     grids: dict[str, list[float]] = {}
     for kind in kinds:
         idx = DECK_COLUMNS[kind]
-        flat = ask("/live/clip/get/warp_marker_times", idx, slot)
+        flat = ask(WARP_MARKER_TIMES, idx, slot)
         if not flat:
             print(f"{kind:10s} {'(empty)':>8s}")
             continue
         vals = [float(v) for v in flat[0][2:]]
         grids[kind] = vals
         pairs = list(zip(vals[0::2], vals[1::2]))
-        length = ask("/live/clip/get/length", idx, slot)
+        length = ask(CLIP_LENGTH, idx, slot)
         beats = float(length[0][2]) if length else 0.0
         secs = pairs[-1][1] if pairs else 0.0
         bpm = (beats / secs * 60.0) if secs else 0.0
@@ -133,7 +129,7 @@ def main() -> int:
 
     if not args.repair:
         print("\nReport only. Pass --repair to rewrite the grids.")
-        listener.stop()
+        asker.stop()
         return 0
 
     # --- 3. Repair --------------------------------------------------------
@@ -144,7 +140,7 @@ def main() -> int:
             "`dance status` / the track's analysis.",
             file=sys.stderr,
         )
-        listener.stop()
+        asker.stop()
         return 2
 
     print(f"\nRewriting grids to {args.bpm:.2f} BPM …")
@@ -169,8 +165,8 @@ def main() -> int:
         idx = DECK_COLUMNS[kind]
         if kind not in grids:
             continue
-        length = ask("/live/clip/get/length", idx, slot)
-        flat = ask("/live/clip/get/warp_marker_times", idx, slot)
+        length = ask(CLIP_LENGTH, idx, slot)
+        flat = ask(WARP_MARKER_TIMES, idx, slot)
         beats = float(length[0][2]) if length else 0.0
         vals = [float(v) for v in flat[0][2:]] if flat else []
         secs = vals[-1] if vals else 0.0
@@ -183,7 +179,7 @@ def main() -> int:
         "and check whether the corrected grid persisted to the .asd. If it\n"
         "did, the fix is library-wide and permanent."
     )
-    listener.stop()
+    asker.stop()
     return 0
 
 
