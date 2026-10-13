@@ -1,5 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useSyncExternalStore } from "react";
+import { createSharedSocket } from "../lib/sharedSocket";
 import type { Job } from "../types";
+
+const NO_JOBS: Record<string, Job> = {};
+
+/** The one /ws/pipeline connection. Frames are per-job snapshots, so they
+ * are merged into the map (not replaced) — coalescing a burst into one
+ * render never loses another job's update. ``resetOnIdle`` keeps the old
+ * per-mount semantics: leave the Pipeline view and the map is rebuilt from
+ * the server's replay next time, rather than showing a stale one. */
+const pipelineJobsSocket = createSharedSocket<Record<string, Job>, Job>({
+  path: "/ws/pipeline",
+  initial: NO_JOBS,
+  reduce: (prev, job) => ({ ...prev, [job.id]: job }),
+  resetOnIdle: true,
+});
 
 /** Subscribes to /ws/pipeline. Keeps a job-id → Job map updated in real time.
  *
@@ -8,47 +23,9 @@ import type { Job } from "../types";
  * round-trip. After that, each job mutation (item status flip, job-status
  * transition) arrives as a fresh full-job snapshot. */
 export function usePipelineJobs(): Record<string, Job> {
-  const [jobs, setJobs] = useState<Record<string, Job>>({});
-  const wsRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof WebSocket === "undefined") {
-      return;
-    }
-    let cancelled = false;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function connect() {
-      if (cancelled) return;
-      const url = new URL("/ws/pipeline", window.location.origin);
-      url.protocol = url.protocol.replace("http", "ws");
-      const ws = new WebSocket(url.toString());
-      wsRef.current = ws;
-
-      ws.onmessage = (e) => {
-        try {
-          const parsed = JSON.parse(e.data) as Job;
-          setJobs((prev) => ({ ...prev, [parsed.id]: parsed }));
-        } catch {
-          // ignore malformed frames
-        }
-      };
-      ws.onclose = () => {
-        if (cancelled) return;
-        reconnectTimer = setTimeout(connect, 2000);
-      };
-      ws.onerror = () => {
-        ws.close();
-      };
-    }
-
-    connect();
-    return () => {
-      cancelled = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      wsRef.current?.close();
-    };
-  }, []);
-
-  return jobs;
+  return useSyncExternalStore(
+    pipelineJobsSocket.subscribe,
+    pipelineJobsSocket.getSnapshot,
+    pipelineJobsSocket.getServerSnapshot,
+  );
 }

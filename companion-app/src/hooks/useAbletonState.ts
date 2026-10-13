@@ -1,52 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useSyncExternalStore } from "react";
+import { createSharedSocket } from "../lib/sharedSocket";
 import type { AbletonState } from "../types";
 import { EMPTY_ABLETON_STATE } from "../types";
 
-/** Subscribes to /ws and returns the latest Ableton state pushed by the bridge. */
+/**
+ * The one /ws connection for the whole app. Every frame is a full
+ * AbletonState snapshot, so the newest simply replaces the last. React is
+ * told at most once per animation frame (see ``lib/sharedSocket``).
+ */
+const abletonSocket = createSharedSocket<AbletonState, AbletonState>({
+  path: "/ws",
+  initial: EMPTY_ABLETON_STATE,
+  reduce: (_prev, next) => next,
+});
+
+/** Subscribes to /ws and returns the latest Ableton state pushed by the bridge.
+ *
+ * Any number of components can call this: they share one socket, and all of
+ * them see the same snapshot in the same render. */
 export function useAbletonState(): AbletonState {
-  const [state, setState] = useState<AbletonState>(EMPTY_ABLETON_STATE);
-  const wsRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof WebSocket === "undefined") {
-      return;
-    }
-    let cancelled = false;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function connect() {
-      if (cancelled) return;
-      const url = new URL("/ws", window.location.origin);
-      url.protocol = url.protocol.replace("http", "ws");
-      const ws = new WebSocket(url.toString());
-      wsRef.current = ws;
-
-      ws.onmessage = (e) => {
-        try {
-          const parsed = JSON.parse(e.data) as AbletonState;
-          setState(parsed);
-        } catch {
-          // ignore malformed frames
-        }
-      };
-      ws.onclose = () => {
-        if (cancelled) return;
-        // Reconnect with a small backoff
-        reconnectTimer = setTimeout(connect, 2000);
-      };
-      ws.onerror = () => {
-        // close() will fire and trigger reconnect.
-        ws.close();
-      };
-    }
-
-    connect();
-    return () => {
-      cancelled = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      wsRef.current?.close();
-    };
-  }, []);
-
-  return state;
+  return useSyncExternalStore(
+    abletonSocket.subscribe,
+    abletonSocket.getSnapshot,
+    abletonSocket.getServerSnapshot,
+  );
 }
