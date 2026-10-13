@@ -35,6 +35,10 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Sequence
+from typing import Any
+
+from dance.osc.client import ABLETON_RECEIVE_PORT, ABLETON_SEND_PORT
 
 # The ask/reply helper and deck-column map are shared with
 # scripts/grid_diff.py --live (see dance.osc.warp_grid).
@@ -46,7 +50,7 @@ from dance.osc.warp_grid import (
 )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--scene", type=int, required=True, help="Scene number as shown in the app (1-based)."
@@ -63,21 +67,29 @@ def main() -> int:
         default=None,
         help="Target BPM. Default: read from the DB for this track.",
     )
-    args = ap.parse_args()
+    # Defaults are AbletonOSC's; overridable so the probe can be driven
+    # against a fake server in tests.
+    ap.add_argument("--osc-host", default="127.0.0.1")
+    ap.add_argument("--osc-port", type=int, default=ABLETON_RECEIVE_PORT)
+    ap.add_argument("--osc-reply-port", type=int, default=ABLETON_SEND_PORT)
+    ap.add_argument("--wait", type=float, default=0.8, help="Seconds to wait per OSC reply.")
+    args = ap.parse_args(argv)
     slot = args.scene - 1
 
-    asker = OscAsker(host="127.0.0.1", port=11000, reply_port=11001)
+    asker = OscAsker(host=args.osc_host, port=args.osc_port, reply_port=args.osc_reply_port)
     try:
         asker.start()
     except OSError:
         print(
-            "ERROR: OSC reply port 11001 is busy — stop the backend first "
+            f"ERROR: OSC reply port {args.osc_reply_port} is busy — stop the backend first "
             "(the uvicorn process owns it).",
             file=sys.stderr,
         )
         return 2
     client = asker.client
-    ask = asker.ask
+
+    def ask(address: str, *a: Any) -> list[tuple[Any, ...]]:
+        return asker.ask(address, *a, wait=args.wait)
 
     # --- 1. Is the fork patch active? -------------------------------------
     probe = ask(WARP_MARKER_TIMES, DECK_COLUMNS["drums_a"], slot)
