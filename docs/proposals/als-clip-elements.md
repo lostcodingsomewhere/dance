@@ -18,7 +18,8 @@ elements that carry meaning, `<Warp>` (`:533`) and the clip's `<ColorIndex>`
 throwaway lxml scripts in the session scratchpad. No Ableton content is in the
 repo. 25 of the 26 say `Creator="Ableton Live 12.4d1"` with
 `MinorVersion="12.0_12402"`, the same schema as our template
-(`writer.py:55`). The 26th is the 12.1 `DefaultLiveSet.als`, which has no clips.
+(`writer.py:55`). The 26th is the 12.1 `DefaultLiveSet.als` (`12.0_12117`), which has
+one `MidiClip` and no audio clips.
 Between them they hold **2878 `AudioClip`s, and every one has the same 50 children
 in the same order.** The largest file,
 `Core Library/Ableton Folder Info/Sample Reference.als`, has 2679 of them. In
@@ -31,7 +32,7 @@ all 26 files `<Warp>` appears **0** times and `<ColorIndex>` **0** times.
 | clip `<Warp Value="true">` | `writer.py:533` | `<IsWarped>`, on 2878/2878 clips |
 | clip `<ColorIndex>` | `:493` | `<Color>`, one per clip |
 | track `<ColorIndex>` sibling | `:414-419` | nothing. The track `<Color>` is already set at `:411-413` |
-| `<Gain Value="0">` | `:528` | nothing. Clip gain is `SampleVolume`, a linear factor: 1 on 2664/2679 clips, and values like `1.99526238` (+6 dB) and `0.7943282127` (−2 dB) on the rest. We already write it (`:531`) |
+| `<Gain Value="0">` | `:528` | nothing under any `AudioClip` (`Gain` occurs only inside devices). Clip gain is `SampleVolume`, a linear factor: 1 on 2664/2679 clips, and values like `1.99526238` (+6 dB) and `0.7943282127` (−2 dB) on the rest. We already write it (`:531`) |
 | `<GranularityResolution>` | `:527` | nothing. The nearest element is `TransientResolution` (`6` on all 2679) |
 | `FileRef` `Name`, `HasRelativePath`, `HasSearchHint`, `SearchHint`, `DefaultDuration`, `DefaultSampleRate` | `:565`, `:570-574` | nothing under `FileRef`. The last two belong one level up on `SampleRef`, where we also write them (`:513-514`) |
 
@@ -47,21 +48,26 @@ Elements we share with Live but write with a different value or shape:
   2 4 Bars, 3 2 Bars, **4 1 Bar**). The *Clip* enum is 0 Global, 1 None, 2 8 Bars,
   3 4 Bars, **4 2 Bars**, 5 1 Bar ([LOM Clip](https://docs.cycling74.com/apiref/lom/clip/),
   [LOM Song](https://docs.cycling74.com/apiref/lom/song/)). The bridge
-  already learned this the hard way (`bridge.py:936-951`). Live's own files fit the
-  per-element enums. 2866 of the 2878 bundled clips hold `0`, which only makes sense
+  already learned this the hard way (`bridge.py:936-948`). Live's own files fit the
+  per-element enums (inferred: the XML enum is not documented). 2866 of the 2878
+  bundled clips hold `0` and the other 12 hold `1`; `0` only makes sense
   as "Global", Live's default for a new clip. 25 of the 26 Sets hold
   `GlobalQuantisation=4`, Live's default of 1 Bar in the Song enum, and so does our
   template (`blank_live12.xml:5321`). *Inferred:* exported clips launch on 2-bar
   boundaries today, while app-loaded deck clips (Global) launch on 1-bar boundaries.
-- **`FileRef/Type`.** We write `1` (`:566`). Live writes `2` on every `SampleRef/FileRef` (2878/2878), and on all four of the template's `FileRef`s.
+- **`FileRef/Type`.** We write `1` (`:566`). Live writes `2` on every `SampleRef/FileRef` (2878/2878), and on all four of the template's `FileRef`s, which point at device presets. So `Type` is not the "audio sample" flag our comment says it is (its meaning is undocumented); copy Live's `2`.
 - **`FileRef/RelativePath`.** We write the parent *directory*, without its leading slash
   and without a `RelativePathType` (`:558-563`). Live writes a path to the *file*,
-  relative to a base that `RelativePathType` picks. The values observed across the
-  bundled files are: 0 (empty, absolute `Path` only), 1 (relative to the Set, `../../…`),
-  5 (Core Library pack), 6 (User Library) and 7 (app built-ins). A public example
-  shows 3 for a sample inside the Set's project folder
+  relative to a base that `RelativePathType` picks. Across *all* `FileRef`s in the
+  bundled files (devices and presets included) the values are 0 (empty, absolute `Path`
+  only), 1 (relative to the Set, `../../…`), 5 (Core Library pack), 6 (User Library)
+  and 7 (app built-ins). A public example shows 3 for a sample inside the Set's
+  project folder
   ([ableton-under-the-hood](https://github.com/Sample-Offline/ableton-under-the-hood)).
-  The meanings are inferred from the paths, not documented.
+  The meanings are inferred from the paths, not documented. **Every one of the 2878
+  clip `SampleRef/FileRef`s is `5`** (Core Library samples), so the bundled clips
+  give no example of an external file like our stems; step 2 of the verification
+  plan has to supply it.
 - **`SampleRef/SourceContext`.** We write a leaf `<SourceContext Value=""/>` (`:511`). Live writes a
   class: `SourceContext/SourceContext` holding `OriginalFileRef`,
   `BrowserContentPath` and `LocalFiltersJson`.
@@ -101,18 +107,19 @@ is missing `SamplesToAutoWarp`. Only 5 of our 11 `FileRef` children are Live's.
 ## What Live does with it today
 
 The Set opens: Live 12.4 checked it on 2026-05-10 (`live-compat.md`,
-log). So Live **skips names it doesn't know** and **fills in defaults for names
-that are missing**. The comment at `writer.py:415` already relies on this. In practice:
+log). So Live **tolerates names it doesn't know** (presumably ignoring them) and **fills
+in defaults for names that are missing**. The comment at `writer.py:415` already relies on
+this. Inferred consequences, none measured:
 
 - **A clip's warp state is whatever Live defaults a missing `IsWarped` to.** Nobody has
   measured it. The beat-grid branch's reader assumes `true` when both elements are
-  missing (`claude/grid-metrics:src/dance/als/reader.py:80-85`), and that is a guess too.
+  missing (`claude/grid-metrics:src/dance/als/reader.py:90-95`), and that is a guess too.
   The check CLAUDE.md prescribes ("tempo correct, audio plays") cannot tell the
   difference. The writer uses one BPM for the master tempo and for the grid
   (`generator.py:171-176`), so at the exported tempo the stretch ratio is 1.0 and a
   warped clip sounds the same as an unwarped one.
-- **A clip's colour is Live's default, not `STEM_COLOR_INDEX`.** Track colours are right
-  because the track `<Color>` is set.
+- **A clip's colour is probably Live's default, not `STEM_COLOR_INDEX`.** Track colours
+  are right because the track `<Color>` is set.
 - **Exported clips probably launch on 2-bar boundaries**, as described above.
 - `Gain`, `GranularityResolution` and the extra `FileRef` fields do nothing. Live finds
   the stem by its absolute `Path`.
@@ -120,7 +127,7 @@ that are missing**. The comment at `writer.py:415` already relies on this. In pr
   omit, sounds like that very switch. Live writes `0` everywhere, but the default for a
   missing element is unknown.
 
-Five places claim that the two load paths agree on warp, and the XML doesn't deliver it:
+Five places claim that the two load paths agree on warp, which the XML probably doesn't deliver:
 `warp-guard.md:52-54`, `LEARNING.md:156-157`, the `_force_warp` docstring
 (`bridge.py:2047-2050`), `tests/test_osc.py:780-782`, and the `live-compat.md:60` row
 (which lists `Warp=true` as emitted, accurately, but not that Live ignores it).
@@ -131,10 +138,13 @@ Five places claim that the two load paths agree on warp, and the XML doesn't del
 cover the **OSC path**, where Live auto-warps every fresh `create_audio_clip`. The `.als`
 path has never been measured. If Live honours a saved `IsWarped`+`WarpMarkers` grid, then
 exported stems never go through auto-warp, and every stem of a track shares one grid by
-construction, so warp-guard's failure can't happen on this path. That is also the only
-grid control we have today without fork patches: the warp-marker OSC handlers are
-not in the installed AbletonOSC (`live-compat.md:37`). Verification step 1 tests this
-directly, on a track whose bass Live mis-warped over OSC. Option C there and this writer
+construction, so warp-guard's failure can't happen on this path. It is also the only
+grid control that doesn't depend on unverified fork handlers. `live-compat.md:37` (on
+this branch) still says the warp-marker OSC handlers are missing from the installed
+AbletonOSC; since `9ce8ac3` on `main` they are vendored as patch `0005` and were
+applied on this Mac, but the commit records that their behaviour in Live is **not yet
+verified**. Verification step 1 tests this
+directly, on a track whose bass Live mis-warped over OSC. warp-guard's Option C and this writer
 should build the grid with **one shared function**, so the two paths agree by
 construction and not just by docstring.
 
@@ -144,12 +154,15 @@ construction and not just by docstring.
 column. Near 125 BPM the steps are 3 BPM wide, so the error can reach ±1.5 BPM
 (±1.2 %). The commit's real examples are 126.048 → 124.999 and 123.047 → 124.002, both
 about 0.8 %. The grid-metrics harness measured the consequence: a dance export scored
-F1@70 ms 0.27-0.30 against dance's own beats, while a Set gridded on the true beats
-scored 0.996 (`c48428f` on `claude/grid-metrics`). The warp flag doesn't change that error. At 0.84 % a stem
+F1@70 ms 0.27-0.30 against dance's own `beats` table, while a Set whose warp markers
+*were* those beats scored 0.996 (`c48428f` on `claude/grid-metrics`, three real tracks).
+That measures self-consistency against dance's beats, not against ground truth. The
+warp flag doesn't change that error. At 0.84 % a stem
 slips a full beat against a correctly gridded deck in 32 bars, warped or not. What
 changes it is re-deriving the tempo. Every Set exported before the fix carries the old
 grid. The fix needs no writer change: `dance reprocess --from analyze --all --skip-embeddings`
-(`docs/cli.md:69`), then `dance export-als --all`. That re-analysis should happen
+(`docs/cli.md:69-78`), then `dance build-graph` and `dance export-als --all`, the sequence
+`cli.md` prescribes. That re-analysis should happen
 **before** step 3 of the verification below, so the grid being verified is the
 precise one.
 
@@ -180,11 +193,15 @@ extrapolated to negative beats. *Vocal Demo Hum Low* writes the pre-roll marker 
 `(0 s, −3.35)`, `(1.522 s, 0)`, …. For a first downbeat at `d` seconds we would write
 `(d, 0)`, `(d + 60/(32·bpm), 1/32)`, set
 `CurrentEnd = LoopEnd = OutMarker = (duration − d)·bpm/60`, and leave `LoopStart` at 0.
-Two things to watch:
+Three things to watch:
 
 - **Locators** (`markers.py`) must subtract `d`. `LocatorEntry` rejects negative beats
   (`markers.py:29-31`), and `detect_regions` always emits a cue at 0 ms
-  (`detect_regions.py:216`), so those regions need clamping or dropping.
+  (`emit(0, "Start")`, `detect_regions.py:231`), so those regions need clamping or dropping.
+- **Pre-roll.** With `LoopStart=0` at `d`, the first `d` seconds sit before the clip
+  start and don't play. Live's *Vocal Demo Hum Low* keeps its pre-roll reachable through
+  a negative `HiddenLoopStart` (`−3.35`); whether stems need their lead-in is part of
+  decision 6.
 - **`d` isn't trustworthy yet.** `beats.downbeat` is set on every 4th librosa beat
   counted from the first detected beat (`detect_regions.py:167`), so the bar phase is a
   guess. Anchoring therefore waits for a downbeat source that passes the grid-metrics
@@ -194,20 +211,24 @@ None of this changes the element set. The conformance tests below assert "first 
 at beat 0, slope = bpm" rather than `SecTime 0`, so anchoring can land later without
 rewriting them.
 
-**Colour values.** Live 12.4 stores a clip's colour as `<Color Value=N>`, where N indexes
-the 70-entry palette (0-69). That is the same number as LOM `Clip.color_index` and AbletonOSC's
-`/live/clip/get/color_index` ("0-69", [README](https://github.com/ideoforms/AbletonOSC)).
-`Clip.color` is RGB and snaps to the nearest palette entry. In the reference, clip
-values span 0-57, tracks 1-27, and scenes `-1` (no colour). `STEM_COLOR_INDEX`
-(drums 1, bass 2, vocals 4, other 10, mix 13) was tuned by eye in Live 12.4
-(`bb2a895`, `als-export.md:52-60`), and the only colour element Live read then was the
-track's `<Color>`. So those numbers are already Live 12 `Color` values, and the clip gets
-the same number: **there is nothing to convert.** I found no Live 12-written file and no
-public documentation that uses `ColorIndex`, so whatever palette it once meant, Live 12.4
-never reads it. Two stale spots to fix along the way: the module docstring
-(`writer.py:26-31`) still lists the pre-`bb2a895` palette 1/7/13/39/25. The OSC path
-colours *tracks* in RGB (`bridge.py:850-866`) and never sets a clip colour
-(`client.set_clip_color` has no callers). `als-export.md:62` calls that split
+**Colour values.** Live 12.4 stores a clip's colour as an integer `<Color Value=N>`. In the
+reference, clip values span 0-57, tracks 1-27, and scenes `-1` (no colour), which fits an
+index into the 70-entry palette (0-69) that LOM `Clip.color_index` and AbletonOSC's
+`/live/clip/get/color_index` ("0-69", [README](https://github.com/ideoforms/AbletonOSC))
+expose. *Inferred:* that the XML number and the LOM index are the same; nothing documents
+it. LOM `Clip.color` is RGB and snaps to the nearest palette entry. `STEM_COLOR_INDEX`
+(drums 1, bass 2, vocals 4, other 10, mix 13) was retuned by eye in Live 12.4
+(`bb2a895`, `als-export.md:52-60`), and the only colour element of ours Live could have
+been reading then was the track's `<Color>`. So those numbers are already Live 12 `Color`
+values, and the clip gets the same number: **there is nothing to convert.** No Live 12
+file I read and no public documentation I found uses `ColorIndex`. *Unverified
+recollection:* older Live versions (≤ 10) may have used `ColorIndex` for the same
+palette, in which case Live might honour it only when upgrading an old-schema Set, not a
+`12.0_12402` one. Verification step 1 settles it by eye (clip colour vs track colour).
+Two stale spots to fix along the way: the module docstring (`writer.py:26-31`) still
+lists the pre-`bb2a895` palette 1/7/13/39/25. The OSC path colours *tracks* in RGB
+(`bridge.py:850-866`) and never sets a clip colour (`client.set_clip_color` is called
+only by its unit test, `tests/test_osc.py:382`). `als-export.md:62` calls that split
 intentional, so it is out of scope here.
 
 ## Options
@@ -248,7 +269,7 @@ known paths.
 ### C. Stop emitting clips
 
 Static exports were declared "columns-only" on 2026-05-30
-(`als-deck-name-prefix-mismatch.md`), and `als-export.md:39` calls the shipped
+(`als-deck-name-prefix-mismatch.md`), and `als-export.md:41` calls the shipped
 clips "scaffold decoys".
 
 - **For:** the problem goes away, along with every element we'd have to keep correct.
@@ -265,8 +286,8 @@ clips "scaffold decoys".
    Live do today?", "does Live keep a saved grid?", "what does `MarkersGenerated`
    do?" and "which `RelativePathType` does Live write for an external file?".
 2. Land A with the conformance tests, and correct the five parity claims.
-3. Re-analyse the library (`dance reprocess --from analyze --all --skip-embeddings`),
-   re-export, then run step 3.
+3. Re-analyse the library (`dance reprocess --from analyze --all --skip-embeddings`,
+   then `dance build-graph`), re-export, then run step 3.
 4. Downbeat anchoring, once a downbeat source passes the grid-metrics gate. It is a
    separate small change, under the same tests.
 
@@ -285,8 +306,9 @@ clips "scaffold decoys".
    setting moves exported and live-loaded decks together. The alternative is `5`
    (explicit 1 Bar), which survives a changed global setting. That is what `:499-501`
    meant to protect against, but it was written with the wrong enum.
-4. **`MarkersGenerated`.** Live writes `true` on all 2469 unwarped clips and on 149 of
-   210 warped ones, and `false` on 61 warped clips. 10 of the 12 clips whose first
+4. **`MarkersGenerated`.** In `Sample Reference.als`, Live writes `true` on all 2469 unwarped clips and on 149 of
+   210 warped ones, and `false` on 61 warped clips (across all 26 Sets: 2479 unwarped
+   all `true`; 285 warped `true`, 114 `false`). 10 of the 12 clips whose first
    marker isn't at `(0 s, beat 0)` are `false`, and the other two are offset by less
    than 1 ms. I lean `false` ("these markers were placed, not detected"), but step 2
    round-trips both values first. Keep `true` if nothing differs.
@@ -312,7 +334,7 @@ clips "scaffold decoys".
   correction note; its text stays as it is.
 - **Data:** none. Existing `.als` files stay as they are until re-exported. The
   grid-metrics reader reads `IsWarped` first and falls back to `Warp`, and falls back
-  from `FileRef/Name` to the `Path` basename (`reader.py:76-85` on its branch), so it
+  from `FileRef/Name` to the `Path` basename (`reader.py:84-95` on its branch), so it
   works with either writer.
 - **You:** one Live session of 20-30 minutes. CLAUDE.md requires it: "don't change `.als`
   writer emission without re-verifying in Live".
@@ -358,8 +380,11 @@ EOF
 (I dry-ran this against unused ports: it imports and runs, and prints `None`
 for everything when nothing answers.) If `length` is equal across the five clips, equals
 the export's `CurrentEnd`, and is unchanged at 20 s, then Live kept our grid. If bass
-differs, Live re-warped it. Finally, raise the master tempo by 8 BPM and fire scene 1:
-warped stems speed up, unwarped ones don't.
+differs, Live re-warped it. If patch `0005` is applied and Live was fully quit and
+reopened (`vendor/abletonosc/README.md` on `main`), `python scripts/warp_probe.py --scene 1`
+(report-only without `--repair`) prints each stem's actual markers, which is direct
+evidence where `length` is indirect. Finally, raise the master tempo by 8 BPM and fire
+scene 1: warped stems speed up, unwarped ones don't.
 
 **2. Round-trip.** In Live, *File → Save Live Set As…* (Live creates a
 `… Project` folder), then:
@@ -418,8 +443,9 @@ A new file, `tests/test_als_clip_conformance.py`:
   regression test for the 960 BPM case.
 - **Cross-path parity.** The writer's `(IsWarped, WarpMode)` equals what `_force_warp`
   sends (`True`, `_WARP_MODE_BEATS`). If decision 3 is Global, its `LaunchQuantisation`
-  equals `_LAUNCH_QUANT_GLOBAL`. This follows the crossfade parity test in
-  `live-contract-additions.md`.
+  equals `_LAUNCH_QUANT_GLOBAL`. This follows the existing crossfade parity test
+  (`tests/test_osc.py:1262-1279`, which compares the bridge against
+  `writer._crossfade_value_for`).
 - **Upgrade tripwire.** `test_skeleton_matches_installed_live` re-extracts the skeleton from the
   installed app and diffs it against the fixture. It is `skipif` when the app is absent
   (as in CI), and it catches a Live upgrade the same way the template-refresh note does.
