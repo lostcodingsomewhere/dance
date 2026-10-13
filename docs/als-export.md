@@ -9,8 +9,10 @@ Generate a Live Set per track from the analyzed bundle (stems + cues + tempo). O
 ```bash
 dance export-als 42
 # -> /Users/you/Music/Dance/Sets/My Song - Some Artist.als
-open "/Users/you/Music/Dance/Sets/My Song - Some Artist.als"
+open -a "Ableton Live 12 Standard" "/Users/you/Music/Dance/Sets/My Song - Some Artist.als"
 ```
+
+Always name the app. Live 12 Lite 12.0.2 and Live 12 Standard 12.4 are both installed on this Mac and both register `com.ableton.live`, so a bare `open x.als` (or a Finder double-click) can launch Lite — older than the 12.4 template and track-capped. `dance doctor` lists every install and prints the right `open -a` line; [`live-compat.md`](live-compat.md) records which Live build each emission feature was verified on.
 
 Or batch:
 
@@ -111,7 +113,7 @@ The schema is undocumented and Live's loader is strict. If you see a load error:
 3. Read the indicated line; cross-check against the bundled template (`src/dance/als/templates/blank_live12.xml`) for what shape Live expects.
 4. Fix in `writer.py` — typically an attribute mismatch on a class element (e.g. emitting `<TimeSignature Value=""/>` when Live wants `<TimeSignature>` with child elements).
 
-Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml` and asserts shape (track count, locator count, tempo, etc.). They don't and can't assert "Live will accept this" — only Live can.
+Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml` and asserts shape (track count, locator count, tempo, etc.). They don't and can't assert "Live will accept this" — only Live can. Log every real-Live check (date, Live build, what you looked at) in [`live-compat.md`](live-compat.md).
 
 ## Workflow
 
@@ -119,8 +121,8 @@ Tests: `tests/test_als_generator.py` parses every emitted Set back through `lxml
 dance export-als 42
   -> writes ~/Music/Dance/Sets/Track Title - Artist.als
 
-open ~/Music/Dance/Sets/...
-  -> Live launches, opens the Set
+open -a "Ableton Live 12 Standard" ~/Music/Dance/Sets/...
+  -> Live Standard launches (never Lite), opens the Set
   -> 8 stem columns + 2 mix references laid out (2-deck layout), mix tracks muted
   -> DON'T fire the shipped clips — they're scaffold decoys.
      Leave Live open on the layout and live-load stems from the

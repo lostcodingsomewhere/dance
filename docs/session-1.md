@@ -48,7 +48,8 @@ Do not skip this because it seems trivial. Everything else stands on it, and
 it's been unticked since May.
 
 - [ ] Open any exported set:
-      `open "$HOME/Music/Dance/Sets/Alive (feat. The Moth _ The Flame) - Kx5_ deadmau5_ Kaskade_ The Moth _ The Flame.als"`
+      `open -a "Ableton Live 12 Standard" "$HOME/Music/Dance/Sets/Alive (feat. The Moth _ The Flame) - Kx5_ deadmau5_ Kaskade_ The Moth _ The Flame.als"`
+      (name the app — a bare `open` can launch the older Live 12 Lite; `dance doctor` checks)
 - [ ] Live opens with 10 deck columns + master tempo set. Hit **play** on any clip.
 - [ ] **Sound comes out of the Edifiers.** ✅ Tick Phase 0 in `LEARNING.md`.
 - [ ] Solo that track. Sound moves to the **Bose only**, Edifiers keep playing

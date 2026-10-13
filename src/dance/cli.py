@@ -58,8 +58,38 @@ def main(ctx: click.Context, verbose: bool) -> None:
     log_level = "DEBUG" if verbose else settings.log_level
     setup_logging(log_level)
 
+    if ctx.invoked_subcommand == "doctor":
+        # Read-only diagnostics: creating dirs or running create_all() here
+        # would change the very state the doctor reports on.
+        return
     settings.ensure_directories()
     init_db(settings.db_url)
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report on stdout")
+@click.pass_context
+def doctor(ctx: click.Context, as_json: bool) -> None:
+    """Read-only health check: DB migrations, ffmpeg, Live, AbletonOSC, weights.
+
+    Exits 1 if any check fails. Never writes anything — see dance/doctor.py.
+    """
+    import json
+
+    from dance.doctor import render_text, run_doctor
+
+    if as_json:
+        # Log lines go to stdout via RichHandler; keep --json parseable.
+        logging.disable(logging.CRITICAL)
+        try:
+            report = run_doctor(ctx.obj["settings"])
+        finally:
+            logging.disable(logging.NOTSET)
+        click.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        report = run_doctor(ctx.obj["settings"])
+        render_text(report, console)
+    ctx.exit(0 if report.ok else 1)
 
 
 @main.command()

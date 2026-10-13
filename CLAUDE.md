@@ -67,7 +67,8 @@ These come from the user's persistent memory — they apply project-wide.
 | User says | What to do |
 |---|---|
 | "let's DJ" / "load this playlist" | `dance config --spotify-playlist <url>` → `dance run --once` → `dance build-graph` → `dance export-als --all`. See [`LEARNING.md`](LEARNING.md) for the full runbook. Note: an exported `.als` is opened in Live **only to load the deck columns** — stems are then **live-loaded through the app** (⌘K / rec promote → OSC). The `.als` clips themselves are not library-linked by design; see [`docs/proposals/als-deck-name-prefix-mismatch.md`](docs/proposals/als-deck-name-prefix-mismatch.md). |
-| "the als is broken" / "Live won't open the set" | See [`docs/troubleshooting.md`](docs/troubleshooting.md) "Live rejects the .als entirely". Don't refactor `writer.py` from scratch — it's template-based on purpose. |
+| "the als is broken" / "Live won't open the set" | `dance doctor` first — Live 12 Lite shares Standard's bundle id, so bare `open x.als` can launch the wrong Live; use `open -a "Ableton Live 12 Standard"`. Then [`docs/troubleshooting.md`](docs/troubleshooting.md) "Live rejects the .als entirely". Don't refactor `writer.py` from scratch — it's template-based on purpose. |
+| "is my setup OK?" / "the crossfader does nothing" / "something's off after a pull" | `dance doctor` (read-only; exit 1 on any fail): DB migration state, ffmpeg, Live installs vs the `.als` template, missing AbletonOSC handlers, model weights, backend. Each line has a fix hint. Never auto-fixes. |
 | "let's tag tracks" | `dance tag` (CLAP zero-shot, fast) or `dance tag --deep` (Qwen2-Audio, 10–30 s/track). See [`docs/tagging.md`](docs/tagging.md). |
 | "let's plan a set" / "make a set" | Open the companion app → **Set** view → create a set → queue picks per role from the recs (＋ on a card) or via ⌘K (appends to the Song column). The plan IS the set (JSON `plan` on `sets`); recs are scored against the rest of the plan + the plan's journey. The same grid drives the Booth in `mode="live"`. |
 | "recs seem off" / "tune the rec scoring" | Scoring lives in the unified brain — [`src/dance/recommender/scoring.py`](src/dance/recommender/scoring.py) (+ [`journey.py`](src/dance/recommender/journey.py) for trend/vibe, [`structure.py`](src/dance/recommender/structure.py) for transition fit). Run a real-set check before changing. (`recommender/tail.py` + `/sets/{id}/tail-recs` are legacy — not used by the UI.) |
@@ -80,7 +81,7 @@ These come from the user's persistent memory — they apply project-wide.
 - **Don't move stems after generating a `.als`.** Live references stems by absolute path. Move → "Missing Media" dialog. Regenerate the `.als` after a move.
 - **Don't bypass the `als_output_dir` safety guard.** `out_path` must resolve inside `settings.als_output_dir`. The API endpoint relies on this — see `src/dance/als/generator.py` → `AlsOutsideDirError`.
 - **Don't run or mutate pipeline state outside the dispatcher lock.** `<data_dir>/dispatcher.lock` (`src/dance/pipeline/dispatcher_lock.py`) serializes every dispatcher, terminal and API; a second run would reset the first one's in-flight tracks. New commands that change track states take it via `cli._pipeline_lock`. Exit 75 / HTTP 409 = another run holds it.
-- **Don't change `.als` writer emission without re-verifying in Live.** Tests only assert XML shape, not "Live will accept this." Generate a fresh `.als`, open it in Live, confirm 5 tracks load + audio plays + tempo correct.
+- **Don't change `.als` writer emission without re-verifying in Live.** Tests only assert XML shape, not "Live will accept this." Generate a fresh `.als`, open it in Live Standard, confirm the 10 deck tracks load + audio plays + tempo correct, and log it in [`docs/live-compat.md`](docs/live-compat.md).
 - **Don't add Bluetooth / network audio paths.** Wired-only is a locked decision (see [`HARDWARE.md`](HARDWARE.md)).
 - **Don't reintroduce Traktor.** The repo pivoted away from Traktor explicitly. Stem-in-Ableton is the locked architecture.
 
@@ -98,13 +99,14 @@ dance process [-n 5] [--skip-stems]       # advance tracks through stages
 dance tag [--deep]                        # CLAP zero-shot or Qwen2-Audio
 dance build-graph                         # build recommendation edges
 dance export-als <id> | --all             # generate Live Set(s)
+dance doctor [--json]                     # read-only health check (DB, ffmpeg, Live, AbletonOSC)
 
 # Servers
 uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
 (cd companion-app && npm run dev)         # http://localhost:5173
 
 # Tests
-pytest                                    # ~25 s, 197 tests, synthetic audio
+pytest                                    # ~2 min, 500+ tests, synthetic audio
 ```
 
 Everything else in [`README.md`](README.md) and `docs/`.

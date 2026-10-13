@@ -70,7 +70,7 @@ uvicorn dance.api:create_app --factory --host 127.0.0.1 --port 8000
 cd companion-app && npm run dev   # http://localhost:5173
 
 # 5. Open a Set — ONLY to load the deck columns into Live
-open "/Users/arya/Music/Dance/Sets/<some track>.als"
+open -a "Ableton Live 12 Standard" "/Users/arya/Music/Dance/Sets/<some track>.als"   # not bare `open`: Lite 12.0.2 shares the bundle id
 # → Live launches with the 10-column 2-deck layout (Drums/Bass/Vocals/Other/Mix
 #   × A/B) + master tempo set. The app adopts these columns automatically.
 # → From here, DON'T mix from the .als's own clips. Live-load stems through the

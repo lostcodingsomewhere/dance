@@ -31,7 +31,7 @@ Python — `tests/`:
 
 ```bash
 source .venv/bin/activate
-pytest                  # full suite (~25 s)
+pytest                  # full suite (500+ tests, ~2 min)
 pytest -k stage         # subset
 pytest -x --pdb         # stop at first failure, drop into pdb
 pytest --cov=dance      # coverage report
@@ -47,7 +47,7 @@ npm test                # vitest
 npm test -- --watch
 ```
 
-Currently there are two React tests (`tests/smoke.test.tsx`) — App renders without crashing, plus a `useAbletonState` smoke test. Expand as you add components.
+There are 11 vitest files under `companion-app/tests/` (`smoke.test.tsx` plus SceneGrid, RoleColumnsGrid, BoothColumnHeaders, Waveform, preview, seek, gridNav, gridKeys, deckArm, deckRegistration). Add one next to them as you add components.
 
 ## Adding a new pipeline stage
 
@@ -136,13 +136,11 @@ alembic upgrade head
 Apply to an existing DB:
 
 ```bash
+dance doctor            # read-only: is the DB behind? which revisions are pending?
 alembic upgrade head
 ```
 
-Existing migrations:
-
-- `95ce5599f3d5_initial_schema.py`
-- `823c72d59d8a_rename_regions_bar_count_to_length_bars.py`
+Existing migrations: `src/dance/alembic/versions/` (one file per revision; `alembic history` prints the chain).
 
 Caveats:
 
@@ -212,5 +210,5 @@ companion-app/src/
   hooks/                  useTracks, useRecommend, useSession, useAbletonState
   views/                  NowPlaying, UpNext, Library, SessionHistory
 
-tests/                    197 Python tests, all use synthetic audio
+tests/                    500+ Python tests, all use synthetic audio
 ```

@@ -8,7 +8,7 @@ dance <command> --help       # per-command flags
 dance --verbose <command>    # DEBUG logging
 ```
 
-All commands read configuration from `~/.dance/.env` and `DANCE_*` env vars (see `src/dance/config.py:19`). On startup, `main()` (`cli.py:50`) ensures the data dirs exist and calls `init_db()`.
+All commands read configuration from `~/.dance/.env` and `DANCE_*` env vars (see `src/dance/config.py:19`). On startup, `main()` (`cli.py:50`) ensures the data dirs exist and calls `init_db()` — except for `dance doctor`, which is read-only and skips both.
 
 ---
 
@@ -125,6 +125,59 @@ dance run --once --skip-sync   # process only
 Ctrl+C in daemon mode exits cleanly.
 
 **State changes:** same as `sync` + `process`.
+
+---
+
+## `dance ingest`
+
+The whole new-track lifecycle in one command: `sync` → `process` → `build-graph` → `tag` → `export-als --all`, with an ffmpeg preflight up front and a one-line summary at the end (playable tracks, `.als` count, anything still stuck).
+
+```bash
+dance ingest                # full chain
+dance ingest --skip-sync    # re-run the chain on the existing library, no Spotify
+```
+
+Skips the sync step (with a hint) when no playlist is configured. Equivalent to the five-command "let's DJ" runbook.
+
+**State changes:** same as the five commands it chains.
+
+---
+
+## `dance dedupe`
+
+Mark redundant copies of the same recording via `tracks.duplicate_of` — reversible, never deletes rows or audio. Metadata proposes candidate groups; every pair is then confirmed by comparing the audio before it is marked. See `docs/proposals/library-duplicates.md`.
+
+```bash
+dance dedupe                   # DRY RUN: list confirmed / unconfirmed pairs, write nothing
+dance dedupe --apply           # mark the confirmed copies
+dance dedupe --undo            # DRY RUN of clearing every marker
+dance dedupe --undo --apply    # clear every duplicate_of marker (full revert)
+```
+
+**State changes:** with `--apply`, sets or clears `tracks.duplicate_of`. No `Track.state` mutation.
+
+---
+
+## `dance doctor`
+
+Read-only health check of everything dance depends on outside its own code. Each line is `ok` / `info` / `WARN` / `FAIL` with a `fix:` hint; the command exits 1 if anything fails.
+
+```bash
+dance doctor           # human-readable
+dance doctor --json    # {"ok", "counts", "checks": [{key, label, status, summary, details, fix}]}
+```
+
+| Check | What it looks at |
+|---|---|
+| Database migrations | Alembic revision of `settings.db_url` vs the scripts' head (lists pending revisions, unknown revisions, multiple heads, unversioned DBs, schema drift). Opens SQLite with `immutable=1`; never upgrades or stamps. |
+| ffmpeg / ffprobe | On `PATH` (the `process`/`sync` preflight uses PATH) and actually runs. |
+| yt-dlp, YouTube cookies, Spotify search | Same logic as `GET /api/v1/health/deps`. |
+| Ableton Live | Every `/Applications/Ableton Live*.app` version vs the `.als` template's `Creator`/`Revision`; warns about Lite/Intro and multiple installs sharing `com.ableton.live`, and prints the `open -a` line to use. |
+| AbletonOSC | Upstream commit of the Remote Script clone, and which OSC addresses dance sends (derived from `dance/osc/client.py`) have no handler in the installed source — named against the patch docs. Static scan; Live still needs a full restart after patching. |
+| CLAP / Demucs weights | Presence in the Hugging Face / torch.hub caches (never downloads). |
+| Backend API | `GET 127.0.0.1:8000/health`, 0.5 s timeout; "not running" is `info`, not a failure. |
+
+**State changes:** none — it skips the usual `init_db()` / directory creation.
 
 ---
 
