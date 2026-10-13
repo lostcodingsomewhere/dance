@@ -12,9 +12,13 @@ The token is cached in memory with a small safety margin before expiry.
 from __future__ import annotations
 
 import base64
+import random
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from typing import Any
 
 import httpx
 
@@ -22,6 +26,36 @@ _TOKEN_URL = "https://accounts.spotify.com/api/token"
 _SEARCH_URL = "https://api.spotify.com/v1/search"
 _TRACK_URL = "https://api.spotify.com/v1/tracks"
 _PLAYLIST_URL = "https://api.spotify.com/v1/playlists"
+
+# HTTP 429 handling. Spotify rate-limits per app over a rolling 30 s window
+# and says how long to back off in ``Retry-After`` (seconds). A 300-track
+# playlist pages + per-track lookups can trip it; before this the first 429
+# surfaced as a hard error. We honour the header, add jitter so concurrent
+# callers don't retry in lockstep, and give up after a few tries — or at
+# once when Spotify asks for a wait too long to hold an API request open
+# (its penalty box can be hours).
+_MAX_429_RETRIES = 3
+_MAX_RETRY_AFTER_S = 30.0
+_RETRY_JITTER_S = 1.0
+
+
+def _retry_after_seconds(header: str | None, attempt: int) -> float:
+    """Seconds to wait from a ``Retry-After`` header (delta or HTTP date).
+
+    Missing or unparseable → exponential backoff 1, 2, 4 s by attempt.
+    """
+    if header:
+        value = header.strip()
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            pass
+        try:
+            when = parsedate_to_datetime(value)
+            return max(0.0, when.timestamp() - time.time())
+        except (TypeError, ValueError, IndexError):
+            pass
+    return float(2**attempt)
 
 
 class SpotifyAuthError(RuntimeError):
@@ -71,6 +105,8 @@ class SpotifySearchClient:
         self._expires_at: float = 0.0
         # Inject-able for tests; defaults to a real httpx client.
         self._http = httpx.Client(timeout=10.0)
+        # Inject-able for tests so 429 back-off doesn't really sleep.
+        self._sleep: Callable[[float], None] = time.sleep
 
     @property
     def configured(self) -> bool:
@@ -102,7 +138,7 @@ class SpotifySearchClient:
             )
         token = self._get_token()
         try:
-            r = self._http.get(
+            r = self._get(
                 _SEARCH_URL,
                 params={"q": query, "type": "track", "limit": max(1, min(limit, 50))},
                 headers={"Authorization": f"Bearer {token}"},
@@ -114,7 +150,7 @@ class SpotifySearchClient:
             self._token = None
             self._expires_at = 0
             token = self._get_token()
-            r = self._http.get(
+            r = self._get(
                 _SEARCH_URL,
                 params={"q": query, "type": "track", "limit": max(1, min(limit, 50))},
                 headers={"Authorization": f"Bearer {token}"},
@@ -129,7 +165,7 @@ class SpotifySearchClient:
         if not self.configured:
             raise SpotifyAuthError("Spotify search not configured")
         token = self._get_token()
-        r = self._http.get(
+        r = self._get(
             f"{_TRACK_URL}/{spotify_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -185,7 +221,7 @@ class SpotifySearchClient:
         seen_ids: set[str] = set()
         while url:
             try:
-                r = self._http.get(url, headers={"Authorization": f"Bearer {token}"})
+                r = self._get(url, headers={"Authorization": f"Bearer {token}"})
             except httpx.HTTPError as exc:
                 raise SpotifySearchError(f"Spotify playlist transport error: {exc}") from exc
             if r.status_code == 401:
@@ -201,7 +237,7 @@ class SpotifySearchClient:
                 self._token = None
                 self._expires_at = 0
                 token = self._get_token()
-                r = self._http.get(url, headers={"Authorization": f"Bearer {token}"})
+                r = self._get(url, headers={"Authorization": f"Bearer {token}"})
             if r.status_code == 403:
                 # Specific guidance: Spotify's Nov 2024 policy locks this
                 # endpoint to user tokens for non-owned playlists. Bubble
@@ -232,6 +268,40 @@ class SpotifySearchClient:
         return hits
 
     # ------------------------------------------------------------------
+    # Transport with 429 back-off
+    # ------------------------------------------------------------------
+
+    def _get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._send(self._http.get, url, **kwargs)
+
+    def _post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._send(self._http.post, url, **kwargs)
+
+    def _send(
+        self, method: Callable[..., httpx.Response], url: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Issue a request, retrying HTTP 429 per ``Retry-After``.
+
+        Returns the final response — a 429 after the last retry is handed
+        back for the caller's normal ``>= 400`` handling. Raises
+        :class:`SpotifySearchError` straight away when Spotify asks for a
+        wait longer than ``_MAX_RETRY_AFTER_S``.
+        """
+        attempt = 0
+        while True:
+            r = method(url, **kwargs)
+            if r.status_code != 429 or attempt >= _MAX_429_RETRIES:
+                return r
+            wait = _retry_after_seconds(r.headers.get("Retry-After"), attempt)
+            if wait > _MAX_RETRY_AFTER_S:
+                raise SpotifySearchError(
+                    f"Spotify rate limit (HTTP 429): asked to wait {wait:.0f}s, "
+                    f"more than {_MAX_RETRY_AFTER_S:.0f}s — try again later"
+                )
+            self._sleep(wait + random.uniform(0.0, _RETRY_JITTER_S))
+            attempt += 1
+
+    # ------------------------------------------------------------------
     # Token cache
     # ------------------------------------------------------------------
 
@@ -248,7 +318,7 @@ class SpotifySearchClient:
             "ascii"
         )
         try:
-            r = self._http.post(
+            r = self._post(
                 _TOKEN_URL,
                 data={"grant_type": "client_credentials"},
                 headers={
