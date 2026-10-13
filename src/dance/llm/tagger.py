@@ -33,6 +33,7 @@ from dance.core.database import (
     normalize_tag_value,
     now_utc,
 )
+from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
 from dance.pipeline.utils.db import upsert
 
@@ -227,6 +228,7 @@ class ClapZeroShotTagger:
                 TrackEmbedding.track_id == track.id,
                 TrackEmbedding.stem_file_id.is_(None),
                 TrackEmbedding.model == self.settings.clap_model,
+                current_scheme(),
             )
             .first()
         )

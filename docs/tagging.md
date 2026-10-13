@@ -16,7 +16,7 @@ Both write to the same `tags` / `track_tags` schema. Both leave `manual` tags al
 `src/dance/llm/tagger.py`. CLAP is a joint audio-text embedding. We:
 
 1. Encode each candidate label in the controlled vocabulary as a CLAP text vector (cached in-process).
-2. Load the track's already-stored full-mix audio embedding from `track_embeddings`.
+2. Load the track's already-stored full-mix audio embedding from `track_embeddings` (current scheme only — after a scheme bump run `dance embed`, then `dance tag --retag`).
 3. Cosine-rank labels per kind; emit top-K above `tagger_zeroshot_threshold`.
 
 Track must be in state `complete` and have a full-mix CLAP embedding. If you ran with `--skip-embeddings`, this tagger errors out.

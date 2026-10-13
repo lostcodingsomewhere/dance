@@ -651,6 +651,60 @@ def run(ctx: click.Context, once: bool, skip_sync: bool, wait: bool) -> None:
         console.print("\n[yellow]Stopped.[/yellow]")
 
 
+@main.command()
+@click.option("--track-id", "-t", type=int, help="Re-embed one COMPLETE track")
+@click.option("--all", "all_tracks", is_flag=True, help="Re-embed every COMPLETE track")
+@click.option("--limit", "-n", type=int, default=None, help="Max tracks this run")
+@click.pass_context
+def embed(
+    ctx: click.Context, track_id: int | None, all_tracks: bool, limit: int | None
+) -> None:
+    """Re-embed COMPLETE tracks whose CLAP embeddings are not on the current scheme.
+
+    The embed stage only sees tracks on their way to COMPLETE; this brings an
+    already-processed library onto the current windowed scheme. Track state
+    is never changed: a failure is reported and that track keeps its old
+    rows. Run ``dance build-graph`` afterwards (and ``dance tag --retag``).
+    """
+    settings: Settings = ctx.obj["settings"]
+    session = get_session(settings.db_url)
+    try:
+        from dance.pipeline.stages.embed import EmbeddingStage, stale_track_ids
+
+        q = session.query(Track).filter(Track.state == TrackState.COMPLETE.value)
+        if track_id is not None:
+            q = q.filter(Track.id == track_id)
+        elif not all_tracks:
+            q = q.filter(Track.id.in_(stale_track_ids(session, settings.clap_model)))
+        targets = q.order_by(Track.id).limit(limit).all()
+        if not targets:
+            console.print("[green]Every COMPLETE track is on the current embedding scheme.[/green]")
+            return
+
+        console.print(f"[cyan]Embedding {len(targets)} track(s) with {settings.clap_model}...[/cyan]")
+        stage = EmbeddingStage()
+        ok = errs = 0
+        for t in targets:
+            started = time.monotonic()
+            try:
+                written, silent = stage.embed_track(session, t, settings)
+                session.commit()
+            except Exception as exc:  # noqa: BLE001 — report and keep going
+                session.rollback()
+                console.print(f"  [red]✗[/red] #{t.id} {t.title or t.file_name}: {exc}")
+                errs += 1
+                continue
+            note = f", {silent} silent skipped" if silent else ""
+            console.print(
+                f"  [green]✓[/green] #{t.id} {t.title or t.file_name} "
+                f"({written} rows{note}, {time.monotonic() - started:.1f}s)"
+            )
+            ok += 1
+        console.print(f"\n[green]Embedded: {ok}[/green]  [red]Errors: {errs}[/red]")
+    finally:
+        session.close()
+
+
 @main.command("build-graph")
 @click.option("--track-id", "-t", type=int, multiple=True, help="Incremental: only rebuild edges for these tracks")
 @click.pass_context

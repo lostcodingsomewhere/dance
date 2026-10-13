@@ -21,6 +21,7 @@ from dance.core.database import (
     TrackTag,
     now_utc,
 )
+from dance.core.embedding_scheme import CLAP_EMBED_VERSION
 from dance.core.serialization import encode_embedding
 from dance.llm.brief import build_track_brief
 from dance.llm.tagger import (
@@ -60,7 +61,7 @@ def _add_fullmix_embedding(session: Session, track_id: int, vec: np.ndarray, mod
             track_id=track_id,
             stem_file_id=None,
             model=model,
-            model_version=None,
+            model_version=CLAP_EMBED_VERSION,
             dim=int(vec.shape[0]),
             embedding=encode_embedding(vec.astype(np.float32)),
             created_at=now_utc(),

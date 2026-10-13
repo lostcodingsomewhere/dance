@@ -217,6 +217,20 @@ Re-tag semantics: the chosen tagger deletes its own existing tags on the track a
 
 ---
 
+## `dance embed`
+
+Re-embed COMPLETE tracks whose CLAP rows are not on the current scheme (`track_embeddings.model_version` ≠ `CLAP_EMBED_VERSION` in `src/dance/core/embedding_scheme.py`). Each mix/stem is embedded as the mean of up to `DANCE_CLAP_MAX_WINDOWS` (12) evenly spread 10 s windows, skipping windows quieter than `DANCE_CLAP_SILENCE_DB` (−40 dBFS); deterministic run to run. Readers only use current-scheme rows, so run this after a scheme bump, then `dance build-graph` and `dance tag --retag`.
+
+```bash
+dance embed                 # only tracks with old-scheme or missing rows
+dance embed --all           # every COMPLETE track (e.g. after changing a window knob)
+dance embed --track-id 42
+```
+
+**State changes:** none on `Track.state`. Replaces that track's `track_embeddings` rows for `clap_model`; a failure leaves its old rows untouched.
+
+---
+
 ## `dance build-graph`
 
 (Re)build the `track_edges` recommendation graph. Library-level operation, not a per-track stage.

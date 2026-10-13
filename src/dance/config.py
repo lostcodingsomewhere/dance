@@ -91,6 +91,15 @@ class Settings(BaseSettings):
     # CLAP embeddings
     clap_model: str = Field(default="laion/clap-htsat-unfused")
     clap_device: str = Field(default="auto")  # auto, mps, cuda, cpu
+    # Each audio (mix or stem) is embedded as the mean of up to this many of
+    # the model's native 10 s windows, evenly spread over its non-silent
+    # content. Cost scales linearly; 12 covers a 6-min track every ~30 s.
+    clap_max_windows: int = Field(default=12, ge=1)
+    # Windows whose RMS is below this (dBFS) are skipped — silent intros,
+    # vocal stems between phrases, drums in a breakdown. An audio with no
+    # window above it gets no embedding at all (readers treat that as a
+    # missing feature). Changing either knob needs `dance embed --all`.
+    clap_silence_db: float = Field(default=-40.0, le=0.0)
 
     # Demucs
     demucs_model: str = Field(default="htdemucs_ft")

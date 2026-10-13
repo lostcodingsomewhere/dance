@@ -27,6 +27,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from dance.core.database import AudioAnalysis, TrackEmbedding
+from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
 from dance.recommender.scoring import embed_score, project_energy
 
@@ -185,6 +186,7 @@ def _ordered_fullmix_vecs(session: Session, track_ids: list[int]) -> list[np.nda
         .filter(
             TrackEmbedding.track_id.in_(track_ids),
             TrackEmbedding.stem_file_id.is_(None),
+            current_scheme(),
         )
         .all()
     )
@@ -229,7 +231,7 @@ def _combo_embedding(session: Session, combo_stem_ids: list[int]) -> np.ndarray 
         return None
     rows = (
         session.query(TrackEmbedding)
-        .filter(TrackEmbedding.stem_file_id.in_(combo_stem_ids))
+        .filter(TrackEmbedding.stem_file_id.in_(combo_stem_ids), current_scheme())
         .all()
     )
     if not rows:

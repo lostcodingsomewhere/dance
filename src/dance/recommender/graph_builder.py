@@ -27,6 +27,7 @@ from dance.core.database import (
     TrackEmbedding,
     now_utc,
 )
+from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ class GraphBuilder:
             .filter(
                 TrackEmbedding.stem_file_id.is_(None),
                 TrackEmbedding.model == model,
+                current_scheme(),
             )
             .all()
         )
