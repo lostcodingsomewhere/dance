@@ -66,7 +66,7 @@ Symptom: the backend starts cleanly, `/api/v1/ableton/state` returns all `null`s
 
 ## `spotdl` rate limiting / Spotify Web API restrictions (Nov 2024+)
 
-`dance sync` uses spotDL, which calls Spotify's Web API to enumerate playlist tracks. Two failure modes, in escalating severity:
+`dance sync` uses spotDL, which calls Spotify's Web API to enumerate playlist tracks. It runs `spotdl sync --sync-without-deleting`: plain `spotdl sync` deletes the library file of every song that has left the playlist and renames files whose Spotify metadata changed, which orphans Track rows, stems and every `.als` that references the old absolute path. Two failure modes, in escalating severity:
 
 **1. Shared-default-token hangs** (mild — fixable by registering your own app).
 
