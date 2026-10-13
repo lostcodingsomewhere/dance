@@ -75,6 +75,7 @@ BACKEND_HEALTH_URL = "http://127.0.0.1:8000/health"
 
 _DANCE_PKG_DIR = Path(__file__).resolve().parent
 _SETUP_DOC = "docs/abletonosc_setup.md"
+_PATCH_DIR = "vendor/abletonosc/patches"
 
 
 @dataclass
@@ -747,20 +748,19 @@ KNOWN_PATCHES: tuple[OscPatch, ...] = (
     OscPatch(
         "create_audio_clip",
         "load a sample into a clip slot",
-        f"{_SETUP_DOC} § 'One-time AbletonOSC patch for auto-loading stems'",
+        f"{_PATCH_DIR}/0001-clip_slot-expose-create_audio_clip-Live-12.0.5.patch",
         frozenset({"/live/clip_slot/create_audio_clip"}),
     ),
     OscPatch(
         "crossfade_assign",
         "per-track crossfader assignment",
-        f"{_SETUP_DOC} § 'One-time AbletonOSC patch for crossfader assignment'",
+        f"{_PATCH_DIR}/0003-track-get-set-crossfade_assign-0-A-1-None-2-B.patch",
         frozenset({"/live/track/get/crossfade_assign", "/live/track/set/crossfade_assign"}),
     ),
     OscPatch(
         "master_crossfader",
         "master crossfader get/set/listen",
-        "commit 63f6b0b ('osc: master crossfader handler') — handler source is not "
-        "in this repo or the setup doc",
+        f"{_PATCH_DIR}/0004-song-get-set-listen-the-master-crossfader.patch",
         frozenset(
             {
                 "/live/song/get/crossfader",
@@ -773,8 +773,7 @@ KNOWN_PATCHES: tuple[OscPatch, ...] = (
     OscPatch(
         "warp_markers",
         "warp-marker read/repair (scripts/warp_probe.py)",
-        "docs/proposals/warp-guard.md § 'Option C' (commit d54c002) — handler source is "
-        "not in this repo",
+        f"{_PATCH_DIR}/0005-clip-read-and-edit-warp-markers-as-plain-floats.patch",
         frozenset(
             {
                 "/live/clip/add_warp_marker",
@@ -785,7 +784,7 @@ KNOWN_PATCHES: tuple[OscPatch, ...] = (
     ),
 )
 
-_LOG_FIX_DOC = f"{_SETUP_DOC} § 'Fix the clip_slot_callback logging bug'"
+_LOG_FIX_DOC = f"{_PATCH_DIR}/0002-clip_slot-fix-the-logging-call-that-raised-on-every-.patch"
 _LOG_BUG_RE = re.compile(r"logger\.info\(\s*track_index\s*,")
 
 
@@ -1025,7 +1024,7 @@ def check_abletonosc(
             label,
             FAIL,
             f"not installed at {root}",
-            fix=f"{_SETUP_DOC} § 'Install steps', then apply the dance patches in that doc "
+            fix=f"{_SETUP_DOC} § 'Install steps', then python scripts/abletonosc_patch.py "
             "and fully quit + reopen Live.",
         )
 
@@ -1126,7 +1125,7 @@ def check_abletonosc(
     fix = None
     if fixes:
         fix = "\n".join(
-            [f"Patch {root / 'abletonosc'}:"]
+            ["python scripts/abletonosc_patch.py   (applies vendor/abletonosc/patches:)"]
             + [f"  - {f}" for f in fixes]
             + ["then fully quit and reopen Live (toggling the Control Surface is not enough)."]
         )

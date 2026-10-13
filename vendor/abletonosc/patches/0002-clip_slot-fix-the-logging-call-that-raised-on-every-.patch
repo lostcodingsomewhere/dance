@@ -1,0 +1,29 @@
+From 2d8c02d5c34eba90a8337af3c11d058ec763772f Mon Sep 17 00:00:00 2001
+From: dance <noreply@example.com>
+Date: Tue, 13 Oct 2026 09:01:47 -0400
+Subject: [PATCH 2/5] clip_slot: fix the logging call that raised on every
+ clip-slot method
+
+clip_slot_callback passed an int as the logging format string
+(self.logger.info(track_index, clip_index, rv)), which raises TypeError
+'not all arguments converted during string formatting' after every
+clip-slot call. The LOM side effect already happened, but the OSC reply
+(the return value) was dropped and Live's log filled with RemoteScriptError
+spam.
+---
+ abletonosc/clip_slot.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/abletonosc/clip_slot.py b/abletonosc/clip_slot.py
+index 34ec704..8299834 100644
+--- a/abletonosc/clip_slot.py
++++ b/abletonosc/clip_slot.py
+@@ -18,7 +18,7 @@ class ClipSlotHandler(AbletonOSCHandler):
+                 else:
+                     rv = func(clip_slot, *args, tuple(params[2:]))
+ 
+-                self.logger.info(track_index, clip_index, rv)
++                self.logger.info("clip_slot %s %s -> %s", track_index, clip_index, rv)
+                 if rv is not None:
+                     return (track_index, clip_index, *rv)
+ 

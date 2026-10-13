@@ -7,19 +7,29 @@ You install it once into your Ableton Live `Remote Scripts` folder, restart Live
 ## Install steps (macOS, Live 11/12)
 
 1. Quit Ableton Live.
-2. Clone AbletonOSC into Live's MIDI Remote Scripts directory:
+2. Clone AbletonOSC into Live's MIDI Remote Scripts directory, at the commit dance's patches are pinned to ([`vendor/abletonosc/UPSTREAM`](../vendor/abletonosc/UPSTREAM)):
 
    ```bash
    git clone https://github.com/ideoforms/AbletonOSC.git \
      ~/Music/Ableton/User\ Library/Remote\ Scripts/AbletonOSC
+   git -C ~/Music/Ableton/User\ Library/Remote\ Scripts/AbletonOSC checkout 0ca68214bd62c9b5cb641ca34006cfd70ba94430
    ```
 
    (If `Remote Scripts` doesn't exist, create it.)
 
-3. Start Ableton Live.
-4. Open **Live → Preferences → Link, Tempo & MIDI → Control Surface**.
-5. In the **Control Surface** dropdown choose **AbletonOSC**.
-6. Leave **Input** and **Output** at their default (no MIDI device needed).
+3. Apply dance's patches (handlers stock AbletonOSC lacks — see [`vendor/abletonosc/README.md`](../vendor/abletonosc/README.md)):
+
+   ```bash
+   python scripts/abletonosc_patch.py --check   # report only
+   python scripts/abletonosc_patch.py           # back up, then apply what's missing
+   ```
+
+   The sections further down explain what each patch does and why; you don't need to hand-edit anything.
+
+4. Start Ableton Live.
+5. Open **Live → Preferences → Link, Tempo & MIDI → Control Surface**.
+6. In the **Control Surface** dropdown choose **AbletonOSC**.
+7. Leave **Input** and **Output** at their default (no MIDI device needed).
 
 Live will load AbletonOSC. The default ports are:
 - **11000** — Live listens here (the dance backend sends commands to this port).
@@ -27,7 +37,7 @@ Live will load AbletonOSC. The default ports are:
 
 ## Verifying
 
-`dance doctor` reads the installed Remote Script without touching it. It reports the upstream commit and lists every OSC address dance sends that has no handler (static scan), each paired with the patch section below that fixes it. It can't see what Live has actually loaded, so after any patch, fully quit and reopen Live. The installed commit and patch state are recorded in [`live-compat.md`](live-compat.md).
+`dance doctor` reads the installed Remote Script without touching it. It reports the upstream commit and lists every OSC address dance sends that has no handler (static scan), each paired with the vendored patch that fixes it (`python scripts/abletonosc_patch.py` applies them all). It can't see what Live has actually loaded, so after any patch, fully quit and reopen Live. The installed commit and patch state are recorded in [`live-compat.md`](live-compat.md).
 
 With AbletonOSC loaded, run the dance backend (Phase 2.2) and check the logs for an `OSC listener bound on 127.0.0.1:11001` line. From the Python REPL:
 
@@ -51,6 +61,8 @@ See `src/dance/osc/client.py` for the full method list and `src/dance/osc/bridge
 
 ## One-time AbletonOSC patch for auto-loading stems
 
+> Applied by `scripts/abletonosc_patch.py` (patch `0001`). The rest of this section explains what it does.
+
 Live 12.0.5 quietly added `ClipSlot.create_audio_clip(path)` to the Live Object Model (confirmed on [Cycling74 forums](https://cycling74.com/forums/function-createaudioclip-class-clipslot-and-track-missing-lom)) — you can load an audio sample from disk straight into a session-view clip slot. Upstream AbletonOSC hasn't merged a handler for it yet ([PR #196](https://github.com/ideoforms/AbletonOSC/pull/196), [PR #168](https://github.com/ideoforms/AbletonOSC/pull/168) — both target arrangement view, neither merged), so we patch our local install.
 
 Add one line to `~/Music/Ableton/User Library/Remote Scripts/AbletonOSC/abletonosc/clip_slot.py`:
@@ -68,6 +80,8 @@ methods = [
 Then **fully quit and reopen Ableton** (toggling Control Surface off/on isn't enough — Live's Python keeps modules in `sys.modules`). The handler is now bound to `/live/clip_slot/create_audio_clip (track_idx, slot_idx, absolute_path)`.
 
 ### Fix the `clip_slot_callback` logging bug (Dance patch, 2026-06-14)
+
+> Applied by `scripts/abletonosc_patch.py` (patch `0002`).
 
 AbletonOSC's `clip_slot_callback` (in `abletonosc/clip_slot.py`) logs each call
 via `self.logger.info(track_index, clip_index, rv)` — passing an `int` as the
@@ -88,6 +102,8 @@ re-fires the cue clip until Live confirms playback, so a compressed full-mix
 sample that's still decoding can't leave a "song" preview silent.)
 
 ## One-time AbletonOSC patch for crossfader assignment
+
+> Applied by `scripts/abletonosc_patch.py` (patch `0003`). Patch `0004` adds the master-crossfader get/set/listen handlers and `0005` the warp-marker handlers used by `scripts/warp_probe.py` — see [`vendor/abletonosc/README.md`](../vendor/abletonosc/README.md).
 
 Stock AbletonOSC exposes a track's mixer `volume`, `panning`, and `send`, but **not** `mixer_device.crossfade_assign` — the property that decides which side of Live's master crossfader a track follows. Without it, the crossfader has no effect on app-loaded stems (every track defaults to "None"), so the static `.als` export gets crossfader blending but a live-loaded deck doesn't. We add a small handler to our local fork to close that gap.
 
