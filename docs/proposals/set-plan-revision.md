@@ -21,8 +21,9 @@ unmerged) lists this as a prerequisite for agent writes.
   re-reads the row inside it (`sets.py:47-60`, `:620-632`).
 
 The lock serialises writers. It cannot help a writer whose body was built from
-a stale snapshot, and `PUT` is exactly that writer: it never reads the row
-(`sets.py:567-606`). It takes the lock only to overwrite.
+a stale snapshot, and `PUT` is exactly that writer: it loads the `Set` row but
+never looks at the plan already stored in it (`sets.py:567-606`). It takes the
+lock only to overwrite.
 
 ## The remaining hole
 
@@ -43,7 +44,11 @@ does poll every 5 s, with the comment "other tabs / ⌘K add to the plan"
 (`useSets.ts:30-31`), but it refreshes `["sets","active"]`, not
 `["sets",id,"plan"]`, so the poll never reaches the grid. The cache refreshes
 only on mount after 5 s (`staleTime`, `useSetPlan.ts:17`), on network
-reconnect, or after this tab's own writes (`useSetPlan.ts:31-32`, `:96-97`).
+reconnect, or when this tab itself invalidates a `["sets", …]` prefix: its own
+plan writes (`useSetPlan.ts:31-32`, `:96-97`), its own set create / activate /
+rename / delete (`useSets.ts:52,65,75,93`), and three other local actions
+(`CommandBar.tsx:585`, `SetMenu.tsx:132`, `StackMigrationPrompt.tsx:78`). All
+of these start in the same tab, so none of them notices another writer.
 
 So a Set view left open while an agent or a second tab appends will erase
 every one of those picks the next time its user clicks ×. The other writer got
@@ -79,8 +84,9 @@ $ /Users/arya/git/dance/.venv/bin/python $SCRATCHPAD/planrev/probe.py 8771
 ```
 
 Row [3] releases `append(9)` and "remove track 1" together through a
-`threading.Barrier`, 100 fresh sets per row. A second run gave 76 / 0 / 0
-losses (16 conflicts). Row [3] is the worst case. The common case is row [1]:
+`threading.Barrier`, 100 fresh sets per row. Across three runs the losses were
+75–77 / 0 / 0, and A′ refused 10–16 of the 100 racing PUTs; row [4]'s median
+was 1.8–2.1 ms. Row [3] is the worst case. The common case is row [1]:
 a cache that is minutes old, where today's path loses the pick every time.
 
 ## Options
@@ -176,8 +182,9 @@ cache.
   `AbletonState` with each frame (`useAbletonState.ts:11-15`), so a plan event
   there would blank tempo and playing clips. That leaves two choices:
   - A `/ws/sets` channel. It would be one more `WSManager` (the
-    `app.py:71-72,109-110` pattern, `broadcast_threadsafe` from the sync
-    endpoint thread, `ws.py:66-72`) and a `createSharedSocket` consumer. Vite
+    `app.py:71-72,78-79,109-110` pattern, `broadcast_threadsafe` from the sync
+    endpoint thread, `routers/ws.py:66-72`) and a `createSharedSocket`
+    consumer. Vite
     already proxies the `/ws` prefix (`vite.config.ts:17`), and the origin
     guard covers every websocket scope (`origin_guard.py:119`).
   - Piggybacking a counter on `AbletonState`, the way `deck_map_revision`
@@ -189,7 +196,8 @@ cache.
   overlap loses most races. A missed frame leaves the window unbounded again:
   the socket reconnects after 2 s with no replay (`sharedSocket.ts:44`,
   `:166-170`), so the client must also refetch on every reconnect.
-- **Against:** about 100 lines across backend, frontend and tests, to take
+- **Against:** roughly 100 lines (estimate, not counted) across backend,
+  frontend and tests, to take
   freshness from ≤5 s (a one-line `refetchInterval`, below) to sub-second.
   Plan prep doesn't need that.
 
@@ -220,9 +228,11 @@ freshness. No D for now.**
      compares before writing. Checking outside the lock would re-open the race.
    - A mismatch returns `409 {"detail": {"error": "plan_changed", "plan":
      <current SetPlanOut>}}`.
-   - After step 4 the UI never calls PUT. Requiring the field costs only the two
-     existing PUT tests (`test_api.py:3602`, `:3652`) and turns any future
-     script's blind overwrite into a 422 instead of silent data loss.
+   - After step 4 the UI never calls PUT. Requiring the field means updating
+     the five existing tests that PUT the plan (`test_api.py:3418`, `:3451`,
+     `:3459`, `:3602`, `:3652`; `:3459` ignores the PUT's status, so it would
+     silently test an empty plan if left alone). It turns any future script's
+     blind overwrite into a 422 instead of silent data loss.
 4. **Client** (`companion-app/`):
    - `api.ts`: add `removeFromPlan(setId, role, trackId)`. Delete `putPlan`
      (no caller left), or give it an `expectedRevision` argument if you keep it.
@@ -230,9 +240,15 @@ freshness. No D for now.**
      `removeFromPlan` with the same `onSuccess` as `useAppendToPlan`
      (`:95-98`). Delete `put`, `currentQueues` and the uncalled `moveInRole`.
      Add `refetchInterval: 5_000` to `useSetPlan`, matching `useActiveSet`.
-     Row [4] puts one such GET at ~1.8 ms round-trip on localhost with 40
-     picks.
-     react-query runs one interval per query key, not one per role column.
+     Row [4] puts one such GET at ~2 ms round-trip on localhost with 40
+     picks. Two caveats, read from `@tanstack/query-core` 5.100.9
+     (`queryObserver.js`, `query.js`): each of the five `PlanBand`s
+     (`RoleColumn.tsx:461`, `RoleColumnsGrid.tsx:122`) is its own observer
+     with its own timer. Their ticks usually coalesce into one request because
+     a fetch already in flight is shared, but up to five per tick is possible.
+     And the interval pauses while the window is unfocused
+     (`refetchIntervalInBackground` defaults to false), so a tab you return to
+     catches up within one tick, not instantly.
    - `RoleColumn.tsx:531`: `removeFromRole(role, item.track_id)`.
    - `types.ts`: add `SetPlan.revision` and
      `SetPlanUpdateRequest.expected_revision`.
@@ -285,25 +301,28 @@ WS: no change. Schema: no change. Alembic: no revision.
   - PUT without `expected_revision` → 422.
 
   Plus one vitest (`companion-app/tests/planMutations.test.tsx`): × calls
-  `removeFromPlan` with the track id, never `putPlan`.
+  `removeFromPlan` with the track id, never `putPlan`. Plus the five existing
+  PUT tests in `test_api.py`, which gain an `expected_revision` (step 3).
 
 ## Verification plan
 
 1. Run the new and the old plan tests, then the whole suite:
-   `PYTHONPATH=$PWD/src .venv/bin/python -m pytest -q tests/test_set_plan_revision.py`,
-   then
-   `PYTHONPATH=$PWD/src .venv/bin/python -m pytest -q tests/test_api.py -k plan`,
-   then the full suite.
-   In `companion-app/`, run `npx tsc -p tsconfig.json && npx vitest run`.
+   `PYTHONPATH=$PWD/src /Users/arya/git/dance/.venv/bin/python -m pytest -q tests/test_set_plan_revision.py`,
+   then the same with `tests/test_api.py -k plan`, then the full suite. (The
+   worktree has no `.venv` of its own.)
+   In `companion-app/`, run `npm ci` first (the worktree has no
+   `node_modules`), then `npx tsc -p tsconfig.json && npx vitest run`.
 2. Re-run the scratch probe against the real routes (`/plan/remove`, and the
    guarded `/plan`). Expected:
    - [1] the stale PUT gets 409 and track 4 survives;
    - [2] two removes give `[3]`;
    - [3] 0/100 lost on the remove-op row.
-3. Real UI, throwaway backend. Serve with the probe's launcher (stub bridge,
-   scratch `HOME`, port 8765), not `uvicorn dance.api:create_app`, which would
-   read `~/.dance/.env` and bind the OSC listen port (`bridge.py:106`) that the
-   real backend holds. Then run `DANCE_API_TARGET=http://127.0.0.1:8765
+3. Real UI, throwaway backend. Serve with a serve-only copy of the probe's
+   setup (stub bridge, scratch `HOME`, port 8765). The probe itself runs its
+   scenarios and exits, so this copy still has to be written. Don't use
+   `uvicorn dance.api:create_app`: it reads `~/.dance/.env` and binds the OSC
+   listen port (UDP 11001, `bridge.py:106`, `osc/client.py:23`) that the real
+   backend holds. Then run `DANCE_API_TARGET=http://127.0.0.1:8765
    PORT=5174 npx vite` and open the Set view in two windows.
    1. `curl -X POST …/plan/append` a pick. Within 5 s it shows in both windows.
    2. Click × on a different pick in window 1. The curl pick survives.
@@ -319,9 +338,11 @@ WS: no change. Schema: no change. Alembic: no revision.
 
 ## Prior art
 
-[gakonst/djbooth](https://github.com/gakonst/djbooth) (MIT, `apps/djbooth`,
-read at `452c46f`; shape only, no code taken) edits playlists with ops keyed
-by a stable membership id: `add-track`, `remove-track`, `move-track`
+[gakonst/djbooth](https://github.com/gakonst/djbooth) (`apps/djbooth`, read
+at `452c46f`; that app is MIT per its own `LICENSE` and `package.json`, while
+the repo root's `package.json` says `UNLICENSED`; shape only, no code taken)
+edits playlists with ops: `add-track` by content id, then `remove-track` and
+`move-track` keyed by a stable membership id
 (`src/shared/types.ts:260-267`). Its one whole-list op carries an
 `expectedMembershipIds` precondition (`:268-273`, checked at
 `src/server/library.ts:1325-1332`) and maps a mismatch to HTTP 409
