@@ -347,7 +347,10 @@ def _run_process(
 
 def _print_remaining_work_hint(settings: Settings) -> None:
     """After a process pass, nudge the user if tracks are stuck short of
-    COMPLETE (errored, or still mid-pipeline)."""
+    COMPLETE (errored, or still mid-pipeline). Rows still waiting on their
+    download don't count: re-running wouldn't advance them."""
+    from dance.pipeline.placeholders import not_placeholder
+
     session = get_session(settings.db_url)
     try:
         errored = (
@@ -358,7 +361,8 @@ def _print_remaining_work_hint(settings: Settings) -> None:
             .filter(
                 Track.state.notin_(
                     [TrackState.COMPLETE.value, TrackState.ERROR.value]
-                )
+                ),
+                not_placeholder(),
             )
             .count()
         )

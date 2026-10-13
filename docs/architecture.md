@@ -76,6 +76,8 @@ There is no `if stage_name == "analyze": ...` chain anywhere. Order emerges from
 
 The outer loop is bounded by `2 * len(stages)` iterations (`dispatcher.py:145`) to prevent runaway oscillation if a buggy stage ever writes its own input_state.
 
+**One run at a time, across processes.** `Dispatcher.run()` holds an `fcntl.flock` on `<data_dir>/dispatcher.lock` for the whole run (`src/dance/pipeline/dispatcher_lock.py`). A parallel run starts by healing every track it finds in a `*-ing` state back to its input state, which is only correct if no other dispatcher is alive to own those tracks. A second run (terminal or API) gets `DispatcherBusyError` naming the holder's pid, before it reads or writes anything. The API's "Process now" / watch loop take the lock in the API process and pass the descriptor to their `dance process` subprocess, so it stays held across passes. Rows the Spotify ingest pre-created (`file_hash` `pending:<spotify_id>`, audio still downloading) are never claimed (`src/dance/pipeline/placeholders.py`).
+
 ### Why this shape
 
 - Adding a stage is one file + one `dispatcher.register()` call. Existing stages don't change.

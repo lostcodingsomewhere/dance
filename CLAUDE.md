@@ -79,6 +79,7 @@ These come from the user's persistent memory — they apply project-wide.
 - **Don't commit secrets.** `~/.dance/.env` is OUT of repo; it has DANCE_* config that may include private playlist URLs.
 - **Don't move stems after generating a `.als`.** Live references stems by absolute path. Move → "Missing Media" dialog. Regenerate the `.als` after a move.
 - **Don't bypass the `als_output_dir` safety guard.** `out_path` must resolve inside `settings.als_output_dir`. The API endpoint relies on this — see `src/dance/als/generator.py` → `AlsOutsideDirError`.
+- **Don't run or mutate pipeline state outside the dispatcher lock.** `<data_dir>/dispatcher.lock` (`src/dance/pipeline/dispatcher_lock.py`) serializes every dispatcher, terminal and API; a second run would reset the first one's in-flight tracks. New commands that change track states take it via `cli._pipeline_lock`. Exit 75 / HTTP 409 = another run holds it.
 - **Don't change `.als` writer emission without re-verifying in Live.** Tests only assert XML shape, not "Live will accept this." Generate a fresh `.als`, open it in Live, confirm 5 tracks load + audio plays + tempo correct.
 - **Don't add Bluetooth / network audio paths.** Wired-only is a locked decision (see [`HARDWARE.md`](HARDWARE.md)).
 - **Don't reintroduce Traktor.** The repo pivoted away from Traktor explicitly. Stem-in-Ableton is the locked architecture.

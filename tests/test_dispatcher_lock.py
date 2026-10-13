@@ -787,6 +787,39 @@ def test_cli_run_daemon_skips_a_busy_pass(tmp_path, cli_stubs, hold_lock, monkey
     assert calls == []
 
 
+def test_cli_status_and_process_hint_account_for_placeholders(tmp_path, cli_stubs):
+    from dance.core.database import get_session, init_db, now_utc
+
+    cli, _calls = cli_stubs
+    db_url = f"sqlite:///{tmp_path / 'data' / 'dance.db'}"
+    (tmp_path / "data").mkdir()
+    init_db(db_url)
+    s = get_session(db_url)
+    s.add(
+        Track(
+            file_hash=PLACEHOLDER,
+            file_path="/nonexistent/a.mp3",
+            file_name="a.mp3",
+            file_size_bytes=0,
+            state=TrackState.PENDING.value,
+            created_at=now_utc(),
+            updated_at=now_utc(),
+        )
+    )
+    s.commit()
+    s.close()
+    env = _cli_env(tmp_path)
+
+    status = CliRunner().invoke(cli.main, ["status"], env=env)
+    assert status.exit_code == 0, status.output
+    assert "1 track(s) still waiting on their download" in status.output
+
+    # Re-running wouldn't advance it, so the post-run hint doesn't say to.
+    proc = CliRunner().invoke(cli.main, ["process"], env=env)
+    assert proc.exit_code == 0, proc.output
+    assert "mid-pipeline" not in proc.output
+
+
 def test_real_dance_process_exits_75_while_locked(tmp_path, child_home, hold_lock):
     """The actual console entry point, in its own process."""
     import shutil
