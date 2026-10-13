@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
+from dance import config
 from dance.core import database as db
 from dance.core.database import now_utc
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_real_home(tmp_path_factory, monkeypatch):
+    """Keep every test away from the real ``~/.dance`` and ``~/Music``.
+
+    ``get_settings()`` and ``get_engine()`` cache process-global singletons,
+    and ``Settings`` reads ``~/.dance/.env`` on top of defaults rooted in the
+    real home directory. Without this, the first test to call
+    ``get_settings()`` pins the real paths for the rest of the session, and a
+    later CLI test's ``init_db()`` runs against the real ``~/.dance/dance.db``.
+    """
+
+    home = tmp_path_factory.mktemp("dance_home")
+    monkeypatch.setitem(config.Settings.model_config, "env_file", None)
+    for name in [n for n in os.environ if n.startswith("DANCE_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("DANCE_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("DANCE_LIBRARY_DIR", str(home / "library"))
+    monkeypatch.setenv("DANCE_STEMS_DIR", str(home / "stems"))
+    monkeypatch.setenv("DANCE_ALS_OUTPUT_DIR", str(home / "sets"))
+    config._settings = None
+    db._reset_engine_for_tests()
+    yield
+    config._settings = None
+    db._reset_engine_for_tests()
 
 
 @pytest.fixture

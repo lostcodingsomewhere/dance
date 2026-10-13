@@ -5,17 +5,7 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from dance.core.database import _reset_engine_for_tests
 from dance.pipeline import preflight
-
-
-@pytest.fixture(autouse=True)
-def _isolate_db_engine():
-    """`dance main()` caches a process-global DB engine. Reset before/after so
-    CLI invocations here don't leak it into other suites (e.g. the e2e test)."""
-    _reset_engine_for_tests()
-    yield
-    _reset_engine_for_tests()
 
 
 def test_require_ffmpeg_passes_when_present(monkeypatch):

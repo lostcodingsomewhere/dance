@@ -6,22 +6,10 @@ orchestration + summary, not the real pipeline.
 
 from __future__ import annotations
 
-import pytest
 from click.testing import CliRunner
 
 from dance import cli
-from dance.core.database import _reset_engine_for_tests
 from dance.pipeline import preflight
-
-
-@pytest.fixture(autouse=True)
-def _isolate_db_engine():
-    """`dance main()` caches a process-global DB engine bound to the first URL
-    it sees. Reset before and after each test so these CLI invocations neither
-    inherit nor leak a stale engine into other suites (e.g. the e2e test)."""
-    _reset_engine_for_tests()
-    yield
-    _reset_engine_for_tests()
 
 
 def _env(tmp_path) -> dict[str, str]:
