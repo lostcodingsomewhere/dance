@@ -180,6 +180,19 @@ wav_path = write_track(tmp_path / "test.wav", spec)
 
 Use it any time you need real audio without committing real audio. Keep durations short — 8 bars at 128 BPM is ~15 s and the analyze + separate stages take ~2 s on M1.
 
+## Beat-grid differential (the grid gate)
+
+Any change to how beats / BPM are computed is judged against **Ableton's** grid (rule 3), with djbooth's method: monotonic DP alignment (gap = 0.45 × median period), F1 at 70/100 ms, median/p95 timing error, phase, drift per 100 beats, BPM error (analysis BPM *and* the `beats` table's own tempo), bar-phase accuracy. Metrics: `src/dance/pipeline/utils/grid_metrics.py`; references: `src/dance/als/reader.py` (warp markers out of a `.als`) and `src/dance/osc/warp_grid.py` (live, shared with `scripts/warp_probe.py`).
+
+```bash
+# reference = a Live Set saved after fixing warps by ear (or --live --scene N)
+python scripts/grid_diff.py --als fixed.als --json base.json
+# ... change the grid code, reprocess ...
+python scripts/grid_diff.py --als fixed.als --json new.json --baseline base.json   # exit 1 = regression
+```
+
+The DB is opened read-only (`file:…?immutable=1`). Ship a grid change only when the gate exits 0: no previously-passing track may regress. A dance-exported `.als` works as a reference too, but it only encodes `audio_analysis.bpm` from 0:00 — it is a plumbing check, not ground truth.
+
 ## Repo layout (developer cheat-sheet)
 
 ```
