@@ -199,9 +199,9 @@ Allowlist: `path` must live under `library_dir`, `stems_dir`, or `als_output_dir
 |-------|------------------|------------------------|
 | `/ws` | server -> client | `AbletonStateOut` JSON |
 
-On connect, the server sends one snapshot immediately. After that, it sends every time `AbletonBridge` observes a change (tempo, beat, playing clip, volume). Client messages are read but ignored — the loop is there only to notice disconnects (`ws.py:65`).
+On connect, the server sends one snapshot immediately. After that, it pushes the full state when `AbletonBridge` observes a change (tempo, beat, playing clip, volume, meters, clip positions), coalesced to at most ~30 frames/s: the newest state wins, and the state after the last change of a burst is always sent (`api/broadcast_throttle.py`). Client messages are read but ignored — the loop is there only to notice disconnects (`ws.py:65`).
 
-Reconnect is the client's responsibility. The React `useAbletonState` hook (`companion-app/src/hooks/useAbletonState.ts`) reconnects with a 2 s backoff.
+Reconnect is the client's responsibility. In the companion app every `useAbletonState` caller shares one socket (`companion-app/src/lib/sharedSocket.ts`), which reconnects with a 2 s backoff and re-renders at most once per animation frame.
 
 Sample payload:
 

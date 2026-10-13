@@ -247,4 +247,4 @@ Mapping a *Live-playing clip* back to a track requires a clip-to-track map the b
 
 ## WebSocket disconnects on every code change
 
-Expected. Vite's HMR closes and reopens the page; `useAbletonState` reconnects with a 2 s backoff (`companion-app/src/hooks/useAbletonState.ts:35`). If the reconnect never succeeds, the backend isn't running — check `http://127.0.0.1:8000/health`.
+Expected. Vite's HMR closes and reopens the page; `useAbletonState`'s shared socket reconnects with a 2 s backoff (`companion-app/src/lib/sharedSocket.ts`). If the reconnect never succeeds, the backend isn't running — check `http://127.0.0.1:8000/health`.
