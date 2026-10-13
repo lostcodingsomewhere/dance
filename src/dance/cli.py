@@ -443,6 +443,8 @@ def _print_reprocess_plan(plan, *, full: bool) -> None:
         ids = ", ".join(str(r.track_id) for r in skipped[:10])
         more = f", +{len(skipped) - 10} more" if len(skipped) > 10 else ""
         console.print(f"[dim]Skipped {len(skipped)} — {reason}: {ids}{more}[/dim]")
+    for note in plan.notes:
+        console.print(f"[yellow]Note:[/yellow] {escape(note)}")
 
 
 @main.command("list")
