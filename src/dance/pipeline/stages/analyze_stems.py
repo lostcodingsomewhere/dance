@@ -2,8 +2,19 @@
 
 Consumes ``StemFile`` rows produced by stem separation and writes one
 ``AudioAnalysis`` row per stem (with ``stem_file_id`` set). Each stem gets
-generic metrics (BPM, RMS curve, presence intervals, energy) plus a small
-set of kind-specific metrics:
+generic metrics (RMS curve, presence intervals, energy, tempo) plus a small
+set of kind-specific metrics.
+
+Tempo: stems are sample-aligned with the mix, so a stem's tempo *is* the
+track's tempo — ``bpm`` is copied from the full-mix analysis row rather than
+re-estimated (per-stem librosa estimates at 22.05 kHz were quantised to
+~6 BPM steps and disagreed with the mix). The per-stem analog that does carry
+information is ``bpm_confidence``, which here holds the stem's *tempo
+coherence*: how strongly that stem pulses on the track's beat grid, in
+[0, 1] (see :func:`dance.pipeline.utils.tempo.tempo_coherence`). Drums score
+high, pads and most vocals low.
+
+Kind-specific metrics:
 
 - **drums**: ``kick_density`` (kicks/sec from low-freq onset detection)
 - **bass**: ``dominant_pitch_camelot`` (chroma-based, minor mode assumed)
@@ -29,10 +40,14 @@ from dance.core.serialization import encode_curve
 from dance.pipeline.utils.audio import (
     aggregate_rms,
     detect_key_from_chroma,
-    normalize_bpm,
 )
 from dance.pipeline.utils.camelot import key_to_camelot
 from dance.pipeline.utils.db import get_stems_for_track, upsert
+from dance.pipeline.utils.tempo import (
+    ESSENTIA_SAMPLE_RATE,
+    estimate_bpm,
+    tempo_coherence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +83,10 @@ class StemAnalysisStage:
             if not stems:
                 raise RuntimeError(f"No stem files found for track {track.id}")
 
+            track_bpm = self._track_bpm(session, track, stems)
             now = now_utc()
             for stem in stems:
-                self._analyze_stem(session, track, stem, now)
+                self._analyze_stem(session, track, stem, now, track_bpm)
 
             track.state = self.output_state.value
             session.commit()
@@ -86,12 +102,57 @@ class StemAnalysisStage:
 
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _track_bpm(
+        session: Session, track: Track, stems: list[StemFile]
+    ) -> float | None:
+        """The track tempo every stem inherits.
+
+        Normally the full-mix analysis row's BPM. If that row (or its BPM) is
+        missing — the analyze stage was skipped or failed — estimate the
+        tempo once with the same detector the analyze stage uses, from the
+        full mix if it's on disk, else from the drums stem (sample-aligned,
+        so the same tempo). Returns ``None`` if nothing works; stems then get
+        no BPM rather than an invented one.
+        """
+        row = (
+            session.query(AudioAnalysis.bpm)
+            .filter_by(track_id=track.id, stem_file_id=None)
+            .one_or_none()
+        )
+        if row is not None and row[0] and float(row[0]) > 0:
+            return float(row[0])
+
+        logger.warning(
+            "Track %s has no full-mix BPM; estimating the track tempo for its "
+            "stems directly (run `dance reprocess --from analyze -t %s` to fix "
+            "the full-mix row)",
+            track.id,
+            track.id,
+        )
+        sources = [Path(track.file_path)] if track.file_path else []
+        sources += [Path(s.path) for s in stems if s.kind == StemKind.DRUMS.value]
+        for source in sources:
+            if not source.exists():
+                continue
+            try:
+                audio, sr = librosa.load(str(source), sr=ESSENTIA_SAMPLE_RATE, mono=True)
+                bpm, _confidence = estimate_bpm(audio, sr)
+            except Exception as exc:  # noqa: BLE001 — try the next source
+                logger.warning("Tempo fallback failed on %s: %s", source, exc)
+                continue
+            logger.info("Track %s stems use fallback tempo %.2f from %s", track.id, bpm, source)
+            return bpm
+        logger.warning("Track %s: no tempo for stems — leaving stem BPM empty", track.id)
+        return None
+
     def _analyze_stem(
         self,
         session: Session,
         track: Track,
         stem: StemFile,
         now: datetime,
+        track_bpm: float | None = None,
     ) -> None:
         stem_path = Path(stem.path)
         if not stem_path.exists():
@@ -113,8 +174,11 @@ class StemAnalysisStage:
         presence_ratio = float(present_mask.mean()) if present_mask.size else 0.0
         intervals = _runs_to_intervals(present_mask, RMS_HOP_MS, MIN_INTERVAL_MS)
 
-        # ---- BPM (per-stem; unreliable on non-drums) -------------------
-        bpm, bpm_confidence = _stem_bpm(audio, sr, duration_s)
+        # ---- Tempo: the track's BPM + this stem's coherence with it ------
+        bpm = track_bpm
+        bpm_confidence = (
+            tempo_coherence(audio, sr, track_bpm) if track_bpm is not None else None
+        )
 
         # ---- Kind-specific metrics -------------------------------------
         kind = stem.kind
@@ -184,22 +248,6 @@ def _runs_to_intervals(
     return out
 
 
-def _stem_bpm(audio: np.ndarray, sr: int, duration_s: float) -> tuple[float, float]:
-    """Per-stem BPM with a confidence that drops on sparse beat detection."""
-    if len(audio) == 0:
-        return 0.0, 0.0
-    tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr)
-    bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
-    bpm = normalize_bpm(bpm)
-
-    # Confidence heuristic: if we got fewer than 8 beats per estimated bar
-    # (i.e. roughly 2 bars at 4 beats/bar), the detector is unsure.
-    est_bars = max(1.0, duration_s * bpm / (60.0 * 4.0))
-    beats_per_bar = len(beat_frames) / est_bars if est_bars else 0.0
-    confidence = 0.7 if beats_per_bar >= 8 else 0.4
-    return bpm, confidence
-
-
 def _kick_density(audio: np.ndarray, sr: int, duration_s: float) -> float:
     """Onsets per second restricted to low (kick) frequencies."""
     if duration_s <= 0:
@@ -224,7 +272,10 @@ def _dominant_camelot(
         return None, None
     chroma = librosa.feature.chroma_cqt(y=audio, sr=sr)
     pitch, mode, confidence = detect_key_from_chroma(chroma, mode=force_mode)
-    return key_to_camelot(pitch, mode), confidence
+    camelot = key_to_camelot(pitch, mode)
+    if camelot is None:
+        return None, None
+    return camelot, confidence
 
 
 def _floor_energy(overall: float, peak: float) -> int:

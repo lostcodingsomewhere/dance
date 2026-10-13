@@ -170,3 +170,76 @@ def write_track(path: Path, spec: TrackSpec | None = None) -> Path:
     audio = synth_track(spec)
     sf.write(str(path), audio, spec.sample_rate, subtype="PCM_16")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Tempo-precision fixtures (analysis-fixes)
+# ---------------------------------------------------------------------------
+
+
+def click_track(
+    bpm: float,
+    seconds: float = 30.0,
+    *,
+    sample_rate: int = SR,
+    accent_every: int = 4,
+) -> np.ndarray:
+    """Accented metronome: a short sine blip on every beat, louder and higher
+    on each downbeat. Onsets are placed at the exact (rounded) sample of each
+    beat, so the true tempo is ``bpm`` to well under 0.01 BPM — use BPMs that
+    are not librosa lag bins (e.g. 124.0, 131.0) to catch quantised tempos.
+    """
+    n = int(seconds * sample_rate)
+    out = np.zeros(n, dtype=np.float32)
+    beat_s = 60.0 / bpm
+    blip_len = int(0.03 * sample_rate)
+    t = np.arange(blip_len) / sample_rate
+    env = np.exp(-t * 120.0).astype(np.float32)
+    k = 0
+    while True:
+        start = int(round(k * beat_s * sample_rate))
+        if start >= n:
+            break
+        downbeat = k % accent_every == 0
+        freq = 1500.0 if downbeat else 1000.0
+        amp = 1.0 if downbeat else 0.5
+        blip = (np.sin(2 * np.pi * freq * t) * env * amp).astype(np.float32)
+        end = min(start + blip_len, n)
+        out[start:end] += blip[: end - start]
+        k += 1
+    return out * 0.8
+
+
+def write_click_track(
+    path: Path, bpm: float, seconds: float = 30.0, *, sample_rate: int = SR
+) -> Path:
+    """Write :func:`click_track` to ``path`` (16-bit WAV). Returns the path."""
+    sf.write(str(path), click_track(bpm, seconds, sample_rate=sample_rate), sample_rate,
+             subtype="PCM_16")
+    return path
+
+
+def drum_layer(spec: TrackSpec) -> np.ndarray:
+    """Kick + 16th hats: a stem that carries the pulse."""
+    return kick_layer(spec) + hat_layer(spec)
+
+
+def pad_layer(spec: TrackSpec) -> np.ndarray:
+    """Sustained A-minor triad with a slow (10 s) swell — no beat at all."""
+    t = np.arange(spec.total_samples) / spec.sample_rate
+    out = np.zeros(spec.total_samples, dtype=np.float32)
+    for freq in (220.0, 261.63, 329.63):
+        out += np.sin(2 * np.pi * freq * t).astype(np.float32)
+    swell = (0.6 + 0.4 * np.sin(2 * np.pi * 0.1 * t)).astype(np.float32)
+    return out * swell * 0.2
+
+
+def write_layer(path: Path, audio: np.ndarray, sample_rate: int = SR) -> Path:
+    """Write one rendered layer (e.g. a fake stem) to ``path``, scaled down
+    if needed so 16-bit PCM doesn't clip."""
+    audio = audio.astype(np.float32)
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak > 0.9:
+        audio = audio / peak * 0.9
+    sf.write(str(path), audio, sample_rate, subtype="PCM_16")
+    return path

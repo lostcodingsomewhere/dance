@@ -10,6 +10,12 @@ It maps musical keys to a number-letter notation (1A-12B).
 - Same number, different letter (A/B) are relative major/minor
 """
 
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Standard key names to Camelot notation
 # Format: (key, mode) -> Camelot code
 KEY_TO_CAMELOT = {
@@ -80,41 +86,69 @@ CAMELOT_TO_KEY = {
 }
 
 
-def key_to_camelot(key: str, mode: str) -> str:
+# Enharmonic spellings that are not in KEY_TO_CAMELOT under their own name.
+# (Every common sharp and flat already is.)
+_ENHARMONIC = {"E#": "F", "B#": "C", "Fb": "E", "Cb": "B"}
+
+
+def _normalize_mode(mode: str | None) -> str | None:
+    """``"major"``/``"minor"`` for the spellings we accept, else ``None``."""
+    if mode is None:
+        return None
+    m = str(mode).strip().lower()
+    if m in ("minor", "min", "m"):
+        return "minor"
+    if m in ("major", "maj", ""):
+        return "major"
+    return None
+
+
+def parse_key(key: str | None, mode: str | None) -> tuple[str, str] | None:
+    """Normalise a ``(key, mode)`` pair to a spelling present in
+    :data:`KEY_TO_CAMELOT`, or ``None`` if it can't be understood."""
+    if key is None:
+        return None
+    k = str(key).strip().capitalize()
+    k = _ENHARMONIC.get(k, k)
+    m = _normalize_mode(mode)
+    if m is None or (k, m) not in KEY_TO_CAMELOT:
+        return None
+    return k, m
+
+
+def key_to_camelot(key: str | None, mode: str | None) -> str | None:
     """
     Convert a musical key to Camelot notation.
 
     Args:
         key: Key name (e.g., "A", "Bb", "F#")
-        mode: "major" or "minor"
+        mode: "major" or "minor" (also "maj"/"min"/"m")
 
     Returns:
-        Camelot code (e.g., "8A", "11B")
+        Camelot code (e.g., "8A", "11B"), or ``None`` when the input can't be
+        parsed. There is deliberately no default: an unknown key stored as a
+        real-looking "8A" would be scored as a harmonic match.
     """
-    # Normalize inputs
-    key = key.strip().capitalize()
-    mode = mode.strip().lower()
+    parsed = parse_key(key, mode)
+    if parsed is None:
+        logger.warning("Unparseable key %r / mode %r — no Camelot code", key, mode)
+        return None
+    return KEY_TO_CAMELOT[parsed]
 
-    # Handle variations in mode naming
-    if mode in ("min", "m"):
-        mode = "minor"
-    elif mode in ("maj", ""):
-        mode = "major"
 
-    # Look up in map
-    camelot = KEY_TO_CAMELOT.get((key, mode))
-    if camelot:
-        return camelot
+def format_standard_key(key: str | None, mode: str | None) -> str | None:
+    """Short standard key name: ``"C"`` for C major, ``"Am"`` for A minor.
 
-    # Try without sharp/flat normalization
-    if "#" in key:
-        flat_key = key.replace("#", "b")
-        camelot = KEY_TO_CAMELOT.get((flat_key, mode))
-        if camelot:
-            return camelot
-
-    # Default fallback
-    return "8A" if mode == "minor" else "8B"
+    Returns ``None`` (and logs) for unparseable input, mirroring
+    :func:`key_to_camelot` so the two columns are always both set or both
+    empty.
+    """
+    parsed = parse_key(key, mode)
+    if parsed is None:
+        logger.warning("Unparseable key %r / mode %r — no standard key", key, mode)
+        return None
+    pitch, m = parsed
+    return f"{pitch}m" if m == "minor" else pitch
 
 
 def camelot_to_key(camelot: str) -> str:
