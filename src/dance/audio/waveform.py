@@ -6,10 +6,12 @@ backend pre-computes a tiny amplitude envelope (default 200 floats in
 ``[0, 1]``) and serves it as JSON.
 
 Peaks are cached as a sidecar file (``<audio>.waveform.json``) next to the
-source audio. The cache key is ``num_peaks`` + a schema ``version`` — change
-the shape, bump the version, and old caches are silently regenerated. Writes
-are atomic (tmp file + ``os.replace``), and any cache I/O error is non-fatal
-(we just fall back to recomputing on the next call).
+source audio. The cache key is ``num_peaks`` + a schema ``version`` + the
+source file's size and ``st_mtime_ns`` — change the shape, bump the version;
+rewrite the audio at the same path (a re-separated stem is the same length,
+so often the same byte size) and the new mtime invalidates the sidecar.
+Writes are atomic (tmp file + ``os.replace``), and any cache I/O error is
+non-fatal (we just fall back to recomputing on the next call).
 """
 
 from __future__ import annotations
@@ -27,8 +29,21 @@ logger = logging.getLogger(__name__)
 
 
 # Sidecar schema version. Bump when the cache payload shape changes so old
-# caches get regenerated automatically.
-_CACHE_VERSION = 1
+# caches get regenerated automatically. v2 added the ``source`` fingerprint.
+_CACHE_VERSION = 2
+
+
+def _source_fingerprint(audio_path: Path) -> dict[str, int] | None:
+    """Size + nanosecond mtime of the audio file, or ``None`` if unstat-able.
+
+    Cheap (one ``stat``) and enough to catch a file rewritten in place:
+    ``os.replace`` of a freshly written stem always lands a new mtime.
+    """
+    try:
+        st = audio_path.stat()
+    except OSError:
+        return None
+    return {"size": int(st.st_size), "mtime_ns": int(st.st_mtime_ns)}
 
 
 def compute_peaks(audio_path: Path, num_peaks: int = 200) -> tuple[list[float], float]:
@@ -79,8 +94,11 @@ def _cache_path_for(audio_path: Path) -> Path:
     return audio_path.with_name(audio_path.name + ".waveform.json")
 
 
-def _read_cache(cache_path: Path, num_peaks: int) -> tuple[list[float], float] | None:
-    """Return cached peaks if the file exists and matches num_peaks+version."""
+def _read_cache(
+    cache_path: Path, num_peaks: int, source: dict[str, int] | None = None
+) -> tuple[list[float], float] | None:
+    """Return cached peaks if the file exists and matches num_peaks+version
+    and (when given) the audio file's current ``source`` fingerprint."""
     try:
         with cache_path.open("r", encoding="utf-8") as fh:
             payload = json.load(fh)
@@ -93,6 +111,8 @@ def _read_cache(cache_path: Path, num_peaks: int) -> tuple[list[float], float] |
         return None
     if payload.get("num_peaks") != num_peaks:
         return None
+    if source is None or payload.get("source") != source:
+        return None
     peaks = payload.get("peaks")
     duration = payload.get("duration_seconds")
     if not isinstance(peaks, list) or not isinstance(duration, (int, float)):
@@ -103,7 +123,11 @@ def _read_cache(cache_path: Path, num_peaks: int) -> tuple[list[float], float] |
 
 
 def _write_cache_atomic(
-    cache_path: Path, peaks: list[float], duration_seconds: float, num_peaks: int
+    cache_path: Path,
+    peaks: list[float],
+    duration_seconds: float,
+    num_peaks: int,
+    source: dict[str, int] | None = None,
 ) -> None:
     """Write the sidecar cache atomically. Failures are logged, not raised."""
     payload = {
@@ -111,6 +135,7 @@ def _write_cache_atomic(
         "duration_seconds": duration_seconds,
         "num_peaks": num_peaks,
         "version": _CACHE_VERSION,
+        "source": source,
     }
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,10 +170,14 @@ def get_or_compute_peaks(audio_path: Path, num_peaks: int = 200) -> tuple[list[f
     full disk) the caller still gets the freshly computed peaks back.
     """
     cache_path = _cache_path_for(audio_path)
-    cached = _read_cache(cache_path, num_peaks)
+    # Fingerprint BEFORE decoding: if the file changes mid-compute, the
+    # sidecar records the old fingerprint and the next call recomputes.
+    source = _source_fingerprint(audio_path)
+    cached = _read_cache(cache_path, num_peaks, source)
     if cached is not None:
         return cached
 
     peaks, duration_seconds = compute_peaks(audio_path, num_peaks=num_peaks)
-    _write_cache_atomic(cache_path, peaks, duration_seconds, num_peaks)
+    if source is not None:
+        _write_cache_atomic(cache_path, peaks, duration_seconds, num_peaks, source)
     return peaks, duration_seconds
