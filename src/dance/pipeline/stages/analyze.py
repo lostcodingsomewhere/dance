@@ -104,11 +104,11 @@ class AnalysisStage:
             bpm, bpm_confidence = self._analyze_bpm(audio, sr)
 
             # Analyze key
-            key, mode, key_confidence = self._analyze_key(audio, sr)
+            key, mode, detected_key_confidence = self._analyze_key(audio, sr)
             camelot = key_to_camelot(key, mode)
             standard_key = format_standard_key(key, mode)  # "Am" or "C"
-            if camelot is None:
-                key_confidence = None
+            # No confidence for a key we couldn't name.
+            key_confidence = detected_key_confidence if camelot is not None else None
 
             # Analyze energy
             energy_stats = self._analyze_energy(audio, sr)

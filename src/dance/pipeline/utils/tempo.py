@@ -3,8 +3,9 @@
 Two jobs:
 
 - :func:`estimate_bpm` — one precise tempo for a whole track. Essentia's
-  ``RhythmExtractor2013`` is the primary detector; its tick grid is refined
-  with a robust linear fit. When Essentia is missing or fails, librosa's beat
+  ``RhythmExtractor2013`` is the primary detector; its BPM is refined by
+  :func:`fit_beat_grid` (the single beat grid most ticks sit on, then least
+  squares over those ticks). When Essentia is missing or fails, librosa's beat
   tracker supplies beat times and the tempo comes from the same fit — never
   from librosa's own ``tempo`` value, which is quantised to onset-envelope lag
   bins (at 44.1 kHz / hop 512 the only values near 124 BPM are 123.05 and
@@ -28,7 +29,7 @@ from dance.pipeline.utils.audio import normalize_bpm
 logger = logging.getLogger(__name__)
 
 try:
-    import essentia.standard as es
+    import essentia.standard as es  # type: ignore[import-untyped]
 
     ESSENTIA_AVAILABLE = True
 except ImportError:  # pragma: no cover — essentia is a hard dependency
@@ -40,7 +41,7 @@ try:
 
     LIBROSA_AVAILABLE = True
 except ImportError:  # pragma: no cover — librosa is a hard dependency
-    librosa = None
+    librosa = None  # type: ignore[assignment]
     LIBROSA_AVAILABLE = False
 
 
@@ -232,7 +233,7 @@ def essentia_confidence(raw: float) -> float:
     return float(np.clip(value / ESSENTIA_MAX_CONFIDENCE, 0.0, 1.0))
 
 
-def estimate_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
+def estimate_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:
     """Estimate one tempo for ``audio`` (mono). Returns ``(bpm, confidence)``.
 
     ``bpm`` is folded into the house/techno range by
@@ -260,7 +261,7 @@ def estimate_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
     raise RuntimeError("No tempo detector available (need essentia or librosa)")
 
 
-def _essentia_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
+def _essentia_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:
     signal = np.ascontiguousarray(audio, dtype=np.float32)
     if sr != ESSENTIA_SAMPLE_RATE:
         if not LIBROSA_AVAILABLE:
@@ -293,7 +294,7 @@ def _essentia_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
     return normalize_bpm(bpm), essentia_confidence(confidence)
 
 
-def _librosa_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
+def _librosa_bpm(audio: np.ndarray, sr: float) -> tuple[float, float]:
     tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr, units="frames")
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     fit = fit_beat_grid(beat_times)
@@ -317,7 +318,7 @@ def _librosa_bpm(audio: np.ndarray, sr: int) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 
-def tempo_coherence(audio: np.ndarray, sr: int, bpm: float | None) -> float:
+def tempo_coherence(audio: np.ndarray, sr: float, bpm: float | None) -> float:
     """How strongly ``audio`` pulses on a ``bpm`` grid, in ``[0, 1]``.
 
     The onset-strength envelope is lightly smoothed (so ±1-frame onset jitter

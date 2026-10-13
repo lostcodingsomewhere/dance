@@ -114,7 +114,9 @@ def plan_reprocess(
                 plan.skip(SKIP_MISSING, ReprocessRow(tid, "-", "-"))
 
     for track in tracks:
-        row = ReprocessRow(int(track.id), track.title or track.file_name or "-", str(track.state))
+        row = ReprocessRow(
+            int(track.id), str(track.title or track.file_name or "-"), str(track.state)
+        )
         if track.duplicate_of is not None and not include_duplicates:
             plan.skip(SKIP_DUPLICATE, row)
             continue
