@@ -97,6 +97,15 @@ class SpotifyDownloader:
             "--save-file", str(self.settings.data_dir / "spotdl_sync.spotdl"),
             # Don't re-download existing files
             "--overwrite", "skip",
+            # Without this, ``spotdl sync`` (console/sync.py in spotdl 4.4)
+            # DELETES the local file of every song that has left the playlist
+            # and RENAMES files whose Spotify metadata changed. The library is
+            # not a playlist mirror: Track rows hash + point at those files,
+            # stems are derived from them, and generated .als sets reference
+            # them by absolute path — a delete or rename breaks all three.
+            # Removing a track from the library is a deliberate act, never a
+            # side effect of editing a playlist.
+            "--sync-without-deleting",
         ]
 
         if dry_run:

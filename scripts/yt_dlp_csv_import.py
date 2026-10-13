@@ -9,9 +9,12 @@ for new dev apps on 2024-11-27, see docs/troubleshooting.md). Use:
     2. Drop the CSV anywhere
     3. python scripts/yt_dlp_csv_import.py path/to/playlist.csv
 
-Uses YouTube Music search ("ytsearch1:Artist Title") then re-tags the resulting
-MP3 with clean ID3 from the CSV (yt-dlp's default tags pick up YouTube's noisy
-video titles like "[Official Audio]" suffixes).
+Searches YouTube for ten candidates per row, scores them against the CSV's
+artist / title / duration, downloads the best eligible one by video id,
+verifies the file (duration + full decode), and re-tags it with the CSV
+identity plus a provenance comment naming the YouTube URL. Rows where no
+candidate qualifies fail with the best near-miss in the message — there is
+no "take whatever ranked first" fallback. See dance.spotify.matching.
 
 REQUIRED — see docs/troubleshooting.md "spotdl rate limiting / Spotify Web API
 restrictions" for the full YouTube anti-bot stack you need installed:
@@ -26,7 +29,7 @@ You also need to be logged into YouTube on Chrome (any profile).
 
 USAGE:
     python scripts/yt_dlp_csv_import.py CSV_PATH [--library DIR] [--workers N]
-                                                 [--chrome-profile NAME]
+                                                 [--chrome-profile NAME] [--format mp3|m4a]
 
 Resumable: skips files that already exist with size > 100 KB.
 """
@@ -35,33 +38,22 @@ from __future__ import annotations
 
 import argparse
 import csv
-import re
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
-    from mutagen.easyid3 import EasyID3
-    from mutagen.id3 import ID3NoHeaderError
-    from mutagen.mp3 import MP3
+    from dance.spotify.csv_importer import CsvRow, download_track, expected_target
+    from dance.spotify.download_pool import DEFAULT_DOWNLOAD_WORKERS
 except ImportError:
-    sys.exit("mutagen not installed. Run: pip install mutagen")
+    sys.exit("dance not importable. Run from the repo venv: pip install -e '.[dev]'")
 
 
 DEFAULT_LIBRARY = Path.home() / "Music" / "DJ" / "library"
-DEFAULT_WORKERS = 4
+DEFAULT_WORKERS = DEFAULT_DOWNLOAD_WORKERS
 DEFAULT_CHROME_PROFILE = "Profile 2"
-DURATION_TOLERANCE_S = 30  # reject yt-dlp pick if duration is more than 30 s off
 FFMPEG = "/Users/arya/.spotdl/ffmpeg"  # bundled by spotDL; fall through to PATH if missing
-
-
-def sanitize_filename(s: str) -> str:
-    """Strip characters that would corrupt the path or trip Live's parser later."""
-    s = re.sub(r"[/\\:*?\"<>|]", "_", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s[:120]
 
 
 def primary_artist(artist_field: str) -> str:
@@ -72,92 +64,40 @@ def primary_artist(artist_field: str) -> str:
     return artist_field.strip()
 
 
-def already_downloaded(target: Path) -> bool:
-    return target.exists() and target.stat().st_size > 100 * 1024
+def download_one(
+    row: dict, library: Path, chrome_profile: str, audio_format: str = "mp3"
+) -> tuple[str, str, str]:
+    """Returns (status, artist_title, message).
 
-
-def download_one(row: dict, library: Path, chrome_profile: str) -> tuple[str, str, str]:
-    """Returns (status, artist_title, message)."""
+    Delegates to ``dance.spotify.csv_importer.download_track`` — the same
+    scored search, hard duration gate, post-download verification and
+    provenance tagging the API ingest uses. (This script used to carry its
+    own copy of the old ``ytsearch1`` + unfiltered-retry logic.)
+    """
     artist = primary_artist(row.get("Artist Name(s)") or row.get("Artist Name", ""))
     title = (row.get("Track Name") or "").strip()
     if not artist or not title:
         return ("skip", "<missing>", "no artist/title in CSV")
 
-    safe_name = f"{sanitize_filename(artist)} - {sanitize_filename(title)}"
-    target = library / f"{safe_name}.mp3"
-
-    if already_downloaded(target):
-        return ("skip", safe_name, "already downloaded")
-
-    duration_ms = int(row.get("Duration (ms)", "0") or 0)
-    duration_s = duration_ms // 1000 if duration_ms else 0
-
-    query = f"ytsearch1:{artist} {title}"
-    output_template = str(library / f"{safe_name}.%(ext)s")
-
-    cmd = [
-        "yt-dlp",
-        # YouTube 2025-2026 anti-bot stack — ALL flags load-bearing.
-        # See docs/troubleshooting.md.
-        "--cookies-from-browser", f"chrome:{chrome_profile}",
-        "--js-runtimes", "node",
-        "--ffmpeg-location", FFMPEG if Path(FFMPEG).exists() else "ffmpeg",
-        "--default-search", "ytsearch",
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "--postprocessor-args", "ffmpeg:-b:a 320k",
-        "--no-playlist",
-        "--quiet",
-        "--no-warnings",
-        "--output", output_template,
-    ]
-    if duration_s:
-        # Reject candidates whose duration is way off (avoids 10-min compilations).
-        cmd += [
-            "--match-filter",
-            f"duration >= {max(duration_s - DURATION_TOLERANCE_S, 30)} & "
-            f"duration <= {duration_s + DURATION_TOLERANCE_S}",
-        ]
-    cmd.append(query)
-
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired:
-        return ("fail", safe_name, "yt-dlp timeout after 180s")
-
-    if proc.returncode != 0 or not target.exists():
-        # Retry once without duration filter — better a wrong-length pick than nothing.
-        retry = [c for c in cmd if not c.startswith("duration")]
-        retry = [c for c in retry if c != "--match-filter"]
-        try:
-            proc = subprocess.run(retry, capture_output=True, text=True, timeout=180)
-        except subprocess.TimeoutExpired:
-            return ("fail", safe_name, "yt-dlp timeout (retry)")
-        if proc.returncode != 0 or not target.exists():
-            err = (proc.stderr or proc.stdout or "")[-200:].replace("\n", " | ")
-            return ("fail", safe_name, f"yt-dlp rc={proc.returncode}: {err}")
-
-    # Overwrite yt-dlp's noisy ID3 with clean values from CSV so dance's ingest
-    # stage picks up the right artist/title rather than YouTube's video title.
-    try:
-        try:
-            tags = EasyID3(target)
-        except ID3NoHeaderError:
-            audio = MP3(target)
-            audio.add_tags()
-            audio.save()
-            tags = EasyID3(target)
-        tags["artist"] = artist
-        tags["title"] = title
-        album = (row.get("Album Name") or "").strip()
-        if album:
-            tags["album"] = album
-        tags.save()
-    except Exception as e:
-        return ("warn", safe_name, f"downloaded but tag write failed: {e}")
-
-    return ("ok", safe_name, f"{target.stat().st_size // 1024} KB")
+        duration_s = int(row.get("Duration (ms)", "0") or 0) // 1000
+    except ValueError:
+        duration_s = 0
+    csv_row = CsvRow(
+        artist=artist,
+        title=title,
+        album=(row.get("Album Name") or "").strip(),
+        duration_s=duration_s,
+    )
+    name = expected_target(library, csv_row, audio_format).stem
+    status, msg = download_track(
+        csv_row,
+        library,
+        ffmpeg_location=FFMPEG if Path(FFMPEG).exists() else None,
+        cookies_from_browser=f"chrome:{chrome_profile}",
+        audio_format=audio_format,
+    )
+    return (status, name, msg)
 
 
 def main() -> int:
@@ -177,6 +117,10 @@ def main() -> int:
         "--chrome-profile", default=DEFAULT_CHROME_PROFILE,
         help=f"Chrome profile to read cookies from (default: '{DEFAULT_CHROME_PROFILE}')",
     )
+    parser.add_argument(
+        "--format", default="mp3", choices=("mp3", "m4a"),
+        help="mp3 (re-encode to 320k, default) or m4a (keep YouTube's AAC stream)",
+    )
     args = parser.parse_args()
 
     if not args.csv_path.exists():
@@ -195,7 +139,7 @@ def main() -> int:
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futures = {
-            ex.submit(download_one, row, args.library, args.chrome_profile): row
+            ex.submit(download_one, row, args.library, args.chrome_profile, args.format): row
             for row in rows
         }
         for i, fut in enumerate(as_completed(futures), 1):

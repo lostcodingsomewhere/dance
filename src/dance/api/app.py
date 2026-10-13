@@ -165,11 +165,14 @@ def _deps_status(s) -> dict:  # noqa: ANN001
 
     # Match the resolution logic in ``download_track`` so the chip never
     # green-lights a tool that the worker would then fail to find.
-    from dance.spotify.csv_importer import _resolve_ffmpeg, _resolve_yt_dlp
+    from dance.spotify.csv_importer import _resolve_ffmpeg, _resolve_ffprobe, _resolve_yt_dlp
 
     yt_dlp_path = _resolve_yt_dlp()
     ff = _resolve_ffmpeg(None)
     ffmpeg_path = ff if Path(ff).exists() else None
+    # Every download is verified with ffprobe; without it each ingest fails.
+    fp = _resolve_ffprobe(ff)
+    ffprobe_path = fp if Path(fp).exists() else None
     cookies = (
         s.youtube_cookies_file
         if s.youtube_cookies_file
@@ -189,10 +192,16 @@ def _deps_status(s) -> dict:  # noqa: ANN001
         },
         {
             "key": "ffmpeg",
-            "label": "ffmpeg",
-            "status": "ok" if ffmpeg_path else "missing",
-            "detail": ffmpeg_path
-            or "Required by yt-dlp for audio extraction. brew install ffmpeg",
+            "label": "ffmpeg + ffprobe",
+            "status": "ok" if ffmpeg_path and ffprobe_path else "missing",
+            "detail": (
+                f"{ffmpeg_path}; {ffprobe_path}"
+                if ffmpeg_path and ffprobe_path
+                else "Required by yt-dlp for audio extraction. brew install ffmpeg"
+                if not ffmpeg_path
+                else "ffprobe not found beside ffmpeg or on PATH — required to verify "
+                "downloads. brew install ffmpeg"
+            ),
             "required": True,
         },
         {

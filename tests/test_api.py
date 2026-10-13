@@ -3250,9 +3250,13 @@ def test_ingest_playlist_fuzzy_dedup_backfills_spotify_id(
     """A playlist hit whose (artist, title) fuzzy-matches an existing Track
     (CSV-ingested, ``spotify_id=None``) should NOT create a duplicate. It
     should backfill the Spotify ID onto the existing row and count as
-    ``skipped_existing`` with ``backfilled > 0``."""
+    ``skipped_existing`` with ``backfilled > 0``. Backfill needs the
+    durations to agree (282 s both sides); a name-only match is covered in
+    test_ingest_dedup_guard.py."""
     # Existing Track from a prior CSV / library scan — no spotify_id.
-    existing = make_track(title="Pressure", artist="RÜFÜS DU SOL", spotify_id=None)
+    existing = make_track(
+        title="Pressure", artist="RÜFÜS DU SOL", spotify_id=None, duration_seconds=282.0
+    )
     session.commit()
 
     # Playlist returns one hit with the same artist+title (case + accents differ).

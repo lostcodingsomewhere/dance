@@ -4,8 +4,8 @@ Two halves:
 
 - :func:`parse_csv` extracts ``(artist, title, album, duration_s)`` rows
   from raw CSV text. Pure stdlib so it works in tests.
-- :func:`download_track` runs the actual yt-dlp call. Out of the request
-  thread; library calls into :func:`subprocess.run`.
+- :func:`download_track` finds, downloads and verifies one row (see
+  :mod:`dance.spotify.acquire`). Out of the request thread.
 
 The CLI script (``scripts/yt_dlp_csv_import.py``) still owns the entry
 point, but uses these helpers so behavior stays identical between
@@ -18,10 +18,19 @@ import csv
 import io
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from dance.spotify.acquire import (
+    Runner,
+    TagValues,
+    Tools,
+    acquire_track,
+    audio_format_spec,
+    target_extension,
+)
+from dance.spotify.matching import Target, split_artists
 
 
 def _resolve_yt_dlp() -> str | None:
@@ -131,10 +140,22 @@ def parse_csv(csv_text: str) -> tuple[list[CsvRow], list[str]]:
     return rows, errors
 
 
-def expected_target(library: Path, row: CsvRow) -> Path:
-    """The path we'd write to for this CSV row."""
+def expected_target(library: Path, row: CsvRow, audio_format: str = "mp3") -> Path:
+    """The path we'd write to for this CSV row.
+
+    The extension follows ``audio_format`` (``settings.audio_format``): an
+    ``m4a`` library keeps YouTube's AAC stream rather than re-encoding it.
+    """
     safe = f"{sanitize_filename(row.artist)} - {sanitize_filename(row.title)}"
-    return library / f"{safe}.mp3"
+    return library / f"{safe}.{target_extension(audio_format)}"
+
+
+def _resolve_ffprobe(ffmpeg_path: str) -> str:
+    """ffprobe ships beside ffmpeg in every install we support."""
+    sibling = Path(ffmpeg_path).with_name("ffprobe")
+    if sibling.exists():
+        return str(sibling)
+    return shutil.which("ffprobe") or "ffprobe"
 
 
 def download_track(
@@ -142,36 +163,57 @@ def download_track(
     library: Path,
     cookies_file: Path | None = None,
     ffmpeg_location: str | None = None,
-    duration_tolerance_s: int = 30,
+    *,
     timeout_s: int = 180,
+    audio_format: str = "mp3",
+    cookies_from_browser: str | None = None,
+    runner: Runner | None = None,
+    dest: Path | None = None,
 ) -> tuple[str, str]:
-    """Run yt-dlp for one row. Returns ``(status, message)``.
+    """Find, download and verify one row. Returns ``(status, message)``.
 
     ``status`` is one of:
-      - ``"ok"``: new file downloaded
+      - ``"ok"``: new file downloaded and verified; ``message`` names the
+        chosen YouTube id + match score (also written to the comment tag)
       - ``"skip"``: file already existed
-      - ``"fail"``: yt-dlp failed both attempts
+      - ``"fail"``: no candidate qualified, or every eligible one failed
+        download/verification — ``message`` says which and why
 
-    Idempotent: if ``expected_target(...)`` already exists with size >100 KB,
-    returns ``("skip", "already downloaded")``.
+    Candidate selection lives in :mod:`dance.spotify.matching`; the
+    download/verify loop in :mod:`dance.spotify.acquire`. There is **no
+    unfiltered retry**: the old "retry without --match-filter" fallback
+    accepted whatever YouTube ranked first (live versions, extended mixes,
+    hour-long sets) and then stamped the Spotify tags on it.
+
+    Idempotent: if ``expected_target(...)`` (or ``dest``, when the caller
+    picked the path) already exists with size >100 KB, returns
+    ``("skip", "already downloaded")``.
 
     Auth: pass ``cookies_file`` (typically ``~/.dance/cookies.txt`` exported
     via the "Get cookies.txt LOCALLY" Chrome extension) to bypass YouTube's
     bot-detection. Defaults to looking for the file at the standard path
     and to ``None`` (no cookies) if it's missing — yt-dlp will still try
     the request but is much more likely to hit a 403 or sign-in prompt.
+    ``cookies_from_browser`` (e.g. ``"chrome:Profile 2"``) is the CLI
+    script's alternative.
 
     ``ffmpeg_location`` defaults to whatever ``ffmpeg`` is on PATH. Override
     only when you have a known-good static build you want to pin to.
+    ``runner`` replaces ``subprocess.run`` (tests fake yt-dlp with it).
     """
     # Default lookup for cookies.txt — caller can override or pass None.
-    if cookies_file is None:
+    if cookies_file is None and cookies_from_browser is None:
         default_cookies = Path.home() / ".dance" / "cookies.txt"
         if default_cookies.exists():
             cookies_file = default_cookies
     ffmpeg_location = _resolve_ffmpeg(ffmpeg_location)
 
-    target = expected_target(library, row)
+    try:
+        spec = audio_format_spec(audio_format)
+    except ValueError as exc:
+        return ("fail", str(exc))
+
+    target = dest or expected_target(library, row, spec.ext)
     if target.exists() and target.stat().st_size > 100 * 1024:
         return ("skip", "already downloaded")
 
@@ -185,74 +227,28 @@ def download_track(
             "venv or `brew install yt-dlp` on the host",
         )
 
-    output_template = str(library / f"{target.stem}.%(ext)s")
-    query = f"ytsearch1:{row.artist} {row.title}"
-
-    cmd = [
-        yt_dlp_bin,
-        "--js-runtimes", "node",
-        "--ffmpeg-location", ffmpeg_location,
-        "--default-search", "ytsearch",
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "--postprocessor-args", "ffmpeg:-b:a 320k",
-        "--no-playlist",
-        "--quiet",
-        "--no-warnings",
-        "--output", output_template,
-    ]
-    if cookies_file is not None:
-        # --cookies path is portable across machines (unlike
-        # --cookies-from-browser, which assumes a specific Chrome profile).
-        cmd[1:1] = ["--cookies", str(cookies_file)]
-    if row.duration_s:
-        cmd += [
-            "--match-filter",
-            (f"duration >= {max(row.duration_s - duration_tolerance_s, 30)} & "
-             f"duration <= {row.duration_s + duration_tolerance_s}"),
-        ]
-    cmd.append(query)
-
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return ("fail", f"yt-dlp timeout after {timeout_s}s")
-
-    if proc.returncode != 0 or not target.exists():
-        # Retry once without duration filter.
-        retry = [c for c in cmd if c != "--match-filter"]
-        retry = [c for c in retry if not c.startswith("duration ")]
-        try:
-            proc = subprocess.run(retry, capture_output=True, text=True, timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            return ("fail", f"yt-dlp timeout (retry) after {timeout_s}s")
-        if proc.returncode != 0 or not target.exists():
-            tail = (proc.stderr or proc.stdout or "")[-150:].replace("\n", " | ")
-            return ("fail", f"yt-dlp rc={proc.returncode}: {tail}")
-
-    # Overwrite yt-dlp's noisy ID3 with clean values from CSV.
-    try:
-        from mutagen.easyid3 import EasyID3
-        from mutagen.id3 import ID3NoHeaderError
-        from mutagen.mp3 import MP3
-
-        try:
-            tags = EasyID3(target)
-        except ID3NoHeaderError:
-            audio = MP3(target)
-            audio.add_tags()
-            audio.save()
-            tags = EasyID3(target)
-        tags["artist"] = row.artist
-        tags["title"] = row.title
-        if row.album:
-            tags["album"] = row.album
-        tags.save()
-    except Exception as e:  # noqa: BLE001
-        return ("ok", f"{target.stat().st_size // 1024} KB (tag write warn: {e})")
-
-    return ("ok", f"{target.stat().st_size // 1024} KB")
+    tools = Tools(
+        yt_dlp=yt_dlp_bin,
+        ffmpeg=ffmpeg_location,
+        ffprobe=_resolve_ffprobe(ffmpeg_location),
+        cookies_file=cookies_file,
+        cookies_from_browser=cookies_from_browser,
+    )
+    match_target = Target(
+        title=row.title,
+        artists=split_artists(row.artist) or (row.artist,),
+        duration_s=float(row.duration_s) if row.duration_s else None,
+    )
+    result = acquire_track(
+        match_target,
+        TagValues(title=row.title, artist=row.artist, album=row.album),
+        target,
+        spec,
+        tools,
+        runner=runner,
+        timeout_s=timeout_s,
+    )
+    return (result.status, result.message)
 
 
 __all__ = [
