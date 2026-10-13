@@ -54,12 +54,15 @@ track at six master levels, run through `analyze.py`'s own energy code on 60 s:
 | `energy_overall` | 0.38 | 0.61 | 0.76 | 0.96 | **1.00** | **1.00** |
 | `energy_peak` | 0.59 | 0.93 | **1.00** | **1.00** | **1.00** | **1.00** |
 
-`floor_energy` is 50 % `energy_overall` + 30 % `energy_peak`
-(`analyze.py:277-297`), so above about −10 LUFS it stops telling tracks apart.
+`floor_energy` is 50 % `energy_overall` + 30 % `energy_peak` + 20 % brightness
+(`analyze.py:277-297`), so above about −10 LUFS 80 % of its weight is pinned
+at 1.0 and only brightness still separates tracks.
 
 Clip-gain normalisation on load has nothing to compute from. The `.als` writer
 emits `SampleVolume` = 1 (`als/writer.py:531`), and Live's `Clip.gain` is a
-0.0–1.0 value with no documented dB mapping ([LOM Clip][lom]).
+0.0–1.0 value with no documented dB mapping ([LOM Clip][lom]); the read-only
+`gain_display_string` (e.g. "1.3 dB") means the mapping can be measured, which
+is the clip-gain consumer's job, not this proposal's.
 
 ### 3. Track identity gets overwritten or was never kept
 
@@ -70,13 +73,19 @@ emits `SampleVolume` = 1 (`als/writer.py:531`), and Live's `Clip.gain` is a
   `claude/acquisition`) used to find "22/278 files >10 s off Spotify, 11
   >60 s" (Cycles 414 s vs 186 s). Once the library is reprocessed, the
   wrong-version check has nothing to compare against.
-- **ISRC.** It is never stored. The playlist `fields=` filter leaves out
-  `external_ids` (`spotify/search.py:181-182`). spotDL writes `TSRC` into the
-  mp3s it makes (spotDL 4.4.3 `utils/metadata.py:238`), but
-  `extract_metadata` reads only title, artist, album, date and length
-  (`ingest.py:96-130`). Spotify marked `external_ids` removed in its
-  [February 2026 changelog][sp-feb], then reverted that in [March 2026][sp-mar],
-  so the field is available.
+- **ISRC.** It is never stored. Search and Get Track return full track
+  objects, but `_parse_hit` (`spotify/search.py:297-315`) keeps no
+  `external_ids`, and the playlist `fields=` filter leaves it out
+  (`search.py:181-182`). spotDL writes `TSRC` into the mp3s it makes (spotDL
+  4.4.3 `utils/metadata.py:238`), but `extract_metadata` reads only title,
+  artist, album, date and length (`ingest.py:96-130`). Spotify marked
+  `external_ids` removed in its [February 2026 changelog][sp-feb], then
+  reverted that in [March 2026][sp-mar], so the field is available.
+  Separately, the same Feb 2026 changelog removed `GET /playlists/{id}/tracks`
+  ("use `GET /playlists/{id}/items` instead") and the `popularity` field, and
+  `search.py:180-182` still requests both. That is a bug of its own, outside
+  this proposal; until it is fixed, adding `external_ids` to that `fields=`
+  filter does nothing.
 - **Download source.** Never stored. Main's in-app path downloads YouTube's first
   search result (`csv_importer.py:189`) and keeps no URL. The acquisition branch
   writes the URL into a tag comment only. spotDL puts its YouTube URL in the
@@ -108,14 +117,19 @@ Naming follows the existing `duration_seconds`. Semantics worth pinning down:
   them whenever stored numbers change meaning. Library versions are logged, not
   stored.
 - **`grid_source`.** It lives on the full-mix row. Stem rows copy it together
-  with `bpm` (`analyze_stems.py:106-145` already copies `bpm`). When the mix row
+  with `bpm` (`_track_bpm`, `analyze_stems.py:106-147`, already copies `bpm`). When the mix row
   is not `analyzer`, analyze writes `analyzer_bpm` and leaves `bpm` alone.
   `detect_regions` rebuilds beats from `bpm` (`detect_regions.py:109`), so beats
-  follow whoever owns it. On day one every row is `analyzer`, because nothing
-  writes `ableton` or `manual` yet. The likely writers are warp-guard Option C
-  (`scripts/warp_probe.py --repair`) and the grid harness on
-  `claude/grid-metrics`. The guard has to exist before the first of them lands,
-  or the next reprocess clobbers their grids.
+  follow whoever owns it. On day one every row is `analyzer`. Nothing writes
+  `ableton` or `manual` today, on main or on any local `claude/*` branch. Warp-guard
+  Option C (`scripts/warp_probe.py --repair --bpm`) goes the other way: it
+  pushes *dance's* BPM into Live (`docs/proposals/warp-guard.md`, "the target
+  BPM must come from dance's analysis"). The grid harness on
+  `claude/grid-metrics` reads Live's grid (`dance.als.reader`,
+  `/live/clip/get/warp_marker_times`) but opens the DB with `immutable=1`, so
+  it is read-only. Those are the pieces a future "adopt Live's grid" writer
+  would use. The guard has to exist before that writer lands, or the next
+  reprocess clobbers the adopted grid.
 - **Loudness.** Measure what Live plays: a stereo decode at the file's own rate
   (`es.AudioLoader`). A mono file is measured as dual-mono, which reads 3.01 dB
   higher than a single channel would (measured: −22.99 vs −26.00 LUFS).
@@ -130,8 +144,7 @@ Naming follows the existing `duration_seconds`. Semantics worth pinning down:
   the threshold already in `analyze.py:30-31`. Any code that uses `isrc` to mean
   "same recording" must check both. The index is non-unique: `duplicate_of`
   copies share an ISRC, and Spotify lists one recording under several track IDs
-  (album and single). djbooth's backlog reached the same rule ("Never copy
-  entry-level Spotify ISRC … to every variant"). Normalise to upper case without
+  (album and single). Normalise to upper case without
   hyphens, and store NULL unless the value matches `^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$`.
 
 ## Options considered
@@ -152,13 +165,16 @@ Naming follows the existing `duration_seconds`. Semantics worth pinning down:
   reading `bpm` unchanged.
 - *G2: a `grids` table* (track, source, bpm, first beat, markers JSON). This is
   the right shape once variable-tempo warp markers are stored, but today it
-  would be a new table with an FK and nothing writing to it. Revisit together
-  with warp-guard Option C.
+  would be a new table with an FK (so a batch rebuild, see S2b) and nothing
+  writing to it. Revisit together with the first writer that adopts Live's grid.
+- *G1 later:* add the two columns in that writer's own revision. Costs one more
+  migration and leaves a window in which a reprocess can overwrite an adopted
+  grid if the writer ships without them.
 
 **Loudness placement.** Compute it inside `analyze` and `analyze_stems`. A
 separate stage would need new `TrackState` values, which means changing the
 enum and the dispatcher. For true peak, use `scipy.signal.resample_poly(x, 4, 1)`
-(scipy is already installed as a librosa dependency) rather than
+(scipy is already a direct dependency, `pyproject.toml`: `scipy>=1.10`) rather than
 `es.TruePeakDetector`: they agree, and scipy is 8× faster (table below).
 
 ## Evidence (scratch, synthetic)
@@ -188,6 +204,16 @@ Cost on a 6-minute stereo file, set against what analyze already spends:
 | …TP with `es.TruePeakDetector` instead | 13.62 |
 | one stem: PCM24 read 0.15 + 1.59 + 1.69 | 3.4 (×4 = 13.7) |
 
+Spot-checked during fact-check (same venv, essentia 2.1b6.dev1389): stereo
+−23 dBFS 1 kHz → −22.99 LUFS; one channel only → −26.00; digital silence →
+exactly −70.0; fs/4 sine at 45° → sample peak −3.02 dBFS, scipy ×4 TP +0.11.
+`LoudnessEBUR128` takes one stereo `signal` and returns `momentaryLoudness`,
+`shortTermLoudness`, `integratedLoudness`, `loudnessRange` (no true peak, hence
+the separate TP step). On 6 min of stereo noise: `LoudnessEBUR128` 1.67 s,
+scipy TP 1.95 s, `TruePeakDetector` (default 4× oversampling) 14.6 s, so
+"≈ 8×" holds. The energy-saturation table and the per-step analyze timings
+were not re-run.
+
 That totals about 17.5 s per track. For the 244 visible tracks
 (`library-duplicates.md`) it comes to about 71 min of CPU, or about 36 min at
 the stages' `concurrency = 2`.
@@ -209,9 +235,18 @@ set rows.
 | S8: S7, and S2b's chain, with the env.py hardening below | nothing left behind; the full chain keeps every row |
 
 S2b is SQLite behaving as documented: with FKs on, `DROP TABLE` first runs an
-implicit `DELETE` that fires `ON DELETE CASCADE` ([foreignkeys §5][fk]). S7 is
-pysqlite behaving as documented: it never opens a transaction before DDL, so
-each `ALTER` commits on its own ([SQLAlchemy][sa-txn]).
+implicit `DELETE` that "may invoke foreign key actions" ([foreignkeys §5][fk]),
+here `ON DELETE CASCADE`. S7 is pysqlite behaving as documented: in its legacy
+mode it skips `BEGIN` before DDL, so each `ALTER` commits on its own
+([SQLAlchemy][sa-txn]).
+
+Re-run independently during fact-check (dance's real chain, 5-track scratch DB,
+FKs forced on through a class-level `Engine` connect listener): S1, S2 and S2b
+reproduce exactly (S2b: `tracks` 5, `stem_files`/`audio_analysis`/`beats` 0,
+`alembic_version` = head). S7 reproduces (`duplicate column name: isrc` on
+retry). S8 with a hardened copy of env.py: the failed revision leaves no column
+behind, and the populated chain keeps every row even with the global FK
+listener on. S3–S6 were not re-run.
 
 ## Alembic notes
 
@@ -222,10 +257,14 @@ each `ALTER` commits on its own ([SQLAlchemy][sa-txn]).
   string. That emitted `ADD COLUMN grid_source VARCHAR(16) DEFAULT 'analyzer'
   NOT NULL`. ADD COLUMN takes the same time at any table size; a CHECK would make
   SQLite scan every row ([ALTER TABLE][alter]).
-- **Backfill that needs no audio goes in the revision.** That is
+- **Backfill that needs no audio goes in the revision.** Two UPDATEs:
   `UPDATE audio_analysis SET analyzer_version = 1 WHERE (stem_file_id IS NULL
   AND bpm_confidence = 0.7) OR (stem_file_id IS NOT NULL AND (bpm_confidence IN
-  (0.4, 0.7) OR bpm = 0))`, plus `analyzer_bpm = bpm` on mix rows. Anything
+  (0.4, 0.7) OR bpm = 0))`, and `UPDATE audio_analysis SET analyzer_bpm = bpm
+  WHERE stem_file_id IS NULL`. The fingerprint cannot mis-tag a v2 row in
+  practice: v2 mix confidences are Essentia/5.32, ≤ 0.4 or 0.1, never exactly
+  0.7, and v2 stem rows hold a continuous coherence with `bpm` NULL (not 0)
+  when no tempo is found (`analyze_stems.py:146`). Anything
   that needs audio or the network stays out, following e4a91c7b2d05's precedent.
 - **Downgrade with native `DROP COLUMN`** (SQLite ≥ 3.35; the venv links
   3.53.1). Drop `ix_tracks_isrc` first: SQLite refuses to drop an indexed
@@ -239,7 +278,12 @@ each `ALTER` commits on its own ([SQLAlchemy][sa-txn]).
      itself.
   2. Get real transactional DDL from SQLAlchemy's documented recipe: set
      `isolation_level = None` on connect and emit `BEGIN` on the `begin` event
-     ([SQLAlchemy][sa-txn]).
+     ([SQLAlchemy][sa-txn]). Alembic's SQLite impl declares
+     `transactional_ddl = False` (`alembic/ddl/sqlite.py:44`), so this gives
+     one transaction *per revision*: a failing revision rolls back, while
+     earlier revisions in the same `upgrade head` stay committed. That is the
+     behaviour we want; passing `transactional_ddl=True` to `configure()`
+     would instead make the whole run one transaction.
   3. Run `PRAGMA foreign_key_check` before and after the migration and fail if
      the count grew. Comparing counts, rather than demanding zero, means
      violations already in the DB cannot block migrations.
@@ -259,7 +303,7 @@ each `ALTER` commits on its own ([SQLAlchemy][sa-txn]).
 |---|---|---|
 | `analyzer_version`, `analyzer_bpm`, `grid_source` | fingerprint / `bpm` / default | in the revision |
 | `loudness_*`, `true_peak_dbtp`, `analyzer_version = 3` | audio | `dance reprocess --from analyze --all --skip-embeddings` (already needed for the BPM fix; Demucs short-circuits), plus a new `--stale` flag that selects rows whose version is NULL or below the stage constant |
-| `isrc`, `expected_duration_seconds` | Spotify `GET /tracks/{id}` (listed as "still available" in [Feb 2026][sp-feb]); else spotDL's `TSRC` tag; else spotDL's sync file (`songs[].isrc`, `duration`, `song_id`) | new `dance backfill-identity`, dry-run by default, `--apply` (same pattern as `dance dedupe`) |
+| `isrc`, `expected_duration_seconds` | Spotify `GET /tracks/{id}` via the existing `SpotifySearchClient.get_track` (`search.py:126`; the endpoint is listed as still available in [Feb 2026][sp-feb]; whether this app's credentials can call it was not checked); else spotDL's `TSRC` tag; else spotDL's sync file, `~/.dance/spotdl_sync.spotdl` (`downloader.py:97`; `songs[].isrc`, `duration`, `song_id`) | new `dance backfill-identity`, dry-run by default, `--apply` (same pattern as `dance dedupe`) |
 | `source_url` | `COMM` frame of spotDL mp3s | same command. Rows from main's in-app yt-dlp path stay NULL; that URL was never kept |
 
 Plain mutagen 1.47 reads spotDL-style tags back: `EasyID3['isrc']`,
@@ -292,10 +336,12 @@ The snapshot and `.backup` commands were both checked on a scratch WAL
 database: the snapshot sees rows still sitting in the `-wal` file, and the
 backup passes `integrity_check`.
 
-To size the work first (read-only):
+To size the work first (read-only; use `-readonly`, not `?immutable=1`, which
+ignores the `-wal` file. Checked on a scratch WAL DB: `-readonly` saw 100
+rows, `immutable=1` saw no table at all):
 
 ```bash
-sqlite3 'file:/Users/arya/.dance/dance.db?immutable=1' "SELECT CASE WHEN stem_file_id IS NULL
+sqlite3 -readonly ~/.dance/dance.db "SELECT CASE WHEN stem_file_id IS NULL
   THEN 'mix' ELSE 'stem' END, SUM((stem_file_id IS NULL AND bpm_confidence = 0.7) OR
   (stem_file_id IS NOT NULL AND (bpm_confidence IN (0.4, 0.7) OR bpm = 0))), COUNT(*)
   FROM audio_analysis GROUP BY 1"
@@ -335,36 +381,48 @@ test **in the same PR**. The revision itself is safe even with FKs on (S3), but
 the next migration that carries an FK or CHECK will rebuild a table, and S2b
 shows that going wrong silently. Compute loudness inside the two analyze stages,
 using scipy for true peak. Stamp `analyzer_version = 3`. Put the `grid_source`
-guard in now, before anything writes a non-analyzer grid. Take the duration
-snapshot **today**, before anyone reprocesses the real library.
+guard in now: it is two ADD COLUMNs and about 25 lines of code, and no writer
+for a non-analyzer grid exists yet to forget it. Take the duration snapshot
+**today**, before anyone reprocesses the real library.
 
 ## Decisions for the user
 
 1. **All three groups in one revision**, or loudness first and identity later?
    (Recommended: one. Each extra revision means another upgrade and another
    reprocess.)
-2. **Add `grid_source` + `analyzer_bpm` now**, before anything writes `ableton`
-   or `manual`, or together with warp-guard Option C? (Recommended: now.
-   Otherwise the first grid adopted from Live is lost to the next reprocess.)
+2. **Add `grid_source` + `analyzer_bpm` now**, or in the revision of whatever
+   first adopts Live's grid into the DB (no such writer exists or is planned
+   yet; Option C pushes dance's BPM *into* Live)? (Recommended: now. It costs
+   two columns, and adding it later costs another migration plus the risk that
+   the writer ships without it.)
 3. **`analyzer_version` as an integer** (A1) or a provenance string (A2)?
+   (Recommended: A1.)
 4. **True peak on stems too** (≈ 6.8 s/track), or on the mix only? Rule 4 argues
    for stems, since a soloed stem gets the track's gain as well.
-5. **`env.py` hardening in this PR**, or separately?
+   (Recommended: stems too.)
+5. **`env.py` hardening in this PR**, or separately? (Recommended: this PR.)
 6. **Identity source:** a Spotify re-fetch (needs credentials; authoritative), or
-   tags + the spotDL sync file only (works offline)?
+   tags + the spotDL sync file only (works offline)? (Recommended: try
+   Spotify first, fall back to tags and the sync file, as in the Backfill
+   table. Check with one real `get_track` call that the credentials still
+   work before relying on it.)
 7. **ISRC on a probable wrong-version file:** store it and rely on the
    documented duration check (recommended), or leave it NULL until the
    durations agree?
+8. **The removed playlist endpoint** (`search.py:180`, `/tracks` → `/items`,
+   `popularity` dropped): fix it in its own small PR (recommended; it is a
+   live breakage, not schema work), or fold it into this one?
 
 ## Migration cost
 
-- **Schema:** 1 revision of 13 statements (9 ADD COLUMN, 1 CREATE INDEX, 3
+- **Schema:** 1 revision of 12 statements (9 ADD COLUMN, 1 CREATE INDEX, 2
   backfill UPDATEs on `audio_analysis`). No table is copied, and ADD COLUMN
   takes the same time at any table size.
 - **Code (estimate, lines):** models 25; `pipeline/utils/loudness.py` 60;
   stamping + grid guard 25; ingest 15 (`pipeline.py:528, 714` also write
-  `expected_duration_seconds`, `extract_metadata` reads `TSRC`/`COMM`,
-  `fields=` adds `external_ids`); `dance backfill-identity` 120;
+  `expected_duration_seconds` and `isrc`, `_parse_hit` reads
+  `external_ids.isrc`, `extract_metadata` reads `TSRC`/`COMM`; the playlist
+  `fields=` change waits on the `/items` fix); `dance backfill-identity` 120;
   `reprocess --stale` 30; `env.py` 25; tests 250.
 - **Data:** one reprocess. That is about 36 min of loudness CPU on top of the
   analysis it re-runs anyway, plus one Spotify call per track with a
@@ -396,7 +454,8 @@ snapshot **today**, before anyone reprocesses the real library.
    Live is not involved until the clip-gain consumer, which changes `.als`
    emission and needs its own in-Live check.
 
-Every number above comes from scratch scripts kept outside the repo
+Apart from the fact-check re-runs noted inline, every number above comes from
+the author's scratch scripts kept outside the repo
 (`loudness_probe.py`, `migration_probe.py`, `tags_and_cost_probe.py`), which
 use synthetic audio and synthetic DBs only.
 
