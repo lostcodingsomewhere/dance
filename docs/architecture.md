@@ -131,7 +131,7 @@ All response shapes are in `src/dance/api/schemas.py`. See `docs/api.md` for the
 
 ### WebSocket
 
-`src/dance/api/routers/ws.py`. The OSC listener runs on a background thread; FastAPI runs on asyncio. We capture the loop in `lifespan` (`app.py:51`) and the bridge subscriber calls `WSManager.broadcast_threadsafe`, which uses `asyncio.run_coroutine_threadsafe` to hop over.
+`src/dance/api/routers/ws.py`. The OSC listener runs on a background thread; FastAPI runs on asyncio. We capture the loop in `lifespan` (`app.py:51`) and the bridge subscriber calls `WSManager.broadcast_latest_threadsafe`, which hands the change to a `LatestValueThrottle` (`api/broadcast_throttle.py`): bursts collapse to at most ~30 pushes/s, the state is snapshotted on the loop at send time, and the state after the last change of a burst always goes out. The `/ws/pipeline` job feed keeps the unthrottled `broadcast_threadsafe` (`asyncio.run_coroutine_threadsafe`), since every job frame is distinct.
 
 ## Layer 3 — React companion app
 
@@ -167,7 +167,7 @@ src/
     useColumnRecs.ts   -- live per-column recs (Booth), scored vs the playing combo
     useSets.ts         -- useActiveSet, useCreateSet, useActivateSet
     usePreview.ts      -- Cue/headphones audition (start/stop/state)
-    useAbletonState.ts -- subscribes to /ws, auto-reconnect with backoff
+    useAbletonState.ts -- /ws via lib/sharedSocket: ONE socket app-wide, 2 s reconnect, ≤1 render/frame
     useDeckMap, useTransport, useTracks, useRecommend, useSession, …
   views/               -- Booth, SetEditor, PipelineOps (+ PipelineBoard)
 ```
@@ -283,4 +283,4 @@ React TrackCard onClick
   -> React reveals stems folder in Finder via /api/v1/files/reveal
 ```
 
-Meanwhile the listener thread is receiving `/live/song/get/tempo` pushes, updating `bridge.state.tempo`, and the bridge subscriber posts to `WSManager.broadcast_threadsafe` -> all open `/ws` clients see the new tempo within a frame.
+Meanwhile the listener thread is receiving `/live/song/get/tempo` pushes, updating `bridge.state.tempo`, and the bridge subscriber posts to `WSManager.broadcast_latest_threadsafe` -> all open `/ws` clients see the new tempo within a frame (an isolated change goes out on the next loop tick; bursts are capped at ~30 pushes/s).
