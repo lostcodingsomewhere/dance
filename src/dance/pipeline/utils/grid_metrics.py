@@ -12,12 +12,19 @@ method follows djbooth's analyzer differential:
    beats are within ``0.9`` periods of each other — and half/double-time
    grids degrade gracefully into "every other beat unmatched".
 2. **Score** the aligned pairs: F1 at 70 ms and 100 ms collars, median / p95
-   absolute timing error, signed phase offset, linear drift per 100 beats,
-   and — when downbeats are known on both sides — bar-phase accuracy.
+   absolute timing error, signed phase offset, linear drift per 100 beats
+   (unwrapped, so it keeps growing past half a beat), and — when downbeats
+   are known on both sides — bar-phase accuracy.
 3. **Gate**: :func:`find_regressions` compares a run against a saved
-   baseline and names every track whose metrics got worse. The discipline is
-   djbooth's: a grid change ships only if no previously-passing track
-   regresses.
+   baseline. The discipline is djbooth's: a grid change ships only if no
+   previously-passing track regresses. A track that passed is held to every
+   gated metric. A track that already failed is held to the metrics that
+   move steadily as a bad grid improves — tempo error, unwrapped drift and
+   coverage (:data:`FAILING_TRACK_GATED`) — because its F1, timing error and
+   bar phase swing with where the phase sawtooth happens to land: a 0.5 %
+   -> 0.1 % tempo fix can lower F1. Those other changes are reported as
+   warnings. Pass ``failing_track_gated=frozenset(REGRESSION_TOLERANCES)``
+   (``grid_diff --strict``) to hold every track to every metric.
 
 Everything in this module is pure (numbers in, numbers out). Reading grids
 from the DB, from ``.als`` files or from Live over OSC lives elsewhere —
@@ -54,10 +61,14 @@ _OCTAVE_FACTORS: tuple[tuple[str, float], ...] = (
     ("0.75x", 0.75),
 )
 
-# A track "passes" when its grid is usable for beatmatching against Live.
+# A track "passes" when its grid is usable for beatmatching against Live: the
+# beats line up, the headline tempo is known and close, and the estimate
+# covers most of the reference (a tracker that gave up after a minute does
+# not pass on the strength of that minute).
 PASS_THRESHOLDS: dict[str, float] = {
     "min_f1_70": 0.90,
     "max_abs_bpm_error_pct": 0.5,
+    "min_reference_coverage": 0.5,
 }
 
 # How much a metric may worsen before the gate calls it a regression. Small
@@ -71,11 +82,29 @@ REGRESSION_TOLERANCES: dict[str, float] = {
     "abs_bpm_error_pct": 0.05,
     "abs_grid_bpm_error_pct": 0.05,
     "abs_drift_ms_per_100_beats": 2.0,
+    "reference_coverage": 0.01,
     "bar_phase_accuracy": 0.01,
     "downbeat_f1_70": 0.01,
 }
+# The metrics a track that FAILED in the baseline is still gated on. Tempo
+# error, unwrapped drift (tempo error seen beat by beat) and coverage move
+# steadily with how good the grid is; F1, timing error and bar phase of a grid
+# that is already off do not (see the module docstring), so for a failing
+# track their changes are warnings, not regressions.
+FAILING_TRACK_GATED: frozenset[str] = frozenset(
+    {
+        "abs_bpm_error_pct",
+        "abs_grid_bpm_error_pct",
+        "abs_drift_ms_per_100_beats",
+        "reference_coverage",
+    }
+)
+# Hold every track — failing or not — to every metric (``grid_diff --strict``).
+STRICT_GATED: frozenset[str] = frozenset(REGRESSION_TOLERANCES)
 # Metrics where a bigger number is better. Everything else: smaller is better.
-_HIGHER_IS_BETTER = frozenset({"f1_70", "f1_100", "bar_phase_accuracy", "downbeat_f1_70"})
+_HIGHER_IS_BETTER = frozenset(
+    {"f1_70", "f1_100", "reference_coverage", "bar_phase_accuracy", "downbeat_f1_70"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +316,10 @@ def match_rate(
 
 
 def drift_ms_per_100_beats(
-    reference_indices: Sequence[int], signed_errors_ms: Sequence[float]
+    reference_indices: Sequence[int],
+    signed_errors_ms: Sequence[float],
+    *,
+    period_ms: float | None = None,
 ) -> float | None:
     """Least-squares slope of signed error vs reference beat index, x100.
 
@@ -295,15 +327,22 @@ def drift_ms_per_100_beats(
     its error linearly with beat count and shows up here. Positive means the
     estimate falls progressively later than the reference.
 
-    Caveat: once the accumulated error passes half a beat the alignment
-    re-pairs each estimate beat with the NEXT reference beat, the error turns
-    into a sawtooth and this slope collapses towards zero. For grids that far
-    apart, ``grid_bpm_error_pct`` is the honest tempo witness.
+    Once the accumulated error passes half a beat the alignment re-pairs each
+    estimate beat with the NEXT reference beat and the raw error turns into a
+    sawtooth whose slope collapses towards zero — so a worse tempo could
+    score a smaller drift. Pass ``period_ms`` (the reference beat period) and
+    the errors are unwrapped first: every jump of more than half a period
+    between consecutive matches is read as one beat of re-pairing, and the
+    slope keeps growing with the tempo error. Unwrapping cannot see through a
+    stretch of unmatched beats during which the phase moved more than half a
+    beat; that is a grid too broken for drift to mean much anyway.
     """
     if len(reference_indices) < 2 or len(reference_indices) != len(signed_errors_ms):
         return None
     x = np.asarray(reference_indices, dtype=float)
     y = np.asarray(signed_errors_ms, dtype=float)
+    if period_ms is not None and period_ms > 0:
+        y = np.unwrap(y, period=float(period_ms))
     xc = x - x.mean()
     var = float(np.dot(xc, xc))
     if var <= 1e-12:
@@ -368,6 +407,11 @@ class GridComparison:
     reference_grid_bpm: float | None
     estimate_grid_bpm: float | None
     grid_bpm_error_pct: float | None
+    # Reference beats before clipping to the estimate's span, and the share
+    # kept (None when the reference was not clipped). Beatless intros/outros
+    # that Live grids but the tracker leaves empty lower this, not F1.
+    reference_beats_total: int | None = None
+    reference_coverage: float | None = None
     bar_phase_accuracy: float | None = None
     bar_phase_shift: int | None = None  # dominant (estimate - reference) mod bar
     downbeat_f1_70: float | None = None
@@ -388,10 +432,21 @@ class GridComparison:
         return None if d is None else abs(d)
 
     def passes(self, thresholds: Mapping[str, float] = PASS_THRESHOLDS) -> bool:
+        """Usable against Live: F1, a KNOWN tempo close enough, coverage.
+
+        An unknown estimate tempo against a known reference fails: a NULL
+        ``audio_analysis.bpm`` is a track dance cannot warp, not a pass.
+        """
         if self.f1_70 < thresholds["min_f1_70"]:
             return False
+        cov = self.reference_coverage
+        min_cov = thresholds.get("min_reference_coverage")
+        if cov is not None and min_cov is not None and cov < min_cov:
+            return False
         err = self.abs_bpm_error_pct
-        return err is None or err <= thresholds["max_abs_bpm_error_pct"]
+        if err is None:
+            return self.reference_bpm is None
+        return err <= thresholds["max_abs_bpm_error_pct"]
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -411,16 +466,26 @@ def compare_grids(
     reference_downbeats: Sequence[int] | None = None,
     estimate_downbeats: Sequence[int] | None = None,
     beats_per_bar: int = 4,
+    bpm_fallback: bool = True,
+    clip_reference_to_estimate: bool = False,
 ) -> GridComparison:
     """Compare an estimated beat grid against a reference grid.
 
     ``reference_bpm`` / ``estimate_bpm`` are the headline tempi (e.g. Live's
     warp tempo vs ``audio_analysis.bpm``); when omitted they fall back to the
-    grids' own average tempo (:func:`grid_bpm`). ``*_downbeats`` index the
-    (sorted) beat lists; bar-phase metrics are only computed when both are
-    given. Unsorted input is sorted; non-finite values and exact duplicates
-    are dropped — pass already-clean lists when you also pass downbeat
-    indices so the indices still line up.
+    grids' own average tempo (:func:`grid_bpm`) — unless ``bpm_fallback`` is
+    False, in which case a missing tempo stays missing (and the comparison
+    does not pass: an unknown tempo is not a correct one). ``*_downbeats``
+    index the (sorted) beat lists; bar-phase metrics are only computed when
+    both are given. Unsorted input is sorted; non-finite values and exact
+    duplicates are dropped — pass already-clean lists when you also pass
+    downbeat indices so the indices still line up.
+
+    ``clip_reference_to_estimate`` drops reference beats more than half a
+    period outside the estimate's first..last beat before scoring, so a
+    beatless intro or outro that Live grids but the tracker leaves empty is
+    not counted as missed beats. How much was dropped is reported as
+    ``reference_coverage`` (and gated by the pass threshold).
     """
     ref = _clean(reference)
     est = _clean(estimate)
@@ -429,7 +494,20 @@ def compare_grids(
     if estimate_downbeats is not None and est != [float(t) for t in estimate]:
         raise ValueError("estimate must be sorted/unique/finite when downbeat indices are given")
 
-    alignment = align_beats(ref, est)
+    ref_period = median_period(ref)
+    ref_total: int | None = None
+    coverage: float | None = None
+    if clip_reference_to_estimate and ref and est:
+        ref_total = len(ref)
+        margin = 0.5 * ref_period
+        lo = bisect.bisect_left(ref, est[0] - margin)
+        hi = bisect.bisect_right(ref, est[-1] + margin)
+        ref = ref[lo:hi]
+        if reference_downbeats is not None:
+            reference_downbeats = [d - lo for d in reference_downbeats if lo <= d < hi]
+        coverage = len(ref) / ref_total
+
+    alignment = align_beats(ref, est, gap_cost_s=GAP_COST_FRACTION * ref_period)
     signed_s = [est[j] - ref[i] for i, j in alignment.matches]
     abs_s = [abs(v) for v in signed_s]
     abs_ms = [v * 1000.0 for v in abs_s]
@@ -438,12 +516,11 @@ def compare_grids(
     r70 = match_rate(abs_s, len(ref), len(est), F1_TOLERANCES_MS[0])
     r100 = match_rate(abs_s, len(ref), len(est), F1_TOLERANCES_MS[1])
 
-    ref_period = median_period(ref)
     phase_ms = float(np.median(signed_ms)) if signed_ms else None
     ref_grid_bpm = grid_bpm(ref)
     est_grid_bpm = grid_bpm(est)
-    ref_bpm = reference_bpm if reference_bpm is not None else ref_grid_bpm
-    est_bpm = estimate_bpm if estimate_bpm is not None else est_grid_bpm
+    ref_bpm = reference_bpm if reference_bpm is not None or not bpm_fallback else ref_grid_bpm
+    est_bpm = estimate_bpm if estimate_bpm is not None or not bpm_fallback else est_grid_bpm
 
     result = GridComparison(
         reference_beats=len(ref),
@@ -463,7 +540,9 @@ def compare_grids(
         max_abs_error_ms=max(abs_ms) if abs_ms else None,
         phase_offset_ms=phase_ms,
         phase_offset_beats=(phase_ms / 1000.0 / ref_period) if phase_ms is not None else None,
-        drift_ms_per_100_beats=drift_ms_per_100_beats([i for i, _ in alignment.matches], signed_ms),
+        drift_ms_per_100_beats=drift_ms_per_100_beats(
+            [i for i, _ in alignment.matches], signed_ms, period_ms=ref_period * 1000.0
+        ),
         first_beat_error_ms=(est[0] - ref[0]) * 1000.0 if ref and est else None,
         reference_bpm=ref_bpm,
         estimate_bpm=est_bpm,
@@ -472,6 +551,8 @@ def compare_grids(
         reference_grid_bpm=ref_grid_bpm,
         estimate_grid_bpm=est_grid_bpm,
         grid_bpm_error_pct=bpm_error_pct(est_grid_bpm, ref_grid_bpm),
+        reference_beats_total=ref_total,
+        reference_coverage=coverage,
     )
 
     if reference_downbeats is not None and estimate_downbeats is not None:
@@ -607,20 +688,43 @@ def _worse(metric: str, base: float, cur: float, tol: float) -> bool:
     return cur > base + tol
 
 
+@dataclass(frozen=True)
+class GateReport:
+    """What :func:`find_regressions` found.
+
+    ``regressions`` fail the gate. ``warnings`` are worsened metrics on a
+    track that already failed in the baseline — reported, not gated (see
+    :data:`FAILING_TRACK_GATED`). ``not_compared`` are baseline tracks this
+    run did not select.
+    """
+
+    regressions: list[Regression]
+    warnings: list[Regression]
+    not_compared: list[str]
+
+
 def find_regressions(
     baseline: Mapping[str, Mapping[str, Any]],
     current: Mapping[str, Mapping[str, Any]],
     *,
     tolerances: Mapping[str, float] = REGRESSION_TOLERANCES,
-) -> tuple[list[Regression], list[str]]:
+    failing_track_gated: frozenset[str] = FAILING_TRACK_GATED,
+) -> GateReport:
     """Compare per-track metric dicts against a baseline run.
 
     Both arguments map ``track_id -> result dict`` as written by
     ``scripts/grid_diff.py`` (a result is "ok" when it has metrics, i.e.
-    ``result["metrics"]`` is present). Returns ``(regressions, not_compared)``:
+    ``result["metrics"]`` is present). Regressions:
 
     - a track that passed in the baseline and fails now → ``passes``;
-    - any tolerance-exceeding worsening of a gated metric → that metric;
+    - a tolerance-exceeding worsening of a gated metric → that metric. A
+      track that passed in the baseline is gated on every metric in
+      ``tolerances``; one that failed only on ``failing_track_gated`` (tempo
+      error, drift, coverage) — its other worsened metrics become
+      ``warnings``. ``failing_track_gated=STRICT_GATED`` gates them all;
+    - a gated metric that had a value in the baseline and is ``None`` now
+      (the analysis BPM went NULL, every downbeat flag vanished) →
+      ``<metric>_missing``. A metric that disappears cannot be "no worse";
     - a track that HAD metrics in the baseline but now has none (its grid
       vanished, its reference stopped matching) → ``grid_missing``;
     - baseline tracks absent from ``current`` entirely are not regressions
@@ -628,6 +732,7 @@ def find_regressions(
       ``not_compared`` so the caller can say so.
     """
     regressions: list[Regression] = []
+    warnings: list[Regression] = []
     not_compared: list[str] = []
     for track_id, base in baseline.items():
         base_m = base.get("metrics")
@@ -648,17 +753,29 @@ def find_regressions(
                 )
             )
             continue
-        if base_m.get("passes") and not cur_m.get("passes"):
+        was_passing = bool(base_m.get("passes"))
+        if was_passing and not cur_m.get("passes"):
             regressions.append(
                 Regression(track_id, "passes", True, False, "previously-passing track now fails")
             )
         for metric, tol in tolerances.items():
             b, c = base_m.get(metric), cur_m.get(metric)
-            if b is None or c is None:
+            if b is None:
                 continue
-            if _worse(metric, float(b), float(c), tol):
+            sink = regressions if was_passing or metric in failing_track_gated else warnings
+            if c is None:
+                sink.append(
+                    Regression(
+                        track_id,
+                        f"{metric}_missing",
+                        float(b),
+                        None,
+                        f"{metric} was {float(b):.4g} in baseline; now unknown",
+                    )
+                )
+            elif _worse(metric, float(b), float(c), tol):
                 direction = "dropped" if metric in _HIGHER_IS_BETTER else "rose"
-                regressions.append(
+                sink.append(
                     Regression(
                         track_id,
                         metric,
@@ -667,19 +784,22 @@ def find_regressions(
                         f"{metric} {direction} {float(b):.4g} -> {float(c):.4g} (tol {tol:g})",
                     )
                 )
-    return regressions, not_compared
+    return GateReport(regressions, warnings, not_compared)
 
 
 __all__ = [
     "Alignment",
     "F1_TOLERANCES_MS",
+    "FAILING_TRACK_GATED",
     "GAP_COST_FRACTION",
+    "GateReport",
     "GridComparison",
     "MatchRate",
     "PASS_THRESHOLDS",
     "REGRESSION_TOLERANCES",
     "ReferenceGrid",
     "Regression",
+    "STRICT_GATED",
     "WarpMarker",
     "align_beats",
     "bar_positions",

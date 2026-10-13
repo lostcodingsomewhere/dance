@@ -191,7 +191,7 @@ python scripts/grid_diff.py --als fixed.als --json base.json
 python scripts/grid_diff.py --als fixed.als --json new.json --baseline base.json   # exit 1 = regression
 ```
 
-The DB is opened read-only (`file:…?immutable=1`). Ship a grid change only when the gate exits 0: no previously-passing track may regress. A dance-exported `.als` works as a reference too, but it only encodes `audio_analysis.bpm` from 0:00 — it is a plumbing check, not ground truth.
+The DB is opened read-only (`file:…?immutable=1`). Ship a grid change only when the gate exits 0: no previously-passing track may regress on any metric, and a track that already fails may not get a worse tempo error, drift or coverage. Its F1 / timing / bar-phase changes are printed as warnings, because once a grid slips past half a beat those numbers swing with the phase sawtooth (a 0.5 % → 0.1 % tempo fix can lower F1). `--strict` gates those too. Stem clips are judged against that stem's own `audio_analysis.bpm`, and a NULL BPM fails rather than falling back. Live's grid is clipped to the span of dance's beats, and how much of it is covered is reported as `reference_coverage`. A dance-exported `.als` works as a reference too, but it only encodes `audio_analysis.bpm` from 0:00 — it is a plumbing check, not ground truth.
 
 ## Repo layout (developer cheat-sheet)
 

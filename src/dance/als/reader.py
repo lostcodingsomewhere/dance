@@ -10,6 +10,16 @@ Only what a grid comparison needs is extracted: the sample path, the warp
 markers (``SecTime`` = seconds into the sample, ``BeatTime`` = clip beats),
 whether the clip is warped at all, and where it sits (track name, session vs
 arrangement). Nothing is written; the writer lives in :mod:`dance.als.writer`.
+
+Checked against Sets Live 12.4 itself saved (the lesson / demo Sets bundled
+in the app, read locally — not copied into the repo): clips sit in
+``MainSequencer/ClipSlotList`` (session) and
+``MainSequencer/Sample/ArrangerAutomation/Events`` (arrangement), ``FileRef``
+has a ``Path`` but no ``Name``, and each clip also carries
+``SavedWarpMarkersForStretched`` — a stash of markers for a different warp
+mode, NOT the grid Live plays, so only the direct ``WarpMarkers`` child is
+read. Take-lane clips (Live 11+ comping) and frozen-track audio are copies
+of / renders over the real clips; they are skipped unless asked for.
 """
 
 from __future__ import annotations
@@ -33,7 +43,7 @@ class AlsClip:
     sample_name: str | None  # FileRef Name (basename), survives a moved library
     clip_name: str | None
     track_name: str | None
-    location: str  # "session" | "arrangement"
+    location: str  # "session" | "arrangement" | "take_lane" | "freeze"
     warped: bool
     markers: list[WarpMarker] = field(default_factory=list)
     sample_duration_s: float | None = None  # from SampleRef DefaultDuration/Rate
@@ -99,8 +109,12 @@ def _clip_from_element(clip: etree._Element) -> AlsClip:
     track_name: str | None = None
     location = "arrangement"
     for anc in clip.iterancestors():
-        if anc.tag == "ClipSlotList":
+        if anc.tag == "ClipSlotList" and location == "arrangement":
             location = "session"
+        elif anc.tag == "TakeLane":
+            location = "take_lane"
+        elif anc.tag == "FreezeSequencer":
+            location = "freeze"
         if anc.tag in ("AudioTrack", "MidiTrack", "ReturnTrack", "GroupTrack"):
             track_name = _value(anc, "Name/EffectiveName") or _value(anc, "Name/UserName")
             break
@@ -117,10 +131,21 @@ def _clip_from_element(clip: etree._Element) -> AlsClip:
     )
 
 
-def read_als_clips(path: Path) -> list[AlsClip]:
-    """Every AudioClip in a Live Set, in document order."""
+_HIDDEN_LOCATIONS = frozenset({"take_lane", "freeze"})
+
+
+def read_als_clips(path: Path, *, include_hidden: bool = False) -> list[AlsClip]:
+    """The AudioClips of a Live Set, in document order.
+
+    Take-lane and frozen-track clips are left out unless ``include_hidden``:
+    they duplicate (or render over) a session / arrangement clip, and a grid
+    reference must be the clip Live actually plays.
+    """
     root = load_als_xml(path)
-    return [_clip_from_element(c) for c in root.iter("AudioClip")]
+    clips = [_clip_from_element(c) for c in root.iter("AudioClip")]
+    if include_hidden:
+        return clips
+    return [c for c in clips if c.location not in _HIDDEN_LOCATIONS]
 
 
 __all__ = ["AlsClip", "load_als_xml", "read_als_clips"]

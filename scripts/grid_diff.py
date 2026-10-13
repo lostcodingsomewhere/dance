@@ -2,12 +2,23 @@
 """Beat-grid differential: dance's DB grid vs Ableton's warp grid.
 
 The measurement gate for beat-grid work. For each selected track it takes
-dance's grid (``beats`` rows + the full-mix ``audio_analysis.bpm``) and the
-grid Live plays (a clip's warp markers, turned into integer beats), aligns
-them, and scores the estimate against Live — Ableton is the reference
-(CLAUDE.md rule 3). Metrics come from ``dance.pipeline.utils.grid_metrics``:
-F1 at 70/100 ms, median/p95 timing error, phase offset, drift per 100 beats,
-BPM error, bar-phase accuracy.
+dance's grid (``beats`` rows + ``audio_analysis.bpm``) and the grid Live
+plays (a clip's warp markers, turned into integer beats), aligns them, and
+scores the estimate against Live — Ableton is the reference (CLAUDE.md
+rule 3). Metrics come from ``dance.pipeline.utils.grid_metrics``: F1 at
+70/100 ms, median/p95 timing error, phase offset, drift per 100 beats, BPM
+error, bar-phase accuracy, and how much of Live's grid the estimate spans.
+
+Stems are first-class (rule 4): when the reference clip is a stem
+(``--ref-kind drums``, ``--live --kind bass`` …) the BPM under test is THAT
+stem's ``audio_analysis.bpm``, not the mix's; the JSON records which
+(``estimate_bpm_kind``). The beat grid is the track's ``beats`` table either
+way — stems are sample-aligned with the mix, so one grid serves all five.
+
+Live's grid covers the whole sample, beatless intro and outro included; the
+reference is clipped to the span of dance's beats (half a beat of margin)
+before scoring, so F1 measures grid accuracy, and the share of Live's grid
+that span covers is reported separately as ``reference_coverage``.
 
 REFERENCES
     --als SET.als [...]   Live Sets (gzipped XML). Clips are matched to DB
@@ -27,9 +38,17 @@ THE GATE
     ... change the beat-grid code, reprocess ...
     python scripts/grid_diff.py --als fixed.als --json new.json --baseline base.json
 
-    Exit 1 when any track regressed versus the baseline (a previously-passing
-    track now fails, any gated metric worsened past its tolerance, or a grid
-    that existed vanished). Ship a grid change only on exit 0.
+    Exit 1 when any track regressed versus the baseline: a previously-passing
+    track now fails or worsened any gated metric past its tolerance; a track
+    that was already failing got a worse tempo error, drift or coverage (its
+    F1 / timing / bar-phase changes are printed as warnings — they swing with
+    the phase sawtooth of a grid that is already off, so a real tempo fix can
+    lower them); a gated metric that had a value became unknown; or a grid
+    that existed vanished. Ship a grid change only on exit 0.
+
+    --strict holds failing tracks to every metric too (every worsened number
+    on every track fails the gate). Expect it to reject tempo fixes on
+    tracks that are still off by more than half a beat.
 
 The DB is opened read-only: ``--db`` takes a path (opened as
 ``file:<path>?immutable=1``) or a full ``file:`` URI. Default:
@@ -57,8 +76,10 @@ from typing import Any
 
 from dance.als.reader import read_als_clips
 from dance.pipeline.utils.grid_metrics import (
+    FAILING_TRACK_GATED,
     PASS_THRESHOLDS,
     REGRESSION_TOLERANCES,
+    STRICT_GATED,
     WarpMarker,
     beats_from_warp_markers,
     compare_grids,
@@ -96,7 +117,13 @@ class DbTrack:
     duration_s: float | None
     state: str
     duplicate_of: int | None
-    bpm: float | None = None
+    # audio_analysis.bpm per kind: "mix" (stem_file_id IS NULL) and each stem.
+    bpm_by_kind: dict[str, float | None] = field(default_factory=dict)
+
+    @property
+    def bpm(self) -> float | None:
+        """The full mix's analysis BPM."""
+        return self.bpm_by_kind.get("mix")
 
 
 @dataclass
@@ -115,11 +142,13 @@ class DbIndex:
             "SELECT id, title, artist, file_path, duration_seconds, state, duplicate_of FROM tracks"
         ):
             idx.tracks[row[0]] = DbTrack(*row)
-        for tid, bpm in con.execute(
-            "SELECT track_id, bpm FROM audio_analysis WHERE stem_file_id IS NULL"
+        for tid, kind, bpm in con.execute(
+            "SELECT a.track_id, "
+            "CASE WHEN a.stem_file_id IS NULL THEN 'mix' ELSE s.kind END, a.bpm "
+            "FROM audio_analysis a LEFT JOIN stem_files s ON s.id = a.stem_file_id"
         ):
-            if tid in idx.tracks:
-                idx.tracks[tid].bpm = bpm
+            if tid in idx.tracks and kind is not None:
+                idx.tracks[tid].bpm_by_kind[kind] = bpm
         for t in idx.tracks.values():
             idx._index_path(t.file_path, t.id, "mix")
         for tid, kind, path in con.execute("SELECT track_id, kind, path FROM stem_files"):
@@ -137,7 +166,13 @@ class DbIndex:
                 self.by_suffix[key].append((track_id, kind))
 
     def match_path(self, path: str | None) -> tuple[int, str] | None:
-        """Track + kind for a sample path: exact, else longest unique suffix."""
+        """Track + kind for a sample path: exact, else longest unique suffix.
+
+        An ambiguous suffix matches nothing. The one exception is an exact
+        ABSOLUTE path registered more than once (a duplicate track sharing a
+        file): that is still the same file, so the canonical track wins. A
+        bare file name ("drums.wav") is never treated as exact.
+        """
         if not path:
             return None
         parts = Path(_norm(path)).parts
@@ -145,9 +180,13 @@ class DbIndex:
             hits = self.by_suffix.get(tuple(parts[-n:]), [])
             if len(hits) == 1:
                 return hits[0]
-            if len(hits) > 1 and n == len(parts):
-                return hits[0]  # same file registered twice: take the first
+            if len(hits) > 1 and n == len(parts) and os.path.isabs(path):
+                return min(hits, key=self._canonical_first)
         return None
+
+    def _canonical_first(self, hit: tuple[int, str]) -> tuple[bool, int]:
+        t = self.tracks.get(hit[0])
+        return (t is None or t.duplicate_of is not None, hit[0])
 
     def canonical_track_ids(self, include_duplicates: bool) -> list[int]:
         q = (
@@ -192,8 +231,14 @@ class Reference:
 
 
 def references_from_als(paths: Sequence[Path], db: DbIndex) -> tuple[list[Reference], int]:
-    """References from Live Sets, plus the count of clips that matched no track."""
+    """References from Live Sets, plus the count of clips that matched no track.
+
+    Take-lane and frozen clips are skipped by the reader. The same sample
+    with the same markers (a clip copied between session and arrangement,
+    or two Sets) is kept once.
+    """
     refs: list[Reference] = []
+    seen: set[tuple[int, str, bool, tuple[WarpMarker, ...]]] = set()
     unmatched = 0
     for p in paths:
         for clip in read_als_clips(p):
@@ -201,6 +246,10 @@ def references_from_als(paths: Sequence[Path], db: DbIndex) -> tuple[list[Refere
             if hit is None:
                 unmatched += 1
                 continue
+            key = (hit[0], hit[1], clip.warped, tuple(clip.markers))
+            if key in seen:
+                continue
+            seen.add(key)
             refs.append(
                 Reference(
                     track_id=hit[0],
@@ -265,15 +314,24 @@ def references_from_live(args: argparse.Namespace, db: DbIndex) -> list[Referenc
     return refs
 
 
-def pick_reference(refs: list[Reference], ref_kind: str) -> Reference | None:
+def pick_reference(refs: list[Reference], ref_kind: str) -> tuple[Reference | None, int]:
+    """The reference clip for a track, and how many OTHER clips of that kind
+    disagree with it (different warp markers or warp switch) — a sign the
+    Set holds both a corrected and an uncorrected copy. The first in
+    document order wins; the caller reports the conflict and which was used.
+    """
     if not refs:
-        return None
+        return None, 0
     order = KIND_PREFERENCE if ref_kind == "auto" else (ref_kind,)
     for kind in order:
-        for r in refs:
-            if r.kind == kind:
-                return r
-    return None
+        same = [r for r in refs if r.kind == kind]
+        if same:
+            first = same[0]
+            conflicting = sum(
+                1 for r in same[1:] if (r.markers, r.warped) != (first.markers, first.warped)
+            )
+            return first, conflicting
+    return None, 0
 
 
 # ---------------------------------------------------------------------------
@@ -281,13 +339,15 @@ def pick_reference(refs: list[Reference], ref_kind: str) -> Reference | None:
 # ---------------------------------------------------------------------------
 
 
-def evaluate_track(db: DbIndex, track_id: int, ref: Reference | None) -> dict[str, Any]:
+def evaluate_track(
+    db: DbIndex, track_id: int, ref: Reference | None, conflicting: int = 0
+) -> dict[str, Any]:
     t = db.tracks.get(track_id)
     out: dict[str, Any] = {
         "track_id": track_id,
         "title": t.title if t else None,
         "artist": t.artist if t else None,
-        "db_bpm": t.bpm if t else None,
+        "db_bpm_by_kind": dict(t.bpm_by_kind) if t else {},
     }
     if t is None:
         return {**out, "status": "no_such_track"}
@@ -297,27 +357,40 @@ def evaluate_track(db: DbIndex, track_id: int, ref: Reference | None) -> dict[st
         "source": ref.source,
         "kind": ref.kind,
         "warp_markers": len(ref.markers),
+        "conflicting_clips": conflicting,
     }
     if not ref.warped:
         return {**out, "status": "reference_unwarped"}
     est, est_down = db.beats(track_id)
     if not est:
         return {**out, "status": "no_db_beats"}
-    # Live's grid spans the whole sample; Live's own auto-warp markers span
-    # only the first 1/32 beat, so never fall back to "the last marker".
-    end = t.duration_s or ref.duration_s or est[-1]
+    # Live's grid spans the whole sample. Prefer the sample's real length
+    # (from the Set) over tracks.duration_seconds, which is Spotify metadata.
+    # Never fall back to "the last marker": Live's own auto-warp markers span
+    # only the first 1/32 beat.
+    end = ref.duration_s or t.duration_s or est[-1]
     try:
         grid = beats_from_warp_markers(ref.markers, start_sec=0.0, end_sec=end)
     except ValueError as exc:
         return {**out, "status": "bad_reference", "error": str(exc)}
     out["reference"]["bpm"] = grid.bpm
+    out["reference"]["end_s"] = end
+    # The BPM under test is the analysis of the same kind as the reference
+    # clip (a drums clip is judged against the drums stem's BPM). No silent
+    # fallback to the mix: a missing BPM is reported as missing and fails.
+    out["estimate_bpm_kind"] = ref.kind
+    estimate_bpm = t.bpm_by_kind.get(ref.kind)
+    if estimate_bpm is None:
+        out["note"] = f"no audio_analysis.bpm for {ref.kind}"
     cmp = compare_grids(
         grid.times,
         est,
         reference_bpm=grid.bpm,
-        estimate_bpm=t.bpm,
+        estimate_bpm=estimate_bpm,
         reference_downbeats=grid.downbeats,
         estimate_downbeats=est_down,
+        bpm_fallback=False,
+        clip_reference_to_estimate=True,
     )
     return {**out, "status": "ok", "metrics": cmp.to_dict()}
 
@@ -335,7 +408,7 @@ def _f(v: Any, fmt: str, width: int) -> str:
 
 def print_table(results: dict[str, dict[str, Any]]) -> None:
     head = (
-        f"{'id':>5} {'track':28} {'ref':6} {'nRef':>5} {'nEst':>5} {'F1@70':>6} "
+        f"{'id':>5} {'track':28} {'ref':6} {'nRef':>5} {'nEst':>5} {'cov':>5} {'F1@70':>6} "
         f"{'F1@100':>6} {'med':>6} {'p95':>6} {'phase':>7} {'drift':>7} "
         f"{'bpmDB':>7} {'bpmRef':>7} {'err%':>7} {'oct':>5} {'bpmGrd':>7} {'gErr%':>7} "
         f"{'bar':>5}  pass"
@@ -351,6 +424,7 @@ def print_table(results: dict[str, dict[str, Any]]) -> None:
         print(
             f"{tid:>5} {name:28} {r['reference']['kind'][:6]:6} "
             f"{m['reference_beats']:>5} {m['estimate_beats']:>5} "
+            f"{_f(m.get('reference_coverage'), '.2f', 5)} "
             f"{_f(m['f1_70'], '.3f', 6)} {_f(m['f1_100'], '.3f', 6)} "
             f"{_f(m['median_abs_error_ms'], '.1f', 6)} {_f(m['p95_abs_error_ms'], '.1f', 6)} "
             f"{_f(m['phase_offset_ms'], '+.1f', 7)} {_f(m['drift_ms_per_100_beats'], '+.1f', 7)} "
@@ -360,9 +434,20 @@ def print_table(results: dict[str, dict[str, Any]]) -> None:
             f"{_f(m['bar_phase_accuracy'], '.2f', 5)}  {'PASS' if m['passes'] else 'fail'}"
         )
     print(
-        "\n(med/p95/phase in ms; drift in ms per 100 beats; err% = audio_analysis.bpm vs "
-        "Live; bpmGrd/gErr% = tempo of the beats table itself vs Live's grid)"
+        "\n(nRef = Live beats inside the span of dance's beats; cov = nRef / all of Live's "
+        "grid; med/p95/phase in ms; drift in ms per 100 beats; bpmDB/err% = "
+        "audio_analysis.bpm of the ref's kind — the mix or that stem — vs Live; "
+        "bpmGrd/gErr% = tempo of the beats table itself vs Live's grid)"
     )
+    for tid, r in results.items():
+        if r.get("note"):
+            print(f"  track {tid}: {r['note']}")
+        n = (r.get("reference") or {}).get("conflicting_clips")
+        if n:
+            print(
+                f"  track {tid}: {n} other {r['reference']['kind']} clip(s) in the Set(s) have "
+                f"different warp markers; used {r['reference']['source']}"
+            )
 
 
 def summarise(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -387,6 +472,7 @@ def summarise(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "median_abs_bpm_error_pct": med("abs_bpm_error_pct"),
         "median_abs_grid_bpm_error_pct": med("abs_grid_bpm_error_pct"),
         "median_abs_drift_ms_per_100_beats": med("abs_drift_ms_per_100_beats"),
+        "median_reference_coverage": med("reference_coverage"),
         "octave_errors": sum(1 for m in ok if m.get("tempo_octave") not in (None, "1x")),
     }
 
@@ -439,6 +525,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--json", type=Path, help="Write per-track results + summary here.")
     ap.add_argument("--baseline", type=Path, help="Previous --json output to gate against.")
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="With --baseline: hold already-failing tracks to every metric, not just "
+        "tempo error / drift / coverage.",
+    )
     live = ap.add_argument_group("--live options")
     live.add_argument("--scene", type=int, action="append", help="1-based scene (repeatable).")
     live.add_argument("--side", choices=("a", "b"), default="a")
@@ -450,16 +542,28 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def run_gate(baseline_path: Path, results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def run_gate(
+    baseline_path: Path, results: dict[str, dict[str, Any]], *, strict: bool = False
+) -> dict[str, Any]:
     """Judge ``results`` against a previous run. ``passed`` is the verdict."""
     data = json.loads(baseline_path.read_text())
     if data.get("schema") != SCHEMA:
         raise ValueError(f"{baseline_path} is not a {SCHEMA} file")
-    regressions, not_compared = find_regressions(data["tracks"], results)
+    failing_gated = STRICT_GATED if strict else FAILING_TRACK_GATED
+    report = find_regressions(data["tracks"], results, failing_track_gated=failing_gated)
+    regressions, not_compared = report.regressions, report.not_compared
     compared = [tid for tid, b in data["tracks"].items() if b.get("metrics") and tid in results]
-    print(f"\nGATE vs {baseline_path}: {len(compared)} baseline track(s) re-measured")
+    policy = "strict" if strict else "failing-tracks-on-tempo"
+    print(f"\nGATE vs {baseline_path} ({policy}): {len(compared)} baseline track(s) re-measured")
     if not_compared:
         print(f"  not selected this run (not judged): {', '.join(sorted(not_compared))}")
+    if report.warnings:
+        print(
+            f"  {len(report.warnings)} warning(s) on tracks that already failed (only their "
+            "tempo error, drift and coverage are gated; --strict gates everything):"
+        )
+        for r in report.warnings:
+            print(f"    track {r.track_id}: {r.detail}")
     if not compared:
         print("  FAIL: no baseline track was re-measured — the gate judged nothing")
     elif regressions:
@@ -470,9 +574,12 @@ def run_gate(baseline_path: Path, results: dict[str, dict[str, Any]]) -> dict[st
         print("  PASS: no regressions")
     return {
         "baseline": str(baseline_path),
+        "policy": policy,
+        "failing_track_gated": sorted(failing_gated),
         "compared": len(compared),
         "not_compared": sorted(not_compared),
         "regressions": [r.to_dict() for r in regressions],
+        "warnings": [r.to_dict() for r in report.warnings],
         "passed": bool(compared) and not regressions,
     }
 
@@ -518,7 +625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     results = {
-        str(tid): evaluate_track(db, tid, pick_reference(by_track.get(tid, []), args.ref_kind))
+        str(tid): evaluate_track(db, tid, *pick_reference(by_track.get(tid, []), args.ref_kind))
         for tid in selected
     }
     print_table(results)
@@ -528,7 +635,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     gate: dict[str, Any] | None = None
     if args.baseline:
         try:
-            gate = run_gate(args.baseline, results)
+            gate = run_gate(args.baseline, results, strict=args.strict)
         except (OSError, ValueError, KeyError) as exc:
             print(f"cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
             return 2
@@ -542,6 +649,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ref_kind": args.ref_kind,
             "pass_thresholds": PASS_THRESHOLDS,
             "regression_tolerances": REGRESSION_TOLERANCES,
+            "failing_track_gated": sorted(STRICT_GATED if args.strict else FAILING_TRACK_GATED),
             "summary": summary,
             "tracks": results,
             "gate": gate,
