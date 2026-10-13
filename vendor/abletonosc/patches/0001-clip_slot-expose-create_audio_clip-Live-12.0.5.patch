@@ -1,0 +1,29 @@
+From cbaf12557730339962d8cbbc228a03ee037060a0 Mon Sep 17 00:00:00 2001
+From: dance <noreply@example.com>
+Date: Tue, 13 Oct 2026 09:01:42 -0400
+Subject: [PATCH 1/5] clip_slot: expose create_audio_clip (Live 12.0.5+)
+
+Load an audio sample from disk straight into a session clip slot:
+/live/clip_slot/create_audio_clip (track, slot, absolute_path).
+---
+ abletonosc/clip_slot.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/abletonosc/clip_slot.py b/abletonosc/clip_slot.py
+index bfda31b..34ec704 100644
+--- a/abletonosc/clip_slot.py
++++ b/abletonosc/clip_slot.py
+@@ -28,7 +28,12 @@ class ClipSlotHandler(AbletonOSCHandler):
+             "fire",
+             "stop",
+             "create_clip",
+-            "delete_clip"
++            "delete_clip",
++            # Live 12.0.5+ — load an audio sample from disk directly into
++            # this clip slot. One arg: absolute file path. Errors if the
++            # track is frozen, not an audio track, or recording.
++            # See https://cycling74.com/forums/function-createaudioclip-class-clipslot-and-track-missing-lom
++            "create_audio_clip",
+         ]
+         properties_r = [
+             "has_clip",

@@ -398,7 +398,7 @@ def test_abletonosc_missing_crossfade_assign_fails_with_doc_pointer(tmp_path: Pa
     line = next(d for d in res.details if d.startswith("MISSING crossfade_assign"))
     assert "/live/track/set/crossfade_assign" in line
     assert "osc/bridge.py" in line  # the live path sends it, hence FAIL
-    assert "patch for crossfader assignment" in (res.fix or "")
+    assert "0003-track-get-set-crossfade_assign" in (res.fix or "")
     assert "fully quit and reopen Live" in (res.fix or "")
 
 
@@ -410,7 +410,7 @@ def test_abletonosc_missing_probe_only_handlers_warns(tmp_path: Path):
     assert res.status == WARN
     line = next(d for d in res.details if d.startswith("MISSING warp_markers"))
     assert "only standalone probes" in line
-    assert "warp-guard.md" in (res.fix or "")
+    assert "0005-clip-read-and-edit-warp-markers" in (res.fix or "")
 
 
 def test_abletonosc_logging_bug_warns(tmp_path: Path):
@@ -420,7 +420,8 @@ def test_abletonosc_logging_bug_warns(tmp_path: Path):
 
     assert res.status == WARN
     assert any("logging bug" in d for d in res.details)
-    assert "Fix the clip_slot_callback logging bug" in (res.fix or "")
+    assert "0002-clip_slot-fix-the-logging-call" in (res.fix or "")
+    assert "scripts/abletonosc_patch.py" in (res.fix or "")
 
 
 def test_abletonosc_undocumented_gap_on_live_path_fails(tmp_path: Path):

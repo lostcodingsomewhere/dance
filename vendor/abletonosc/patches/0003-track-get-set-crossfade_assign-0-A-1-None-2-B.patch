@@ -1,0 +1,40 @@
+From 0eeee5cb0c74f98220037e223376d43fd376fae7 Mon Sep 17 00:00:00 2001
+From: dance <noreply@example.com>
+Date: Tue, 13 Oct 2026 09:01:54 -0400
+Subject: [PATCH 3/5] track: get/set crossfade_assign (0 = A, 1 = None, 2 = B)
+
+Stock AbletonOSC exposes mixer volume/panning/sends but not
+mixer_device.crossfade_assign, so app-loaded deck tracks all stayed on
+'None' and the master crossfader did nothing to them.
+---
+ abletonosc/track.py | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/abletonosc/track.py b/abletonosc/track.py
+index 5e21353..a00d97b 100644
+--- a/abletonosc/track.py
++++ b/abletonosc/track.py
+@@ -78,6 +78,23 @@ class TrackHandler(AbletonOSCHandler):
+         # Volume, panning and send are properties of the track's mixer_device so
+         # can't be formulated as normal callbacks that reference properties of track.
+         #--------------------------------------------------------------------------------
++        #--------------------------------------------------------------------------------
++        # Dance patch: crossfader assignment. crossfade_assign is a plain int on
++        # mixer_device (0 = A, 1 = None, 2 = B), not a DeviceParameter, so it needs
++        # its own handlers rather than the mixer-property path below.
++        #--------------------------------------------------------------------------------
++        def track_get_crossfade_assign(track, params: Tuple[Any] = ()):
++            return track.mixer_device.crossfade_assign,
++
++        def track_set_crossfade_assign(track, params: Tuple[Any] = ()):
++            value, = params
++            track.mixer_device.crossfade_assign = int(value)
++
++        self.osc_server.add_handler("/live/track/get/crossfade_assign",
++                                    create_track_callback(track_get_crossfade_assign))
++        self.osc_server.add_handler("/live/track/set/crossfade_assign",
++                                    create_track_callback(track_set_crossfade_assign))
++
+         mixer_properties_rw = ["volume", "panning"]
+         for prop in mixer_properties_rw:
+             self.osc_server.add_handler("/live/track/get/%s" % prop,

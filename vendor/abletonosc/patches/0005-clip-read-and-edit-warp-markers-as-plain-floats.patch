@@ -1,0 +1,74 @@
+From 16b89936e24aa5068eafa135703b1221120e9c7c Mon Sep 17 00:00:00 2001
+From: dance <noreply@example.com>
+Date: Tue, 13 Oct 2026 09:02:30 -0400
+Subject: [PATCH 5/5] clip: read and edit warp markers as plain floats
+
+/live/clip/get/warp_marker_times -> (track, slot, beat, sec, beat, sec, ...)
+/live/clip/add_warp_marker (track, slot, beat_time, sample_time)
+/live/clip/move_warp_marker (track, slot, beat_time, beat_time_distance)
+/live/clip/remove_warp_marker (track, slot, beat_time)
+
+add_warp_marker takes a marker object in Live's Python API; the handler
+builds a Live.Clip.WarpMarker and falls back to the dict form the Max LOM
+documents, logging which one Live accepted.
+---
+ abletonosc/clip.py | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/abletonosc/clip.py b/abletonosc/clip.py
+index ce29fa0..4e82b56 100644
+--- a/abletonosc/clip.py
++++ b/abletonosc/clip.py
+@@ -129,6 +129,52 @@ class ClipHandler(AbletonOSCHandler):
+             self.osc_server.add_handler("/live/clip/set/%s" % prop,
+                                         create_clip_callback(self._set_property, prop))
+ 
++        #--------------------------------------------------------------------------------
++        # Dance patch: warp markers. Clip.add/move/remove_warp_marker are public LOM
++        # methods (Live 11+) but the generic method dispatcher can't call
++        # add_warp_marker (it takes a marker object, not positional floats), and the
++        # warp_markers property can't be serialised as-is. These handlers take and
++        # return plain floats: beat_time in beats, sample_time in seconds.
++        #--------------------------------------------------------------------------------
++        def _warp_marker_arg(beat_time: float, sample_time: float):
++            wm_cls = getattr(Live.Clip, "WarpMarker", None)
++            if wm_cls is not None:
++                try:
++                    return wm_cls(sample_time=sample_time, beat_time=beat_time)
++                except Exception as e:
++                    self.logger.info("WarpMarker(sample_time=, beat_time=) failed (%s); using a dict" % e)
++            return {"beat_time": beat_time, "sample_time": sample_time}
++
++        def clip_get_warp_marker_times(clip, params: Tuple[Any] = ()):
++            flat = []
++            for marker in clip.warp_markers:
++                flat.extend((float(marker.beat_time), float(marker.sample_time)))
++            return tuple(flat)
++
++        def clip_add_warp_marker(clip, params: Tuple[Any] = ()):
++            beat_time, sample_time = float(params[0]), float(params[1])
++            try:
++                clip.add_warp_marker(_warp_marker_arg(beat_time, sample_time))
++            except Exception as e:
++                self.logger.info("add_warp_marker(object) failed (%s); retrying with a dict" % e)
++                clip.add_warp_marker({"beat_time": beat_time, "sample_time": sample_time})
++
++        def clip_move_warp_marker(clip, params: Tuple[Any] = ()):
++            beat_time, beat_time_distance = float(params[0]), float(params[1])
++            clip.move_warp_marker(beat_time, beat_time_distance)
++
++        def clip_remove_warp_marker(clip, params: Tuple[Any] = ()):
++            clip.remove_warp_marker(float(params[0]))
++
++        self.osc_server.add_handler("/live/clip/get/warp_marker_times",
++                                    create_clip_callback(clip_get_warp_marker_times))
++        self.osc_server.add_handler("/live/clip/add_warp_marker",
++                                    create_clip_callback(clip_add_warp_marker))
++        self.osc_server.add_handler("/live/clip/move_warp_marker",
++                                    create_clip_callback(clip_move_warp_marker))
++        self.osc_server.add_handler("/live/clip/remove_warp_marker",
++                                    create_clip_callback(clip_remove_warp_marker))
++
+         def clip_get_notes(clip, params: Tuple[Any] = ()):
+             if len(params) == 4:
+                 pitch_start, pitch_span, time_start, time_span = params

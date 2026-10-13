@@ -1,0 +1,68 @@
+From 2f7e3fcd8cfa69d34b9f1e295ec3ed90b9a85fd3 Mon Sep 17 00:00:00 2001
+From: dance <noreply@example.com>
+Date: Tue, 13 Oct 2026 09:02:08 -0400
+Subject: [PATCH 4/5] song: get/set/listen the master crossfader
+
+/live/song/{get,set,start_listen,stop_listen}/crossfader on
+song.master_track.mixer_device.crossfader (a DeviceParameter, -1..+1).
+Listening pushes /live/song/get/crossfader on every change so a client
+can mirror the hardware crossfader. Set clamps to the parameter range.
+---
+ abletonosc/song.py | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/abletonosc/song.py b/abletonosc/song.py
+index d9d7e01..e6f0021 100644
+--- a/abletonosc/song.py
++++ b/abletonosc/song.py
+@@ -283,6 +283,50 @@ class SongHandler(AbletonOSCHandler):
+         self.osc_server.add_handler("/live/song/start_listen/beat", start_beat_listener)
+         self.osc_server.add_handler("/live/song/stop_listen/beat", stop_beat_listener)
+ 
++        #--------------------------------------------------------------------------------
++        # Dance patch: master crossfader. It is a DeviceParameter on the master
++        # track's mixer (-1 = full A, +1 = full B), so the generic song-property
++        # handlers can't reach it. Listening pushes /live/song/get/crossfader on
++        # every change; the listener is tracked under ("value", ()) so the base
++        # class's _clear_listeners removes it on reload.
++        #--------------------------------------------------------------------------------
++        def _crossfader():
++            return self.song.master_track.mixer_device.crossfader
++
++        def _send_crossfader():
++            self.osc_server.send("/live/song/get/crossfader", (_crossfader().value,))
++
++        def song_get_crossfader(params: Tuple[Any] = ()):
++            return (_crossfader().value,)
++
++        def song_set_crossfader(params: Tuple[Any] = ()):
++            value, = params
++            param = _crossfader()
++            param.value = max(param.min, min(param.max, float(value)))
++
++        def song_stop_listen_crossfader(params: Tuple[Any] = ()):
++            key = ("value", ())
++            fn = self.listener_functions.pop(key, None)
++            target = self.listener_objects.pop(key, None)
++            if fn is not None and target is not None:
++                try:
++                    target.remove_value_listener(fn)
++                except Exception as e:
++                    self.logger.info("Exception whilst removing crossfader listener (likely benign): %s" % e)
++
++        def song_start_listen_crossfader(params: Tuple[Any] = ()):
++            song_stop_listen_crossfader()
++            param = _crossfader()
++            param.add_value_listener(_send_crossfader)
++            self.listener_functions[("value", ())] = _send_crossfader
++            self.listener_objects[("value", ())] = param
++            _send_crossfader()
++
++        self.osc_server.add_handler("/live/song/get/crossfader", song_get_crossfader)
++        self.osc_server.add_handler("/live/song/set/crossfader", song_set_crossfader)
++        self.osc_server.add_handler("/live/song/start_listen/crossfader", song_start_listen_crossfader)
++        self.osc_server.add_handler("/live/song/stop_listen/crossfader", song_stop_listen_crossfader)
++
+     def current_song_time_changed(self):
+         #--------------------------------------------------------------------------------
+         # If song has rewound or skipped to next beat, sent a /live/beat message
