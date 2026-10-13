@@ -108,6 +108,15 @@ def audio(tmp_path_factory) -> dict[str, Path]:
         damaged[i] = (i * 7919) % 256
     out["mp3_corrupt"] = d / "corrupt.mp3"
     out["mp3_corrupt"].write_bytes(bytes(damaged))
+    # A small glitch: ffmpeg exits 0 and decodes ~59.9 s of the 60 s header
+    # (inside the truncation tolerance), but logs "Header missing" — only
+    # the "any error output" rule catches it.
+    glitched = bytearray(good)
+    for i in range(len(glitched) // 2, len(glitched) // 2 + 1_000):
+        glitched[i] = (i * 7919) % 256
+    out["mp3_glitch"] = d / "glitch.mp3"
+    out["mp3_glitch"].write_bytes(bytes(glitched))
+    out["mp3_800"] = _encode(d / "s800.mp3", 800, "libmp3lame")
     return out
 
 
@@ -517,6 +526,142 @@ def test_truncated_and_corrupt_downloads_rejected(tmp_path, audio) -> None:
     assert sorted(fake.downloads[:2]) == ["CORRUPTED01", "TRUNCATED01"]
     assert fake.downloads[2] == "GOODupload1"
     assert result.chosen is not None and result.chosen.candidate.video_id == "GOODupload1"
+
+
+@needs_ffmpeg
+def test_decode_errors_reject_a_file_of_the_right_length(tmp_path, audio) -> None:
+    """ffmpeg exits 0 and the decoded length is fine — the stderr output is
+    the only signal, and it alone must reject the file."""
+    from dance.spotify.acquire import AttemptError, decode_check
+
+    with pytest.raises(AttemptError, match="decode check failed: .*Header missing"):
+        decode_check(audio["mp3_glitch"], _tools(), _REAL_RUN)
+    assert decode_check(audio["mp3_60"], _tools(), _REAL_RUN) == pytest.approx(60.0, abs=0.1)
+
+    fake = FakeYtDlp(
+        {Q_FULL: [_entry("GLITCHED001", "Synth Artist, Guest - Sixty", "Synth Artist", 60)]},
+        media={"GLITCHED001": audio["mp3_glitch"]},
+    )
+    result = _acquire(fake, T60, tmp_path / "x.mp3")
+    assert result.status == "fail"
+    assert "yt:GLITCHED001 decode check failed" in result.message
+    assert not (tmp_path / "x.mp3").exists()
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("tool", "exc", "reason"),
+    [
+        ("ffprobe", subprocess.TimeoutExpired(["ffprobe"], 60), "ffprobe timed out after 60s"),
+        ("ffmpeg", subprocess.TimeoutExpired(["ffmpeg"], 300), "decode check timed out after 300s"),
+        ("ffprobe", PermissionError(13, "Permission denied"), "ffprobe could not run"),
+    ],
+)
+def test_verification_tool_errors_move_on_to_the_next_candidate(
+    tmp_path, audio, tool, exc, reason
+) -> None:
+    """A hung or unrunnable probe on one file is that attempt's failure, not
+    an exception that aborts the track."""
+    fake = FakeYtDlp(
+        {
+            Q_FULL: [
+                _entry(
+                    "FIRSTupload",
+                    "Synth Artist, Guest - Sixty (Official Audio)",
+                    "Synth Artist",
+                    60,
+                ),
+                _entry("SECONDupld1", "Sixty", "Synth Artist - Topic", 60),
+            ]
+        },
+        media={"FIRSTupload": audio["mp3_60"], "SECONDupld1": audio["mp3_60"]},
+    )
+    calls = {"n": 0}
+
+    def runner(cmd, **kwargs):
+        if Path(cmd[0]).name == tool and any("FIRSTupload" in str(a) for a in cmd):
+            calls["n"] += 1
+            raise exc
+        return fake(cmd, **kwargs)
+
+    result = acquire_track(
+        T60,
+        TagValues(title="Sixty", artist="Synth Artist, Guest"),
+        tmp_path / "x.mp3",
+        audio_format_spec("mp3"),
+        _tools(),
+        runner=runner,
+    )
+    assert calls["n"] == 1
+    assert result.status == "ok", result.message
+    assert result.chosen is not None and result.chosen.candidate.video_id == "SECONDupld1"
+    assert fake.downloads == ["FIRSTupload", "SECONDupld1"]
+
+
+def test_missing_ffprobe_fails_before_any_search(tmp_path) -> None:
+    """Every candidate would be downloaded and then fail verification."""
+    tools = Tools(yt_dlp=_FAKE_YT_DLP, ffmpeg=FFMPEG or "ffmpeg", ffprobe="/nope/ffprobe")
+    result = acquire_track(
+        T60,
+        TagValues(title="Sixty", artist="Synth Artist"),
+        tmp_path / "x.mp3",
+        audio_format_spec("mp3"),
+        tools,
+        runner=_never,
+    )
+    assert result.status == "fail"
+    assert "ffprobe" in result.message and "not found" in result.message
+
+
+@needs_ffmpeg
+def test_library_write_error_stops_the_track(tmp_path, audio, monkeypatch) -> None:
+    """Not the candidate's fault: trying the next one would cost another full
+    download and fail the same way."""
+    from dance.spotify import acquire
+
+    def _disk_full(src, dest):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(acquire, "place_file", _disk_full)
+    fake = FakeYtDlp(
+        {
+            Q_FULL: [
+                _entry("FIRSTupload", "Synth Artist, Guest - Sixty", "Synth Artist", 60),
+                _entry("SECONDupld1", "Sixty", "Synth Artist - Topic", 60),
+            ]
+        },
+        media={"FIRSTupload": audio["mp3_60"], "SECONDupld1": audio["mp3_60"]},
+    )
+    result = _acquire(fake, T60, tmp_path / "x.mp3")
+    assert result.status == "fail"
+    assert result.message.startswith("could not write x.mp3:")
+    assert "No space left" in result.message
+    assert fake.downloads == ["FIRSTupload"]
+
+
+@needs_ffmpeg
+def test_unknown_duration_still_rejects_an_overlong_file(tmp_path, monkeypatch, audio) -> None:
+    """No Spotify duration and the search metadata lies (5 min listed, the
+    file is 13+ min): the post-download cap catches it."""
+    monkeypatch.setattr(csv_importer, "_resolve_yt_dlp", lambda: _FAKE_YT_DLP)
+    fake = FakeYtDlp(
+        {
+            "Synth Artist Sixty": [
+                _entry("LONGfile001", "Synth Artist - Sixty", "Synth Artist - Topic", 300),
+                _entry("GOODupload1", "Synth Artist - Sixty", "Synth Artist", 60),
+            ]
+        },
+        media={"LONGfile001": audio["mp3_800"], "GOODupload1": audio["mp3_60"]},
+    )
+    status, msg = csv_importer.download_track(
+        _csv_row(artist="Synth Artist", duration_s=0),
+        tmp_path,
+        cookies_file=tmp_path / "c.txt",
+        runner=fake,
+    )
+    assert status == "ok", msg
+    assert fake.downloads == ["LONGfile001", "GOODupload1"]
+    assert "yt:GOODupload1" in msg
 
 
 @needs_ffmpeg

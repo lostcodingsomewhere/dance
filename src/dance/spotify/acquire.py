@@ -20,9 +20,12 @@ One attempt per eligible candidate, best first:
    back without a schema change.
 5. The file is moved into the library atomically.
 
-Any failure deletes that attempt's scratch directory — only files this
-attempt created — and moves on to the next candidate. Nothing in the
-library is touched until a file has passed every check.
+Any candidate failure (download error, probe/decode error or timeout,
+length or codec mismatch) deletes that attempt's scratch directory — only
+files this attempt created — and moves on to the next candidate. Nothing
+in the library is touched until a file has passed every check. Two
+failures stop the track instead, because every candidate would hit them:
+ffmpeg/ffprobe missing (checked before searching) and a library write error.
 """
 
 from __future__ import annotations
@@ -198,6 +201,19 @@ class Tools:
         return args
 
 
+def _resolvable(binary: str) -> bool:
+    return bool(binary) and (Path(binary).is_file() or shutil.which(binary) is not None)
+
+
+def missing_verify_tools(tools: Tools) -> list[str]:
+    """ffmpeg / ffprobe binaries that cannot be found (empty = all present)."""
+    return [
+        name
+        for name, binary in (("ffmpeg", tools.ffmpeg), ("ffprobe", tools.ffprobe))
+        if not _resolvable(binary)
+    ]
+
+
 def _tail(proc: subprocess.CompletedProcess[str], n: int = 150) -> str:
     return (proc.stderr or proc.stdout or "")[-n:].replace("\n", " | ").strip()
 
@@ -289,6 +305,27 @@ def download_candidate(
     return produced
 
 
+PROBE_TIMEOUT_S = 60
+DECODE_TIMEOUT_S = 300
+
+
+def _run_tool(
+    runner: Runner, cmd: list[str], timeout_s: int, what: str
+) -> subprocess.CompletedProcess[str]:
+    """Run a verification tool; a hang or a missing binary fails the attempt.
+
+    Without this a probe timeout or an ``OSError`` escaped the candidate
+    loop: the track failed with a raw exception instead of trying the next
+    candidate (or naming the real problem).
+    """
+    try:
+        return runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        raise AttemptError(f"{what} timed out after {timeout_s}s") from exc
+    except OSError as exc:
+        raise AttemptError(f"{what} could not run: {exc}") from exc
+
+
 @dataclass(frozen=True)
 class Probe:
     duration_s: float
@@ -306,7 +343,7 @@ def probe_audio(path: Path, tools: Tools, runner: Runner) -> Probe:
         "json",
         str(path),
     ]
-    proc = runner(cmd, capture_output=True, text=True, timeout=60)
+    proc = _run_tool(runner, cmd, PROBE_TIMEOUT_S, "ffprobe")
     if proc.returncode != 0:
         raise AttemptError(f"ffprobe rc={proc.returncode}: {_tail(proc)}")
     try:
@@ -352,7 +389,7 @@ def decode_check(path: Path, tools: Tools, runner: Runner) -> float | None:
         "-nostats",
         "-",
     ]
-    proc = runner(cmd, capture_output=True, text=True, timeout=300)
+    proc = _run_tool(runner, cmd, DECODE_TIMEOUT_S, "decode check")
     if proc.returncode != 0 or (proc.stderr or "").strip():
         err = (proc.stderr or "").strip()[-150:].replace("\n", " | ")
         raise AttemptError(f"decode check failed: {err or f'rc={proc.returncode}'}")
@@ -565,6 +602,17 @@ def acquire_track(
     the message lists each attempt.
     """
     run: Runner = runner or subprocess.run
+    missing = missing_verify_tools(tools)
+    if missing:
+        # Checked before searching: every candidate would be downloaded and
+        # then fail verification for the same reason.
+        return AcquireResult(
+            status="fail",
+            message=(
+                f"{' and '.join(missing)} not found — needed to verify downloads "
+                "(brew install ffmpeg)"
+            ),
+        )
     ranked, search_errors = search_candidates(target, tools, run)
     choices = eligible(ranked)
     if not choices:
@@ -587,7 +635,16 @@ def acquire_track(
                     write_tags(produced, TagValues(tags.title, tags.artist, tags.album, comment))
                 except Exception as exc:  # noqa: BLE001 — tags are not worth losing audio
                     logger.warning("tag write failed for %s: %s", dest.name, exc)
-                place_file(produced, dest)
+                try:
+                    place_file(produced, dest)
+                except OSError as exc:
+                    # Not the candidate's fault (permissions, disk full, a
+                    # directory in the way): the next candidate would fail
+                    # the same way after another full download, so stop.
+                    return AcquireResult(
+                        status="fail",
+                        message=f"could not write {dest.name}: {exc}"[:300],
+                    )
                 logger.info(
                     "acquired %s from %s (score %.2f)",
                     dest.name,
@@ -629,6 +686,7 @@ __all__ = [
     "audio_format_spec",
     "decode_check",
     "download_candidate",
+    "missing_verify_tools",
     "place_file",
     "probe_audio",
     "provenance_comment",
