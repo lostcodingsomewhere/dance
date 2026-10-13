@@ -10,13 +10,13 @@ Write endpoints:
 - ``GET /jobs`` and ``GET /jobs/{id}`` for download / pipeline-run job
   status.
 
-Cross-process note: the dispatcher also runs as a CLI subprocess
-(``dance process``). The API has no IPC into that shell. To prevent two
-dispatchers thrashing the DB, ``POST /process`` rejects with 409 if a
-``pipeline_run`` Job is already active in our in-process registry. It
-does NOT detect an externally-launched ``dance process`` — if the user
-has one running in another terminal, the second run will race. Same
-DB-row semantics keep things consistent; it's just wasteful CPU.
+Cross-process note: the dispatcher also runs from a terminal (``dance
+process`` / ``run`` / ``ingest``), and our own runs are ``dance process``
+subprocesses. Only one may run at a time: every dispatcher holds
+``<data_dir>/dispatcher.lock`` (:mod:`dance.pipeline.dispatcher_lock`).
+``POST /process`` takes that lock itself and hands it to its subprocess,
+so it returns 409 naming the holder while any other run (a terminal
+``dance process`` included) holds it, and the watch loop skips its turn.
 """
 
 from __future__ import annotations
@@ -51,7 +51,13 @@ from dance.api.schemas import (
 from dance.config import Settings
 from dance.core.database import Track, TrackState, get_session_factory
 from dance.core.paths import nfc_path
+from dance.pipeline.dispatcher_lock import (
+    INHERITED_FD_ENV,
+    DispatcherBusyError,
+    DispatcherLock,
+)
 from dance.pipeline.events import StageEvent
+from dance.pipeline.placeholders import not_placeholder
 from dance.spotify.csv_importer import (
     CsvRow,
     download_track,
@@ -64,10 +70,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 _INGEST_WORKERS = 4
-
-# Module-level lock so two API requests can't race to start ``dance process``.
-# (External CLI runs are still possible; see module docstring.)
-_PROCESS_LOCK = threading.Lock()
 
 # Watch mode: a background thread polls every _WATCH_INTERVAL_S and, when
 # enabled, auto-triggers a pipeline_run if there's pending work and no
@@ -117,44 +119,62 @@ _TERMINAL_STATES: frozenset[str] = frozenset({TrackState.COMPLETE.value, TrackSt
 
 def _pending_track_count(settings: Settings) -> int:
     """Count tracks not yet at a terminal state. Best-effort; opens its own
-    session because the watch thread doesn't have one injected."""
+    session because the watch thread doesn't have one injected. Rows still
+    waiting on their download (placeholder hash) don't count: no stage can
+    claim them, so a run would find nothing to do."""
     SessionLocal = get_session_factory(settings.db_url)
     session = SessionLocal()
     try:
         return int(
-            session.query(func.count(Track.id)).filter(~Track.state.in_(_TERMINAL_STATES)).scalar()
+            session.query(func.count(Track.id))
+            .filter(~Track.state.in_(_TERMINAL_STATES), not_placeholder())
+            .scalar()
             or 0
         )
     finally:
         session.close()
 
 
-def _watch_loop(settings: Settings) -> None:
-    """Daemon loop: every _WATCH_INTERVAL_S, if enabled + pending work + no
-    active pipeline_run job, kick off a pipeline_run. Idempotent and safe
-    to leave running forever — does nothing when ``enabled=False``."""
+def _watch_tick(settings: Settings) -> str | None:
+    """One watch-loop turn: if enabled + pending work + no run anywhere,
+    kick off a pipeline_run. Returns the new job's id, or None if the turn
+    was skipped."""
+    if not _WATCH_STATE["enabled"]:
+        return None
     registry = get_job_registry()
+    if registry.active(kind="pipeline_run"):
+        return None
+    if _pending_track_count(settings) == 0:
+        return None
+    lock = DispatcherLock(settings.data_dir, command="dance API watch loop")
+    if not lock.try_acquire():
+        # A terminal ``dance process`` (or another API) is running. Its
+        # tracks are in flight; quietly try again next turn.
+        logger.debug("watch: dispatcher busy (%s); skipping", lock.holder().describe())
+        return None
+    try:
+        job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
+        t = threading.Thread(
+            target=_run_dispatcher_job,
+            args=(job.id, settings, lock),
+            daemon=True,
+            name=f"watch-pipeline-{job.id}",
+        )
+        t.start()
+    except BaseException:
+        lock.release()
+        raise
+    return job.id
+
+
+def _watch_loop(settings: Settings) -> None:
+    """Daemon loop: every _WATCH_INTERVAL_S, run :func:`_watch_tick`.
+    Idempotent and safe to leave running forever — does nothing when
+    ``enabled=False``."""
     while True:
         try:
             time.sleep(_WATCH_INTERVAL_S)
-            if not _WATCH_STATE["enabled"]:
-                continue
-            if registry.active(kind="pipeline_run"):
-                continue
-            if _pending_track_count(settings) == 0:
-                continue
-            # Replicate the /process endpoint's locking behavior: skip
-            # cleanly if some other path beat us to it.
-            if not _PROCESS_LOCK.acquire(blocking=False):
-                continue
-            job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
-            t = threading.Thread(
-                target=_run_dispatcher_job,
-                args=(job.id, settings),
-                daemon=True,
-                name=f"watch-pipeline-{job.id}",
-            )
-            t.start()
+            _watch_tick(settings)
         except Exception:  # noqa: BLE001
             logger.exception("watch loop iteration failed; continuing")
 
@@ -862,10 +882,18 @@ def _complete_track_ids(db_url: str) -> set[int]:
         }
 
 
-def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
+def _run_dispatcher_job(
+    job_id: str, settings: Settings, lock: DispatcherLock | None = None
+) -> None:
     """Background worker: spawn ``dance process`` as a SUBPROCESS so the
     dispatcher's heavy deps (torch / Demucs / CLAP) initialize in their own
     Python interpreter.
+
+    ``lock`` is the dispatcher lock the caller already took. Each pass's
+    subprocess inherits it (``pass_fds`` + ``DANCE_DISPATCHER_LOCK_FD``)
+    rather than taking its own, so the lock stays held across passes and
+    no terminal run can slip in between them. Released once the passes are
+    done (build-graph doesn't need it), and always in ``finally``.
 
     Why subprocess and not a thread: importing torch from a non-main thread
     inside uvicorn's worker can deadlock on signal-handler init (we hit
@@ -911,7 +939,14 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
             # The subprocess inherits the parent's DB URL via Settings
             # unless overridden; pass explicitly for clarity.
             "DANCE_DATABASE_URL": settings.db_url,
+            # Same data_dir → same dispatcher.lock (and heal ledger).
+            "DANCE_DATA_DIR": str(settings.data_dir),
         }
+        env.pop(INHERITED_FD_ENV, None)
+        pass_fds: tuple[int, ...] = ()
+        if lock is not None and lock.held:
+            env[INHERITED_FD_ENV] = str(lock.fileno())
+            pass_fds = (lock.fileno(),)
         cwd = Path(__file__).resolve().parents[3]  # repo root
 
         # Stream stdout/stderr to a log file rather than ``capture_output=True``.
@@ -949,6 +984,7 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
                     stderr=subprocess.STDOUT,
                     text=True,
                     timeout=60 * 60,  # 1 hour hard cap per pass
+                    pass_fds=pass_fds,
                 )
             last_rc = proc.returncode
             if proc.returncode != 0:
@@ -958,6 +994,9 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
                 # Nothing advanced — we're done (or genuinely stuck).
                 break
             last_signature = sig
+
+        if lock is not None:
+            lock.release()
 
         # If anything newly hit complete this run, rebuild the rec graph for
         # just those tracks. Without this, tail-recs + ⌘K vibe-search return
@@ -1020,14 +1059,9 @@ def _run_dispatcher_job(job_id: str, settings: Settings) -> None:
         logger.exception("pipeline_run job %s crashed", job_id)
         registry.set_status(job_id, "error", error=str(e)[:300])
     finally:
-        # Drop the global lock so the next /process can fire.
-        if _PROCESS_LOCK.locked():
-            try:
-                _PROCESS_LOCK.release()
-            except RuntimeError:
-                # Thread that acquired it isn't this one — shouldn't happen but
-                # be defensive.
-                pass
+        # Drop the dispatcher lock so the next run can start (idempotent).
+        if lock is not None:
+            lock.release()
 
 
 @router.post("/scan")
@@ -1091,9 +1125,9 @@ def trigger_process(
     ``library_dir``, then runs every registered stage (analyze, separate,
     analyze_stems, detect_regions, embed) until nothing advances.
 
-    Returns 409 if a pipeline run kicked off through this endpoint is
-    still active. (An externally-launched ``dance process`` in another
-    shell is not detected; the run will start anyway and they will race.)
+    Returns 409 if a pipeline run is already active: one this endpoint
+    started, or any other dispatcher holding the cross-process lock (e.g.
+    ``dance process`` in a terminal). The detail names the holder's pid.
     """
     registry = get_job_registry()
     if registry.active(kind="pipeline_run"):
@@ -1102,25 +1136,25 @@ def trigger_process(
             detail="A pipeline run is already in flight. Wait for it to finish, or restart the API to clear it.",
         )
 
-    if not _PROCESS_LOCK.acquire(blocking=False):
-        # Defensive: lock without an active job means a previous run crashed
-        # without releasing. Clear and re-acquire.
-        logger.warning("PROCESS_LOCK was held without an active job; force-acquiring.")
-        try:
-            _PROCESS_LOCK.release()
-        except RuntimeError:
-            pass
-        _PROCESS_LOCK.acquire(blocking=False)
+    lock = DispatcherLock(settings.data_dir, command="dance API POST /pipeline/process")
+    try:
+        lock.acquire()
+    except DispatcherBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    # Pre-populate items so the UI can render a 6-row progress bar from t=0.
-    job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
+    try:
+        # Pre-populate items so the UI can render a 6-row progress bar from t=0.
+        job = registry.create("pipeline_run", list(_DISPATCH_STAGES))
 
-    thread = threading.Thread(
-        target=_run_dispatcher_job,
-        args=(job.id, settings),
-        daemon=True,
-        name=f"pipeline-run-{job.id}",
-    )
-    thread.start()
+        thread = threading.Thread(
+            target=_run_dispatcher_job,
+            args=(job.id, settings, lock),
+            daemon=True,
+            name=f"pipeline-run-{job.id}",
+        )
+        thread.start()
+    except BaseException:
+        lock.release()
+        raise
 
     return JobOut(**job.to_dict())

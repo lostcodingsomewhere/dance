@@ -51,7 +51,12 @@ dance process --limit 10            # cap at 10 tracks per stage per pass
 dance process --track-id 42         # only one track
 dance process --skip-stems          # skip Demucs separation (auto-advances state)
 dance process --skip-embeddings     # skip CLAP embedding
+dance process --wait                # queue behind a run that's already going
 ```
+
+**One run at a time.** Every dispatcher (terminal or API) holds `<data_dir>/dispatcher.lock` for its whole run. If another run holds it, `dance process` / `dance run --once` / `dance ingest` print the holder's pid and exit with status **75**; pass `--wait` to start as soon as it finishes. `dance run` in daemon mode skips that pass instead. The API's `POST /pipeline/process` answers 409 and its watch loop skips its turn. A lock left behind by a killed run never blocks: the kernel drops it with the process.
+
+Tracks the Spotify ingest pre-created (`file_hash` `pending:<spotify_id>`) are skipped until their download lands. `dance status` counts them.
 
 **State changes (per track):**
 ```

@@ -13,6 +13,8 @@ Commands:
 import logging
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -139,6 +141,65 @@ def _require_ffmpeg_or_exit() -> None:
         sys.exit(1)
 
 
+_WAIT_OPTION = click.option(
+    "--wait",
+    is_flag=True,
+    help=(
+        "If another pipeline run (a terminal `dance process` or the API) "
+        "holds the dispatcher lock, wait for it instead of exiting with "
+        "status 75."
+    ),
+)
+
+
+@contextmanager
+def _pipeline_lock(
+    settings: Settings, *, wait: bool, skip_if_busy: bool = False
+) -> Iterator[bool]:
+    """Hold the cross-process dispatcher lock for a CLI command.
+
+    Yields True once held. If another run holds it: wait (``wait``), yield
+    False (``skip_if_busy``, for daemon passes), or print who holds it and
+    exit with status 75. Re-entrant per thread, so ``run`` invoking
+    ``process`` and ``Dispatcher.run`` itself don't trip over it.
+    """
+    from rich.markup import escape
+
+    from dance.pipeline.dispatcher_lock import (
+        EXIT_BUSY,
+        DispatcherBusyError,
+        LockHolder,
+        dispatcher_lock,
+    )
+
+    def _on_wait(holder: LockHolder) -> None:
+        console.print(
+            f"[yellow]Waiting for the running pipeline ({escape(holder.describe())}) "
+            "to finish…[/yellow]",
+            soft_wrap=True,
+        )
+
+    stack = ExitStack()
+    busy: DispatcherBusyError | None = None
+    try:
+        stack.enter_context(dispatcher_lock(settings.data_dir, wait=wait, on_wait=_on_wait))
+    except DispatcherBusyError as exc:
+        busy = exc
+    if busy is not None:
+        # soft_wrap: keep "pid N" on one line in logs (the API tails them).
+        if skip_if_busy:
+            console.print(
+                f"[yellow]Skipping this pass:[/yellow] {escape(str(busy))}", soft_wrap=True
+            )
+            yield False
+            return
+        console.print(f"[red]Error:[/red] {escape(str(busy))}", soft_wrap=True)
+        console.print("Re-run with [cyan]--wait[/cyan] to start as soon as it finishes.")
+        sys.exit(EXIT_BUSY)
+    with stack:
+        yield True
+
+
 def _run_sync(settings: Settings, dry_run: bool = False):
     """Core sync logic. Returns the DownloadResult.
 
@@ -205,6 +266,7 @@ def sync(ctx: click.Context, dry_run: bool) -> None:
     ),
 )
 @click.option("--track-id", "-t", type=int)
+@_WAIT_OPTION
 @click.pass_context
 def process(
     ctx: click.Context,
@@ -213,25 +275,31 @@ def process(
     skip_embeddings: bool,
     skip_ingest: bool,
     track_id: Optional[int],
+    wait: bool,
 ) -> None:
     """Run the pipeline on pending tracks.
 
     Uses the parallel dispatcher: each stage gets its own worker pool (size
     from ``stage.concurrency``), stages run concurrently, and GPU-bound
     stages share a semaphore (``DANCE_GPU_CONCURRENCY``, default 1).
+
+    Only one pipeline run may be active at a time (terminal or API). If
+    another holds the dispatcher lock this exits with status 75 and names
+    its pid, unless ``--wait`` is given.
     """
     settings: Settings = ctx.obj["settings"]
 
     _require_ffmpeg_or_exit()
 
-    _run_process(
-        settings,
-        limit=limit,
-        skip_stems=skip_stems,
-        skip_embeddings=skip_embeddings,
-        skip_ingest=skip_ingest,
-        track_id=track_id,
-    )
+    with _pipeline_lock(settings, wait=wait):
+        _run_process(
+            settings,
+            limit=limit,
+            skip_stems=skip_stems,
+            skip_embeddings=skip_embeddings,
+            skip_ingest=skip_ingest,
+            track_id=track_id,
+        )
 
     _print_remaining_work_hint(settings)
 
@@ -279,7 +347,10 @@ def _run_process(
 
 def _print_remaining_work_hint(settings: Settings) -> None:
     """After a process pass, nudge the user if tracks are stuck short of
-    COMPLETE (errored, or still mid-pipeline)."""
+    COMPLETE (errored, or still mid-pipeline). Rows still waiting on their
+    download don't count: re-running wouldn't advance them."""
+    from dance.pipeline.placeholders import not_placeholder
+
     session = get_session(settings.db_url)
     try:
         errored = (
@@ -290,7 +361,8 @@ def _print_remaining_work_hint(settings: Settings) -> None:
             .filter(
                 Track.state.notin_(
                     [TrackState.COMPLETE.value, TrackState.ERROR.value]
-                )
+                ),
+                not_placeholder(),
             )
             .count()
         )
@@ -378,17 +450,25 @@ def list_tracks(
 @main.command()
 @click.option("--once", is_flag=True, help="Run once and exit")
 @click.option("--skip-sync", is_flag=True)
+@_WAIT_OPTION
 @click.pass_context
-def run(ctx: click.Context, once: bool, skip_sync: bool) -> None:
-    """Run full pipeline (sync → process) once or in daemon mode."""
+def run(ctx: click.Context, once: bool, skip_sync: bool, wait: bool) -> None:
+    """Run full pipeline (sync → process) once or in daemon mode.
+
+    If another pipeline run holds the dispatcher lock, ``--once`` exits with
+    status 75 (or waits, with ``--wait``); daemon mode skips that pass.
+    """
     settings: Settings = ctx.obj["settings"]
 
-    def one_pass():
-        if not skip_sync and settings.spotify_playlist_url:
-            console.print("\n[bold cyan]Sync[/bold cyan]")
-            ctx.invoke(sync)
-        console.print("\n[bold cyan]Process[/bold cyan]")
-        ctx.invoke(process)
+    def one_pass(skip_if_busy: bool = False) -> None:
+        with _pipeline_lock(settings, wait=wait, skip_if_busy=skip_if_busy) as held:
+            if not held:
+                return
+            if not skip_sync and settings.spotify_playlist_url:
+                console.print("\n[bold cyan]Sync[/bold cyan]")
+                ctx.invoke(sync)
+            console.print("\n[bold cyan]Process[/bold cyan]")
+            ctx.invoke(process)
 
     if once:
         one_pass()
@@ -398,7 +478,7 @@ def run(ctx: click.Context, once: bool, skip_sync: bool) -> None:
     console.print(f"[bold]Daemon mode (every {settings.sync_interval_minutes}m). Ctrl+C to stop.[/bold]")
     try:
         while True:
-            one_pass()
+            one_pass(skip_if_busy=True)
             time.sleep(settings.sync_interval_minutes * 60)
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopped.[/yellow]")
@@ -703,36 +783,43 @@ def export_als(
 
 @main.command()
 @click.option("--skip-sync", is_flag=True, help="Skip the Spotify sync phase")
+@_WAIT_OPTION
 @click.pass_context
-def ingest(ctx: click.Context, skip_sync: bool) -> None:
+def ingest(ctx: click.Context, skip_sync: bool, wait: bool) -> None:
     """Full new-track lifecycle in one command.
 
     Runs, in order: sync → process → build-graph → tag → export-als --all.
     This is the one-shot equivalent of the five-command runbook chain. Use
     ``--skip-sync`` to re-ingest the existing library without hitting Spotify.
+
+    Sync + process hold the dispatcher lock; if another pipeline run holds
+    it this exits with status 75 up front (or waits, with ``--wait``).
     """
     settings: Settings = ctx.obj["settings"]
 
     # Preflight once, up front — both sync and process need ffmpeg.
     _require_ffmpeg_or_exit()
 
-    # 1) Sync ----------------------------------------------------------------
-    downloaded = 0
-    if skip_sync:
-        console.print("[dim]Skipping Spotify sync (--skip-sync)[/dim]")
-    elif not settings.spotify_playlist_url:
-        console.print(
-            "[yellow]No Spotify playlist configured — skipping sync.[/yellow] "
-            "Set one with [cyan]dance config --spotify-playlist <url>[/cyan]."
-        )
-    else:
-        console.print("\n[bold cyan]1/5 Sync[/bold cyan]")
-        result = _run_sync(settings)
-        downloaded = result.downloaded
+    # Take the dispatcher lock before the (slow) sync, so a busy pipeline
+    # fails fast instead of after the downloads.
+    with _pipeline_lock(settings, wait=wait):
+        # 1) Sync ------------------------------------------------------------
+        downloaded = 0
+        if skip_sync:
+            console.print("[dim]Skipping Spotify sync (--skip-sync)[/dim]")
+        elif not settings.spotify_playlist_url:
+            console.print(
+                "[yellow]No Spotify playlist configured — skipping sync.[/yellow] "
+                "Set one with [cyan]dance config --spotify-playlist <url>[/cyan]."
+            )
+        else:
+            console.print("\n[bold cyan]1/5 Sync[/bold cyan]")
+            result = _run_sync(settings)
+            downloaded = result.downloaded
 
-    # 2) Process -------------------------------------------------------------
-    console.print("\n[bold cyan]2/5 Process[/bold cyan]")
-    _run_process(settings)
+        # 2) Process ---------------------------------------------------------
+        console.print("\n[bold cyan]2/5 Process[/bold cyan]")
+        _run_process(settings)
 
     # 3) Build graph ---------------------------------------------------------
     console.print("\n[bold cyan]3/5 Build graph[/bold cyan]")
@@ -807,6 +894,21 @@ def status(ctx: click.Context) -> None:
             table.add_row(state.value, str(count))
         table.add_row("[bold]total[/bold]", f"[bold]{session.query(Track).count()}[/bold]")
         console.print(table)
+
+        # Optimistic Spotify-ingest rows whose audio hasn't landed: no stage
+        # claims them yet, so say so rather than leave them looking stuck.
+        from dance.pipeline.placeholders import not_placeholder
+
+        downloading = (
+            session.query(Track)
+            .filter(~not_placeholder(), Track.state != TrackState.ERROR.value)
+            .count()
+        )
+        if downloading:
+            console.print(
+                f"[dim]{downloading} track(s) still waiting on their download; "
+                "the pipeline skips them until the audio lands.[/dim]"
+            )
 
         # Surface repeatedly-crashing tracks so the heal loop is never silent.
         _print_stuck_track_detail(settings, session)
