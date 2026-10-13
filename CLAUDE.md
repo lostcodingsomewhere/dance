@@ -95,6 +95,7 @@ dance status                              # what state are tracks in
 dance sync                                # download from configured playlist
 dance process [-n 5] [--skip-stems]       # advance tracks through stages
 dance tag [--deep]                        # CLAP zero-shot or Qwen2-Audio
+dance embed [--all]                       # re-embed tracks on an old CLAP scheme
 dance build-graph                         # build recommendation edges
 dance export-als <id> | --all             # generate Live Set(s)
 
