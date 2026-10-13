@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from dance.core.database import AudioAnalysis, TrackEmbedding, now_utc
+from dance.core.embedding_scheme import CLAP_EMBED_VERSION
 from dance.core.serialization import encode_embedding
 from dance.recommender import journey as jn
 
@@ -83,6 +84,7 @@ def _seed_track(session: Session, track_factory, tid_vec, key, bpm, energy):
             track_id=track.id,
             stem_file_id=None,
             model="laion/clap-htsat-unfused",
+            model_version=CLAP_EMBED_VERSION,
             dim=int(vec.shape[0]),
             embedding=encode_embedding(vec),
         )
@@ -134,6 +136,7 @@ def test_journey_from_combo(session, make_track):
             track_id=track.id,
             stem_file_id=stem.id,
             model="laion/clap-htsat-unfused",
+            model_version=CLAP_EMBED_VERSION,
             dim=2,
             embedding=encode_embedding(vec),
         )

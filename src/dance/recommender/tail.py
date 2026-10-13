@@ -31,6 +31,7 @@ from dance.core.database import (
     Track,
     TrackEmbedding,
 )
+from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
 from dance.recommender.journey import JourneyState, journey_from_tracks
 from dance.recommender.scoring import (
@@ -92,7 +93,9 @@ def _candidates(session: Session, excluded: set[int]) -> list[_Cand]:
         )
         .outerjoin(
             TrackEmbedding,
-            (TrackEmbedding.track_id == Track.id) & (TrackEmbedding.stem_file_id.is_(None)),
+            (TrackEmbedding.track_id == Track.id)
+            & (TrackEmbedding.stem_file_id.is_(None))
+            & current_scheme(),
         )
         .outerjoin(
             AudioAnalysis,

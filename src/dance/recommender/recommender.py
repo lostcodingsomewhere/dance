@@ -32,6 +32,7 @@ from dance.core.database import (
     TrackEdge,
     TrackEmbedding,
 )
+from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
 from dance.recommender import dedup, scoring
 from dance.recommender.journey import JourneyState, journey_from_combo, journey_from_tracks
@@ -118,6 +119,7 @@ class Recommender:
             .filter(
                 TrackEmbedding.track_id.in_(cand_ids),
                 TrackEmbedding.stem_file_id.is_(None),
+                current_scheme(),
             )
             .all()
         )
@@ -197,7 +199,7 @@ class Recommender:
         # Pull all full-mix embeddings (one per track).
         embed_q = (
             self.session.query(TrackEmbedding)
-            .filter(TrackEmbedding.stem_file_id.is_(None))
+            .filter(TrackEmbedding.stem_file_id.is_(None), current_scheme())
         )
         if model_name:
             embed_q = embed_q.filter(TrackEmbedding.model == model_name)
@@ -422,7 +424,10 @@ class _ColumnRecommenderImpl:
                 AudioAnalysis.brightness,
                 AudioAnalysis.warmth,
             )
-            .outerjoin(TrackEmbedding, TrackEmbedding.stem_file_id == StemFile.id)
+            .outerjoin(
+                TrackEmbedding,
+                (TrackEmbedding.stem_file_id == StemFile.id) & current_scheme(),
+            )
             .outerjoin(AudioAnalysis, AudioAnalysis.stem_file_id == StemFile.id)
             .join(Track, Track.id == StemFile.track_id)
             .filter(StemFile.kind == column)
@@ -485,7 +490,8 @@ class _ColumnRecommenderImpl:
             .outerjoin(
                 TrackEmbedding,
                 (TrackEmbedding.track_id == Track.id)
-                & (TrackEmbedding.stem_file_id.is_(None)),
+                & (TrackEmbedding.stem_file_id.is_(None))
+                & current_scheme(),
             )
             .outerjoin(
                 AudioAnalysis,

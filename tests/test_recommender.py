@@ -16,6 +16,7 @@ from dance.core.database import (
     TrackEmbedding,
     now_utc,
 )
+from dance.core.embedding_scheme import CLAP_EMBED_VERSION
 from dance.core.serialization import encode_embedding
 from dance.recommender import (
     GraphBuilder,
@@ -68,7 +69,7 @@ def _add_embedding(
         track_id=track_id,
         stem_file_id=None,
         model=model,
-        model_version=None,
+        model_version=CLAP_EMBED_VERSION,
         dim=int(vec.shape[0]),
         embedding=encode_embedding(vec.astype(np.float32)),
     )
@@ -333,7 +334,7 @@ def _add_full_mix_embedding(session, track_id: int, vector: np.ndarray, model: s
             track_id=track_id,
             stem_file_id=None,
             model=model,
-            model_version=None,
+            model_version=CLAP_EMBED_VERSION,
             dim=int(vector.shape[0]),
             embedding=encode_embedding(vector.astype(np.float32)),
             created_at=now_utc(),

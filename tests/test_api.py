@@ -34,6 +34,7 @@ from dance.core.database import (
     TrackTag,
     now_utc,
 )
+from dance.core.embedding_scheme import CLAP_EMBED_VERSION
 from dance.osc.bridge import AbletonState
 
 
@@ -422,7 +423,7 @@ def test_recommend_single_seed(client: TestClient, session, make_track) -> None:
                 track_id=tid,
                 stem_file_id=None,
                 model="test",
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=len(vec),
                 embedding=encode_embedding(np.array(vec, dtype=np.float32)),
             )
@@ -466,7 +467,7 @@ def test_recommend_excludes_seeds_and_exclude(client: TestClient, session, make_
                 track_id=tid,
                 stem_file_id=None,
                 model="test",
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=len(vec),
                 embedding=encode_embedding(np.array(vec, dtype=np.float32)),
             )
@@ -914,7 +915,7 @@ def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
                 track_id=near.id,
                 stem_file_id=None,
                 model=model,
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=3,
                 embedding=encode_embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
@@ -925,7 +926,7 @@ def test_recommend_by_text_endpoint(client: TestClient, app, fake_bridge):
                 track_id=far.id,
                 stem_file_id=None,
                 model=model,
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=3,
                 embedding=encode_embedding(np.array([0.0, 1.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
@@ -991,7 +992,7 @@ def test_recommend_by_text_exclude(client, app, fake_bridge):
                     track_id=tid,
                     stem_file_id=None,
                     model=settings.clap_model,
-                    model_version=None,
+                    model_version=CLAP_EMBED_VERSION,
                     dim=2,
                     embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
                     created_at=now_utc(),
@@ -1097,7 +1098,7 @@ def test_tag_endpoint_zeroshot(client, app, fake_bridge):
                 track_id=t.id,
                 stem_file_id=None,
                 model=settings.clap_model,
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=2,
                 embedding=encode_embedding(np.array([1.0, 0.0], dtype=np.float32)),
                 created_at=now_utc(),
@@ -2116,7 +2117,7 @@ def _seed_stem(
                 track_id=track.id,
                 stem_file_id=sf.id,
                 model="test",
-                model_version=None,
+                model_version=CLAP_EMBED_VERSION,
                 dim=len(embedding),
                 embedding=encode_embedding(np.asarray(embedding, dtype=np.float32)),
                 created_at=now_utc(),
@@ -3399,6 +3400,7 @@ def _seed_plan_track(session, make_track, *, title, key="8A", bpm=124.0, energy=
                 TrackEmbedding(
                     track_id=t.id, stem_file_id=stem.id,
                     model="laion/clap-htsat-unfused", dim=int(v.shape[0]),
+                    model_version=CLAP_EMBED_VERSION,
                     embedding=encode_embedding(v),
                 )
             )

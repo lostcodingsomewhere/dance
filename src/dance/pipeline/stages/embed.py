@@ -1,8 +1,17 @@
 """CLAP audio embedding stage.
 
 Computes one embedding for the full mix and one per stem (drums/bass/vocals/
-other), upserting into ``track_embeddings``. This is the FINAL per-track
+other) and stores them in ``track_embeddings``. This is the FINAL per-track
 pipeline stage — on success the track transitions to ``COMPLETE``.
+
+Each embedding is deterministic and covers the whole audio: the audio is cut
+into the model's native 10 s windows (never randomly cropped), near-silent
+windows are skipped, up to ``settings.clap_max_windows`` are taken evenly
+spread, and their embeddings are mean-pooled (see
+:mod:`dance.pipeline.utils.clap_windows`). Rows are written under
+:data:`~dance.core.embedding_scheme.CLAP_EMBED_VERSION`; rows from any other
+scheme for the same (track, stem, model) are deleted so readers never mix
+schemes. ``dance embed`` re-embeds COMPLETE tracks still on an old scheme.
 
 Heavy ML imports (torch, transformers, librosa) are gated behind a flag so
 this module can still be imported without them; the dispatcher's lazy
@@ -15,13 +24,21 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from dance.config import Settings
-from dance.core.database import now_utc, StemFile, Track, TrackEmbedding, TrackState
+from dance.core.database import Track, TrackEmbedding, TrackState, now_utc
+from dance.core.embedding_scheme import CLAP_EMBED_VERSION, current_scheme
 from dance.core.serialization import encode_embedding
+from dance.pipeline.utils.clap_windows import (
+    extract_windows,
+    pool_embeddings,
+    select_windows,
+)
 from dance.pipeline.utils.db import get_stems_for_track, upsert
 from dance.pipeline.utils.device import pick_device
 
@@ -40,6 +57,12 @@ except ImportError:  # pragma: no cover — exercised only on installs missing d
 
 # CLAP's expected sample rate.
 CLAP_SAMPLE_RATE = 48000
+# Fallback window length when the processor doesn't say (10 s at 48 kHz —
+# laion/clap-htsat-unfused's ``nb_max_samples``).
+_DEFAULT_WINDOW = 10 * CLAP_SAMPLE_RATE
+# Windows per forward pass: bounds peak activation memory on MPS while still
+# amortising per-call overhead.
+_BATCH = 8
 
 
 class EmbeddingStage:
@@ -55,13 +78,16 @@ class EmbeddingStage:
     uses_gpu = True
 
     def __init__(self) -> None:
-        self._model = None
-        self._processor = None
+        self._model: Any = None
+        self._processor: Any = None
         self._device: str | None = None
         self._model_name: str | None = None
-        self._model_version: str | None = None
+        # Samples per window — the processor's max_length, so it never crops.
+        self._window = _DEFAULT_WINDOW
+        self._max_windows = int(Settings.model_fields["clap_max_windows"].default)
+        self._silence_db = float(Settings.model_fields["clap_silence_db"].default)
 
-    def _ensure_model(self, settings: Settings) -> None:
+    def _ensure_model(self, settings: Settings, *, local_files_only: bool = False) -> None:
         """Lazy-load the CLAP model + processor, cached on the instance."""
         if self._model is not None and self._model_name == settings.clap_model:
             return
@@ -71,8 +97,10 @@ class EmbeddingStage:
         device = pick_device(settings.clap_device)
         logger.info("Loading CLAP model %s on %s", settings.clap_model, device)
 
-        processor = ClapProcessor.from_pretrained(settings.clap_model)
-        model = ClapModel.from_pretrained(settings.clap_model)
+        processor = ClapProcessor.from_pretrained(
+            settings.clap_model, local_files_only=local_files_only
+        )
+        model = ClapModel.from_pretrained(settings.clap_model, local_files_only=local_files_only)
 
         # MPS occasionally rejects HF model casts; fall back to CPU cleanly.
         if device == "mps":
@@ -86,24 +114,56 @@ class EmbeddingStage:
             model = model.to(device)
         model.eval()
 
+        extractor = getattr(processor, "feature_extractor", None)
+        sr = int(getattr(extractor, "sampling_rate", 0) or CLAP_SAMPLE_RATE)
+        if sr != CLAP_SAMPLE_RATE:
+            raise RuntimeError(
+                f"{settings.clap_model} expects {sr} Hz audio; this stage loads "
+                f"{CLAP_SAMPLE_RATE} Hz"
+            )
+
         self._device = device
         self._model = model
         self._processor = processor
         self._model_name = settings.clap_model
-        self._model_version = getattr(
-            getattr(model, "config", None), "transformers_version", None
-        )
+        self._window = int(getattr(extractor, "nb_max_samples", 0) or _DEFAULT_WINDOW)
+
+    def _configure(self, settings: Settings) -> None:
+        """Pick up the windowing knobs (cheap; called per track)."""
+        self._max_windows = int(settings.clap_max_windows)
+        self._silence_db = float(settings.clap_silence_db)
 
     # ------------------------------------------------------------------
 
-    def _encode(self, audio: np.ndarray) -> np.ndarray:
-        """Convert one chunk of 48kHz mono float32 audio into a 512-d embedding."""
+    def _encode(self, audio: np.ndarray) -> np.ndarray | None:
+        """Embed one 48 kHz mono float32 audio: windowed, pooled, unit-norm.
+
+        Returns ``None`` when every window is near-silent (below
+        ``settings.clap_silence_db``) — there is nothing to describe.
+        """
         if self._model is None or self._processor is None:
             raise RuntimeError("model not loaded — call _ensure_model first")
 
-        inputs = self._processor(
-            audio=audio, sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt"
+        starts = select_windows(
+            audio,
+            self._window,
+            max_windows=self._max_windows,
+            silence_db=self._silence_db,
         )
+        if not starts:
+            return None
+        windows = extract_windows(audio, starts, self._window)
+        parts = [
+            self._encode_windows(windows[i : i + _BATCH]) for i in range(0, len(windows), _BATCH)
+        ]
+        return pool_embeddings(np.concatenate(parts, axis=0))
+
+    def _encode_windows(self, windows: list[np.ndarray]) -> np.ndarray:
+        """One forward pass over equal-length windows -> ``(n, dim)`` float32."""
+        if any(w.shape[0] != self._window for w in windows):
+            # Longer and the extractor random-crops; shorter and it pads.
+            raise ValueError("every window must be exactly max_length samples")
+        inputs = self._processor(audio=windows, sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
         with torch.no_grad():
@@ -118,7 +178,8 @@ class EmbeddingStage:
             tensor = features.last_hidden_state.mean(dim=1)
         else:
             tensor = features
-        return tensor.cpu().numpy()[0].astype(np.float32, copy=False)
+        out: np.ndarray = tensor.detach().cpu().numpy().astype(np.float32, copy=False)
+        return out
 
     @staticmethod
     def _load_audio(path: Path) -> np.ndarray:
@@ -147,7 +208,8 @@ class EmbeddingStage:
             tensor = features.last_hidden_state.mean(dim=1)
         else:
             tensor = features
-        return tensor.cpu().numpy()[0].astype(np.float32, copy=False)
+        out: np.ndarray = tensor.cpu().numpy()[0].astype(np.float32, copy=False)
+        return out
 
     # ------------------------------------------------------------------
 
@@ -156,55 +218,100 @@ class EmbeddingStage:
         session.commit()
 
         try:
-            self._ensure_model(settings)
-
-            now = now_utc()
-
-            # Full mix.
-            mix_path = Path(track.file_path)
-            if not mix_path.exists():
-                raise FileNotFoundError(f"Track audio missing: {mix_path}")
-            audio = self._load_audio(mix_path)
-            self._upsert(session, track, stem_file_id=None, audio=audio, when=now)
-
-            # Per-stem.
-            stems = get_stems_for_track(session, track.id)
-            for stem in stems:
-                stem_path = Path(stem.path)
-                if not stem_path.exists():
-                    raise FileNotFoundError(f"Stem audio missing: {stem_path}")
-                audio = self._load_audio(stem_path)
-                self._upsert(
-                    session, track, stem_file_id=stem.id, audio=audio, when=now
-                )
-
+            written, silent = self.embed_track(session, track, settings)
             track.state = self.output_state.value
             session.commit()
             logger.info(
-                "Embedded track %s (1 mix + %d stems)", track.id, len(stems)
+                "Embedded track %s (%d rows, %d silent audio skipped)",
+                track.id,
+                written,
+                silent,
             )
             return True
 
         except Exception as exc:  # noqa: BLE001 — stage reports via state
+            # Drop anything half-written before recording the failure.
+            session.rollback()
             logger.error("Embedding failed for track %s: %s", track.id, exc)
             track.state = self.error_state.value
             track.error_message = f"{self.name}: {exc}"[:500]
             session.commit()
             return False
 
+    def embed_track(self, session: Session, track: Track, settings: Settings) -> tuple[int, int]:
+        """Embed the mix + every stem of ``track`` under the current scheme.
+
+        Every audio is embedded before anything is written, so a failure
+        part-way leaves the stored rows exactly as they were. Does not commit
+        and does not touch ``track.state`` — :meth:`process` and
+        ``dance embed`` own that. Returns ``(rows_written, silent_audio)``.
+        """
+        self._ensure_model(settings)
+        self._configure(settings)
+
+        mix_path = Path(track.file_path)
+        if not mix_path.exists():
+            raise FileNotFoundError(f"Track audio missing: {mix_path}")
+        targets: list[tuple[int | None, Path]] = [(None, mix_path)]
+        for stem in get_stems_for_track(session, int(track.id)):
+            stem_path = Path(stem.path)
+            if not stem_path.exists():
+                raise FileNotFoundError(f"Stem audio missing: {stem_path}")
+            targets.append((int(stem.id), stem_path))
+
+        vectors = [(stem_id, self._encode(self._load_audio(path))) for stem_id, path in targets]
+
+        now = now_utc()
+        written = silent = 0
+        for stem_id, vec in vectors:
+            if vec is None:
+                silent += 1
+                logger.info(
+                    "Track %s %s: every window below %.0f dBFS — no embedding stored",
+                    track.id,
+                    "mix" if stem_id is None else f"stem {stem_id}",
+                    self._silence_db,
+                )
+            else:
+                written += 1
+            self._store(session, track, stem_file_id=stem_id, embedding=vec, when=now)
+        return written, silent
+
     # ------------------------------------------------------------------
 
-    def _upsert(
+    def _store(
         self,
         session: Session,
         track: Track,
         *,
         stem_file_id: int | None,
-        audio: np.ndarray,
+        embedding: np.ndarray | None,
         when: datetime,
     ) -> None:
-        """Compute the embedding and upsert one TrackEmbedding row."""
-        embedding = self._encode(audio)
+        """Make the current-scheme row the only row for (track, stem, model).
+
+        Rows written by any other scheme (including the legacy NULL version)
+        are deleted, so no reader can pick up a stale vector. ``embedding``
+        ``None`` (every window silent) deletes the current row too.
+        """
+        same_slot = session.query(TrackEmbedding).filter(
+            TrackEmbedding.track_id == track.id,
+            TrackEmbedding.stem_file_id.is_(None)
+            if stem_file_id is None
+            else TrackEmbedding.stem_file_id == stem_file_id,
+            TrackEmbedding.model == self._model_name,
+        )
+        if embedding is not None:
+            same_slot = same_slot.filter(
+                or_(
+                    TrackEmbedding.model_version.is_(None),
+                    TrackEmbedding.model_version != CLAP_EMBED_VERSION,
+                )
+            )
+        same_slot.delete(synchronize_session="fetch")
+        if embedding is None:
+            return
+
         upsert(
             session,
             TrackEmbedding,
@@ -212,9 +319,40 @@ class EmbeddingStage:
                 "track_id": track.id,
                 "stem_file_id": stem_file_id,
                 "model": self._model_name,
-                "model_version": self._model_version,
+                "model_version": CLAP_EMBED_VERSION,
             },
             dim=int(embedding.shape[0]),
             embedding=encode_embedding(embedding),
             created_at=when,
         )
+
+
+def stale_track_ids(session: Session, model: str) -> list[int]:
+    """COMPLETE tracks whose ``model`` embeddings are not all current.
+
+    Stale means: any row for ``model`` written by another scheme (including
+    the legacy NULL version), or no current full-mix row. ``dance embed``
+    re-embeds these after a scheme change.
+    """
+    old_scheme = select(TrackEmbedding.track_id).where(
+        TrackEmbedding.model == model,
+        or_(
+            TrackEmbedding.model_version.is_(None),
+            TrackEmbedding.model_version != CLAP_EMBED_VERSION,
+        ),
+    )
+    has_current_mix = select(TrackEmbedding.track_id).where(
+        TrackEmbedding.model == model,
+        TrackEmbedding.stem_file_id.is_(None),
+        current_scheme(),
+    )
+    rows = (
+        session.query(Track.id)
+        .filter(
+            Track.state == TrackState.COMPLETE.value,
+            or_(Track.id.in_(old_scheme), Track.id.notin_(has_current_mix)),
+        )
+        .order_by(Track.id)
+        .all()
+    )
+    return [int(r[0]) for r in rows]
