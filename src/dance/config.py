@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     skip_embeddings: bool = Field(default=False)
     audio_format: str = Field(default="mp3")
     audio_quality: str = Field(default="320k")
+    # Simultaneous yt-dlp downloads across ALL ingest paths (CSV commit,
+    # single-track, playlist) — one shared pool, so overlapping jobs can't
+    # stack up and hammer YouTube. Read once, when the pool first starts.
+    download_workers: int = Field(default=3, ge=1, le=16)
 
     # CLAP embeddings
     clap_model: str = Field(default="laion/clap-htsat-unfused")

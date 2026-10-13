@@ -137,6 +137,8 @@ Once the library dir is populated (by either path, or by dropping local files �
 >   "ytsearch1:Artist Title"
 > ```
 >
+> **The app and `scripts/yt_dlp_csv_import.py` do not use `ytsearch1`.** That took YouTube's top hit and, when the ±30 s filter rejected it, retried *unfiltered* — which is how the library got a 414 s `Cycles` for a 186 s track. Both now run a metadata-only `--flat-playlist -J ytsearch10:` search, score every result (`src/dance/spotify/matching.py`), drop anything outside max(30 s, 10 %) of the Spotify duration (never relaxed), download the best by video id, and verify the file (ffprobe length within max(10 s, 3.5 %) + full `ffmpeg -f null` decode) before it enters the library. The chosen YouTube URL + match score land in the file's comment tag and the job message. A row that fails with **`no candidate passed (best 0.71: <title> <dur>s — …)`** means nothing on YouTube matched well enough; that is deliberate — get that one from Beatport/Bandcamp. Knobs: `DANCE_DOWNLOAD_WORKERS` (simultaneous downloads across all ingest jobs, default 3) and `DANCE_AUDIO_FORMAT=m4a` (keep YouTube's AAC stream instead of re-encoding to MP3).
+>
 > **The one non-obvious flag is `--js-runtimes node`.** yt-dlp 2026 does NOT auto-discover JS runtimes — `YoutubeDL.py:876` only enables runtimes present in `params['js_runtimes']`, which defaults to empty. Without this flag, debug shows `JS runtimes: none` and `node (unavailable)` even when `node` is on PATH and `yt-dlp-ejs` is installed.
 >
 > **Verify the chain is healthy** — debug log should show:

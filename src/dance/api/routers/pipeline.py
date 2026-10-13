@@ -25,14 +25,13 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from dance.api.dedup import find_duplicate, index_existing
+from dance.api.dedup import find_duplicate, index_existing, match_duplicate
 from dance.api.deps import get_session, get_settings
 from dance.api.jobs import get_job_registry
 from dance.api.schemas import (
@@ -58,12 +57,11 @@ from dance.spotify.csv_importer import (
     expected_target,
     parse_csv,
 )
+from dance.spotify.download_pool import get_download_pool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
-
-_INGEST_WORKERS = 4
 
 # Module-level lock so two API requests can't race to start ``dance process``.
 # (External CLI runs are still possible; see module docstring.)
@@ -275,23 +273,28 @@ def get_pipeline_recent(
 
 
 def _classify_rows(
-    rows: list[CsvRow], session: Session, library: Path
+    rows: list[CsvRow], session: Session, library: Path, audio_format: str = "mp3"
 ) -> tuple[list[IngestPreviewRow], list[IngestPreviewRow]]:
     """Split parsed CSV rows into (new, duplicates).
 
     A row is a "duplicate" if either:
     - The target file path already exists on disk, OR
-    - A track in the DB has a fuzzy-matching (artist, title).
+    - A track in the DB has a fuzzy-matching (artist, title) with the same
+      version words and, when both durations are known, |Δ| <= 5 s.
     """
-    existing_rows = session.query(Track.id, Track.artist, Track.title).all()
-    idx = index_existing([(int(tid), a, t) for tid, a, t in existing_rows])
+    existing_rows = session.query(
+        Track.id, Track.artist, Track.title, Track.duration_seconds
+    ).all()
+    idx = index_existing([(int(tid), a, t, d) for tid, a, t, d in existing_rows])
 
     new: list[IngestPreviewRow] = []
     dupes: list[IngestPreviewRow] = []
     for row in rows:
-        target = expected_target(library, row)
+        target = expected_target(library, row, audio_format)
         on_disk = target.exists() and target.stat().st_size > 100 * 1024
-        dup_id = find_duplicate(row.artist, row.title, idx)
+        dup_id = find_duplicate(
+            row.artist, row.title, idx, incoming_duration_s=row.duration_s or None
+        )
         out_row = IngestPreviewRow(
             artist=row.artist,
             title=row.title,
@@ -320,7 +323,7 @@ def ingest_preview(
     would happen, and only calls ``/ingest/commit`` after approval.
     """
     rows, parse_errors = parse_csv(body.csv_text)
-    new, dupes = _classify_rows(rows, session, settings.library_dir)
+    new, dupes = _classify_rows(rows, session, settings.library_dir, settings.audio_format)
     return IngestPreviewResponse(
         total_rows=len(rows),
         new_rows=new,
@@ -334,25 +337,30 @@ def _run_csv_job(
     csv_rows: list[CsvRow],
     library: Path,
     cookies_file: Path | None = None,
+    audio_format: str = "mp3",
+    download_workers: int = 3,
 ) -> None:
-    """Background worker: download each CSV row in a small thread pool."""
+    """Background worker: queue each CSV row on the shared download pool.
+
+    This thread only orchestrates; the downloads themselves run on the
+    process-wide pool, so a CSV job and a playlist job running together
+    still respect ``settings.download_workers`` in total.
+    """
     registry = get_job_registry()
     registry.set_status(job_id, "running")
     try:
         library.mkdir(parents=True, exist_ok=True)
-        with ThreadPoolExecutor(max_workers=_INGEST_WORKERS) as ex:
-            futures = {
-                ex.submit(download_track, row, library, cookies_file): i
-                for i, row in enumerate(csv_rows)
-            }
-            for fut in futures:
-                pass  # ensure all submitted before any await — keeps order intact
-            for fut, idx in list(futures.items()):
-                try:
-                    status, msg = fut.result()
-                except Exception as e:  # noqa: BLE001
-                    status, msg = "fail", str(e)[:200]
-                registry.update_item(job_id, idx, status, msg)
+        pool = get_download_pool(download_workers)
+        futures = [
+            pool.submit(download_track, row, library, cookies_file, audio_format=audio_format)
+            for row in csv_rows
+        ]
+        for idx, fut in enumerate(futures):
+            try:
+                status, msg = fut.result()
+            except Exception as e:  # noqa: BLE001
+                status, msg = "fail", str(e)[:200]
+            registry.update_item(job_id, idx, status, msg)
         registry.set_status(job_id, "done")
     except Exception as e:  # noqa: BLE001
         registry.set_status(job_id, "error", error=str(e)[:300])
@@ -390,7 +398,7 @@ def ingest_commit(
         rows = [r for r in rows if f"{r.artist}|{r.title}" in wanted]
     elif not body.include_duplicates:
         # Bulk mode, skip dupes: re-classify and keep only new rows.
-        new, _ = _classify_rows(rows, session, settings.library_dir)
+        new, _ = _classify_rows(rows, session, settings.library_dir, settings.audio_format)
         keep_keys = {(r.artist, r.title) for r in new}
         rows = [r for r in rows if (r.artist, r.title) in keep_keys]
     # else: bulk mode + include_duplicates → keep everything
@@ -410,13 +418,35 @@ def ingest_commit(
 
     thread = threading.Thread(
         target=_run_csv_job,
-        args=(job.id, rows, settings.library_dir, settings.youtube_cookies_file),
+        args=(
+            job.id,
+            rows,
+            settings.library_dir,
+            settings.youtube_cookies_file,
+            settings.audio_format,
+            settings.download_workers,
+        ),
         daemon=True,
         name=f"csv-ingest-{job.id}",
     )
     thread.start()
 
     return JobOut(**job.to_dict())
+
+
+def _claim_target_path(session: Session, path: Path, spotify_id: str) -> Path:
+    """The library path for a new Spotify track's audio.
+
+    ``Artist - Title.ext`` normally. If another Track row already owns that
+    path — a same-named recording the dedup decided is *different* (other
+    duration or version) — never adopt or overwrite its file: suffix the
+    new one with its Spotify ID instead. A file on disk that no row owns
+    yet (downloaded but not scanned) is still adopted, as before.
+    """
+    owner = session.query(Track.id).filter(Track.file_path == nfc_path(path)).first()
+    if owner is None:
+        return path
+    return path.with_name(f"{path.stem} [{spotify_id}]{path.suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +520,11 @@ def ingest_track(
         album="",
         duration_s=int(duration_ms / 1000) if duration_ms else 0,
     )
-    expected_path = expected_target(settings.library_dir, csv_row)
+    expected_path = _claim_target_path(
+        session,
+        expected_target(settings.library_dir, csv_row, settings.audio_format),
+        spotify_id,
+    )
 
     # Placeholder file_hash so the row passes the unique constraint;
     # the download worker replaces it with the real SHA256 once the file
@@ -515,20 +549,18 @@ def ingest_track(
     registry = get_job_registry()
     job = registry.create("spotify_ingest", [f"{artist} - {title}"])
 
-    thread = threading.Thread(
-        target=_run_spotify_ingest_job,
-        args=(
-            job.id,
-            int(track.id),
-            csv_row,
-            settings.library_dir,
-            settings.db_url,
-            settings.youtube_cookies_file,
-        ),
-        daemon=True,
-        name=f"spotify-ingest-{job.id}",
+    # Shared bounded pool — the job sits in ``queued`` until a slot frees.
+    get_download_pool(settings.download_workers).submit(
+        _run_spotify_ingest_job,
+        job.id,
+        int(track.id),
+        csv_row,
+        settings.library_dir,
+        settings.db_url,
+        settings.youtube_cookies_file,
+        settings.audio_format,
+        expected_path,
     )
-    thread.start()
 
     return IngestTrackResult(
         track_id=int(track.id),
@@ -629,9 +661,12 @@ def ingest_playlist(
     #     library scan where spotify_id was never set — without this,
     #     re-ingesting via a playlist creates a duplicate Track row even
     #     though the same audio is already in the library).
-    # When fuzzy matches a pre-existing row that has no spotify_id, we
-    # *back-fill* that ID onto the existing row so the next playlist
-    # ingest of the same track short-circuits via the exact-ID path.
+    # When fuzzy matches a pre-existing row that has no spotify_id AND the
+    # durations agree (both known, within 5 s), we *back-fill* that ID onto
+    # the existing row so the next playlist ingest of the same track
+    # short-circuits via the exact-ID path. A name-only match is never
+    # proof of identity — ``Title`` and ``Title (Extended Mix)`` can fuzz
+    # together — so it is skipped (not re-downloaded) but gets no new ID.
     existing_rows = (
         session.query(Track.id, Track.spotify_id)
         .filter(Track.spotify_id.in_([h.spotify_id for h in hits]))
@@ -641,10 +676,13 @@ def ingest_playlist(
 
     # Fuzzy index over *all* tracks in the library — small enough to be cheap
     # (low thousands at most) and avoids per-hit DB queries.
-    full_index_rows = session.query(Track.id, Track.artist, Track.title).all()
+    full_index_rows = session.query(
+        Track.id, Track.artist, Track.title, Track.duration_seconds
+    ).all()
     fuzzy_index = index_existing(
-        [(int(tid), a, t) for tid, a, t in full_index_rows]
+        [(int(tid), a, t, d) for tid, a, t, d in full_index_rows]
     )
+    pool = get_download_pool(settings.download_workers)
 
     registry = get_job_registry()
     added_track_ids: list[int] = []
@@ -659,18 +697,21 @@ def ingest_playlist(
             skipped_track_ids.append(existing_by_sid[hit.spotify_id])
             continue
         # Stage 2: fuzzy (artist, title) match — likely a CSV-ingested twin.
-        # Back-fill the spotify_id so future ingests dedup on the fast path.
-        fuzzy_match = find_duplicate(
-            hit.artist or "", hit.title or "", fuzzy_index
+        # Back-fill the spotify_id only when the duration confirms it.
+        fuzzy_match = match_duplicate(
+            hit.artist or "",
+            hit.title or "",
+            fuzzy_index,
+            incoming_duration_s=(hit.duration_ms / 1000.0) if hit.duration_ms else None,
         )
         if fuzzy_match is not None:
-            existing_track = session.get(Track, fuzzy_match)
+            existing_track = session.get(Track, fuzzy_match.track_id)
             if existing_track is not None:
-                if existing_track.spotify_id is None:
+                if existing_track.spotify_id is None and fuzzy_match.duration_confirmed:
                     existing_track.spotify_id = hit.spotify_id
                     backfilled_spotify_ids += 1
                     session.commit()
-                skipped_track_ids.append(fuzzy_match)
+                skipped_track_ids.append(fuzzy_match.track_id)
                 continue
         # Mirror the per-track flow in ``ingest_track`` — same shape so the
         # downstream pipeline can't tell the difference.
@@ -680,7 +721,11 @@ def ingest_playlist(
             album=hit.album or "",
             duration_s=int(hit.duration_ms / 1000) if hit.duration_ms else 0,
         )
-        expected_path = expected_target(settings.library_dir, csv_row)
+        expected_path = _claim_target_path(
+            session,
+            expected_target(settings.library_dir, csv_row, settings.audio_format),
+            hit.spotify_id,
+        )
         placeholder_hash = f"pending:{hit.spotify_id}"[:64]
         try:
             track = Track(
@@ -703,20 +748,19 @@ def ingest_playlist(
             continue
 
         job = registry.create("spotify_ingest", [f"{hit.artist} - {hit.title}"])
-        thread = threading.Thread(
-            target=_run_spotify_ingest_job,
-            args=(
-                job.id,
-                int(track.id),
-                csv_row,
-                settings.library_dir,
-                settings.db_url,
-                settings.youtube_cookies_file,
-            ),
-            daemon=True,
-            name=f"spotify-playlist-{job.id}",
+        # Queued on the shared pool rather than one thread per track: a
+        # 300-track playlist used to start 300 concurrent yt-dlp processes.
+        pool.submit(
+            _run_spotify_ingest_job,
+            job.id,
+            int(track.id),
+            csv_row,
+            settings.library_dir,
+            settings.db_url,
+            settings.youtube_cookies_file,
+            settings.audio_format,
+            expected_path,
         )
-        thread.start()
         added_track_ids.append(int(track.id))
         job_ids.append(job.id)
 
@@ -739,17 +783,23 @@ def _run_spotify_ingest_job(
     library: Path,
     db_url: str,
     cookies_file: Path | None = None,
+    audio_format: str = "mp3",
+    dest: Path | None = None,
 ) -> None:
-    """Background worker: download one Spotify track and update its Track
+    """Pool worker: download one Spotify track and update its Track
     row's file_hash + file_size_bytes when the audio lands."""
     registry = get_job_registry()
     registry.set_status(job_id, "running")
     try:
         library.mkdir(parents=True, exist_ok=True)
-        status, msg = download_track(csv_row, library, cookies_file=cookies_file)
+        status, msg = download_track(
+            csv_row, library, cookies_file=cookies_file, audio_format=audio_format, dest=dest
+        )
         registry.update_item(job_id, 0, status, msg)
         if status in ("ok", "skip"):
-            _finalize_track_after_download(track_id, library, csv_row, db_url)
+            _finalize_track_after_download(
+                track_id, library, csv_row, db_url, audio_format, dest=dest
+            )
         elif status == "fail":
             _mark_track_error(track_id, db_url, msg)
         registry.set_status(job_id, "done")
@@ -759,13 +809,18 @@ def _run_spotify_ingest_job(
 
 
 def _finalize_track_after_download(
-    track_id: int, library: Path, csv_row: CsvRow, db_url: str
+    track_id: int,
+    library: Path,
+    csv_row: CsvRow,
+    db_url: str,
+    audio_format: str = "mp3",
+    dest: Path | None = None,
 ) -> None:
     """Replace the placeholder file_hash with the real SHA256 + populate
     file_size_bytes. State stays ``pending`` so the dispatcher picks it up."""
     import hashlib
 
-    target = expected_target(library, csv_row)
+    target = dest or expected_target(library, csv_row, audio_format)
     if not target.exists():
         return
     h = hashlib.sha256()
