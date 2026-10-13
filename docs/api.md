@@ -221,6 +221,26 @@ Sample payload:
 
 ---
 
-## CORS
+## Origin guard and CORS
 
-`create_app` (`app.py:80`) allows origins `http://localhost:5173`, `5174`, and the `127.0.0.1` variants — Vite's default and `vite --port 5174`. Anything else is blocked; edit `app.py` if you serve the UI elsewhere.
+CORS alone doesn't protect a local API: it only hides responses from a foreign page, it doesn't stop a "simple" cross-origin POST (no body, `text/plain`, form) from reaching `/ableton/transport/stop-all`, and it doesn't apply to websockets or DNS rebinding at all. So `create_app` puts `OriginGuardMiddleware` (`src/dance/api/origin_guard.py`) in front of everything, HTTP and websocket alike:
+
+| Request | Result |
+|---|---|
+| `Host` not loopback (`127.0.0.1`, `localhost`, `::1`, any port) | 403 — stops DNS rebinding |
+| `Origin` present and not allowlisted, any method (GET included) | 403 / websocket refused with a 403 handshake |
+| `Origin` same as the `Host` it arrived on (FastAPI's own `/docs`) | allowed |
+| No `Origin` (curl, scripts, the CLI) | allowed |
+
+The allowlist is the companion's Vite origins — `http://localhost:5173`, `5174`, and the `127.0.0.1` variants — and doubles as the CORS allowlist. The companion app always passes: Vite proxies `/api` and `/ws`, so the backend sees the page's own allowlisted origin. Cross-origin GETs are blocked too because several GETs do real work (waveforms, Spotify search, OSC queries).
+
+Both lists are settings. Values are comma-separated and **replace** the defaults:
+
+```bash
+# a second companion on port 5175
+DANCE_API_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5175
+# serving the API to another device on purpose (also needs --host 0.0.0.0)
+DANCE_API_ALLOWED_HOSTS=127.0.0.1,localhost,::1,dance-mac.local
+```
+
+`*` turns that check off. Blocked requests log `origin guard: blocked ...` at WARNING with the setting to change.
