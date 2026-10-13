@@ -6,7 +6,9 @@ Two channels:
   Hooks the OSC bridge's subscribe-callback. The bridge runs that on
   the OSC LISTENER thread, not the asyncio loop, so we capture the
   loop on app startup and use ``asyncio.run_coroutine_threadsafe`` to
-  hop back when sending.
+  hop back when sending. Pushes are coalesced to <= ~30 Hz (newest state
+  wins, the last state of a burst always goes out) — see
+  ``dance.api.broadcast_throttle``.
 
 - ``/ws/pipeline`` — Job-registry pushes (CSV ingest progress: items
   flipping from ``pending`` → ``ok`` / ``skip`` / ``fail`` as yt-dlp
@@ -21,6 +23,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from dance.api.broadcast_throttle import STATE_BROADCAST_MAX_HZ, LatestValueThrottle
 from dance.api.jobs import Job, get_job_registry
 
 logger = logging.getLogger(__name__)
@@ -34,9 +37,16 @@ class WSManager:
     A single instance is stored on ``app.state.ws_manager`` by ``create_app``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, state_max_hz: float = STATE_BROADCAST_MAX_HZ) -> None:
         self.connections: set[WebSocket] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
+        # Coalesces ``broadcast_latest_threadsafe`` (AbletonState pushes) to
+        # ``state_max_hz``; see ``dance.api.broadcast_throttle``.
+        self._latest_throttle: LatestValueThrottle[dict] = LatestValueThrottle(
+            self._send_to_all, max_hz=state_max_hz
+        )
+        # Strong refs to in-flight send tasks — the loop only keeps weak ones.
+        self._send_tasks: set[asyncio.Task[None]] = set()
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -59,6 +69,26 @@ class WSManager:
             return
         for ws in list(self.connections):
             asyncio.run_coroutine_threadsafe(self._send_one(ws, payload), loop)
+
+    def broadcast_latest_threadsafe(self, payload: dict) -> None:
+        """Coalescing broadcast from a non-asyncio thread.
+
+        For snapshot streams where only the newest payload matters (the full
+        AbletonState): bursts collapse to at most ``state_max_hz`` sends a
+        second, and the last payload of a burst is always delivered. Not for
+        event streams like job updates — an intermediate payload is dropped.
+        """
+        loop = self.loop
+        if loop is None or loop.is_closed():
+            return
+        self._latest_throttle.submit_threadsafe(payload, loop)
+
+    def _send_to_all(self, payload: dict) -> None:
+        # Runs on the event loop (the throttle's flush), so schedule directly.
+        for ws in list(self.connections):
+            task = asyncio.ensure_future(self._send_one(ws, payload))
+            self._send_tasks.add(task)
+            task.add_done_callback(self._send_tasks.discard)
 
 
 class PipelineWSManager(WSManager):
