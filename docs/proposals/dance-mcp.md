@@ -7,8 +7,9 @@ test in `tests/`, `.gitignore`, docs. No route, request/response schema, model,
 Stage, OSC message or `.als` change, so the tools themselves don't trigger
 CLAUDE.md rule 1.
 **Depends on:** the dispatcher lock (merged in `0902330`, done); plan edits
-that can't drop picks ([`set-plan-revision.md`](set-plan-revision.md), on
-branch `claude/proposal-set-plan-revision`, not merged); a short tagger fix
+that can't drop picks (`set-plan-revision.md`, not on main: two drafts exist,
+on `claude/proposal-set-plan-revision` and `claude/proposal-set-plan-revision-2`,
+so the relative links below resolve only once one merges); a short tagger fix
 (see Prerequisites).
 
 ---
@@ -62,7 +63,9 @@ What the probe shows:
 2. **A sidecar passes the Origin guard as it is.** httpx sends no `Origin` and
    a loopback `Host`, which the guard admits by design (`origin_guard.py:26`
    names "a future MCP server"). So the sidecar must never set `Origin`. It
-   must also refuse to start if `DANCE_API_URL` isn't loopback.
+   must also refuse to start if `DANCE_API_URL` isn't loopback. The probe used
+   httpx 0.27; the sidecar's client would be `httpx2` (mcp 2.x's dependency),
+   so its tests re-assert that no request carries `Origin`.
 3. **Results and errors carry absolute paths:** `TrackOut.file_path`
    (`schemas.py:120`), `RecommendationOut.file_path` (`:140`),
    `StemFileOut.path` (`:72`), `PreviewResult.audio_path` (`:214`),
@@ -75,29 +78,45 @@ What the probe shows:
    off (`main.tsx:11`). So the user's next × erases an agent's
    `plan/append`. [`set-plan-revision.md`](set-plan-revision.md) measures the
    race in full.
-5. **Job history keeps 50** (`jobs.py:106`). `/ingest/playlist` creates one
-   job per *new* track, so a playlist that adds more than 50 evicts its own
-   early job ids.
+5. **Job history keeps 50** (`jobs.py:106`). The trim runs on every save and
+   ignores status (`jobs.py:150-155`), so a still-running job can vanish.
+   `/ingest/playlist` creates one job, and starts one download thread with no
+   concurrency bound, per *new* track (`pipeline.py:726`). A playlist that adds
+   more than 50 evicts its own early job ids.
 6. **`GET /sets` `track_count` counts legacy `set_tracks` rows**
    (`sets.py:182`), not plan picks. It reads 0 for every plan-only set.
 7. **`POST /tracks/{id}/tag` loads its own CLAP on every call.**
    `tracks.py:213` builds `ClapZeroShotTagger(settings)` with no encoder, so
    `_ensure_encoder` loads `EmbeddingStage` from scratch (`tagger.py:188-196`).
-   That's `laion/clap-htsat-unfused`, 1.1 GB in `~/.cache/huggingface`, loaded
-   outside `GPU_SEMAPHORE`.
+   That's `laion/clap-htsat-unfused`: a 615 MB `pytorch_model.bin` on the Hub
+   (the local `~/.cache/huggingface` entry is 1.1 GB because it also holds a
+   safetensors copy). The load also skips `GPU_SEMAPHORE`, which matters only
+   against in-process text encodes: the semaphore is per-process
+   (`_gpu.py:21`), and pipeline runs are a `dance process` subprocess
+   (`pipeline.py:936`).
+8. **An API pipeline run can't last hours.** Each `dance process` pass is
+   killed after 1 h (`pipeline.py:986`), and the job ends as
+   `error: pipeline exceeded 1h timeout` (`:1057`); there are at most 6 passes
+   (`:858`). A pass has no `-n`, so it separates every track waiting for
+   stems, and a big ingest overruns the cap. Per-track Demucs time isn't
+   settled in the docs: `troubleshooting.md:54` says ~1–3 min on MPS, while
+   [`library-duplicates.md`](library-duplicates.md)'s 16.7 h for 145 tracks
+   implies ~7 min. That puts the cap somewhere between ~8 and ~60 tracks.
+   Not checked: whether a killed pass leaves half-written stems.
 
 ### Packaging: `mcp` can't join the dance venv as pinned
 
 spotdl 4.4.3 (installed) and 4.5.2 (latest) both pin `fastapi>=0.103,<0.104`
 and `uvicorn>=0.23.2,<0.24`, and `pyproject.toml:54-55` mirrors that pin. I
-read the PyPI metadata for all 73 non-yanked `mcp` releases (scratch script):
+read the PyPI metadata for all 73 `mcp` releases, pre-releases included; none
+is yanked (scratch script):
 
 | | requires | dance `.venv` has |
 |---|---|---|
 | fastapi 0.103.1, 0.103.2 | `anyio>=3.7.1,<4.0.0` | fastapi 0.103.2, **anyio 3.7.1** |
 | `mcp` 0.9.1 → 2.3.0, every release | `anyio>=4.5` (0.9.1–1.1.0: `>=4.6`; 2.x: `>=4.9`) | — |
 | `mcp` 1.2.0–1.2.1 / 1.13.0 → 1.30.0 and all 2.x | `uvicorn>=0.30` / `uvicorn>=0.31.1` | uvicorn 0.23.2 |
-| `mcp` 2.0.0 → 2.3.0 | `pydantic>=2.12`, `starlette>=0.27` (py<3.14), `httpx2>=2.5` | pydantic 2.12.5, starlette 0.27.0 |
+| `mcp` 2.0.0 → 2.3.0 | `pydantic>=2.12`, `starlette>=0.27` (py<3.14), `httpx2>=2.5` (2.3.0: `>=2.10`) | pydantic 2.12.5, starlette 0.27.0 |
 
 I asked pip's resolver for the combination without installing anything:
 
@@ -114,8 +133,10 @@ shipped on 2023-08-26, four days before anyio 4.0.0 (2023-08-30). The next
 release, 0.103.1 (2023-09-02), added *"Pin AnyIO to < 4.0.0 to handle an
 incompatibility"* ([release notes](https://github.com/fastapi/fastapi/releases/tag/0.103.1)).
 That combination is untested here. It also freezes the SDK at 1.12.4
-(2025-08-07). That's 29 releases behind the maintained 1.x line (1.30.0,
-2026-09-07) and a major version behind 2.3.0 (2026-10-02).
+(2025-08-07). That's 29 stable releases behind the 1.x line, which still
+ships (1.30.0, 2026-09-07), and a major version behind 2.3.0 (2026-10-02).
+A re-run of the dry run with `--only-binary=:all:` for this revision gave the
+same set.
 
 ## Options
 
@@ -132,14 +153,14 @@ nothing from `dance`. Each tool makes one or two calls to existing routes on
   (`ws.py:138`, `usePipelineJobs.ts`). A set switch shows within 5 s
   (`useSets.ts:31`). With no dance imports, the venv split costs nothing.
 - **Against:** it needs the backend running, so the connection error must say
-  how to start it. It also inherits the gaps in findings 3–7.
+  how to start it. It also inherits the gaps in findings 3–8.
 
 ### B. An in-process server that imports `dance` and opens the DB
 
 - It can't be installed (see the table above).
 - If it could, it would bypass the process-local plan lock and job registry.
-  It would load a second 1.1 GB CLAP on a 16 GB Mac that is already running
-  Live and Demucs, and the UI would never see its jobs. **Rejected.**
+  It would load a second CLAP (~0.6 GB of weights) on a 16 GB Mac that is
+  already running Live and Demucs, and the UI would never see its jobs. **Rejected.**
 
 ### C. A Streamable-HTTP `/mcp` endpoint mounted in the FastAPI app
 
@@ -160,9 +181,10 @@ nothing from `dance`. Each tool makes one or two calls to existing routes on
 ### Tool surface
 
 The tool names are the allowlist. Nothing is generated from OpenAPI, because
-the exclusions are the safety property. (djbooth derives its MCP tools from a
-CLI command map filtered by include globs, `packages/djbooth/src/cli.ts:30`.
-Here, a glob like `ableton_*` would sweep in the transport.)
+the exclusions are the safety property.
+([gakonst/djbooth](https://github.com/gakonst/djbooth) derives its MCP tools
+from a CLI command map filtered by include globs,
+`packages/djbooth/src/cli.ts:30` at `452c46f`. Here, a glob like `ableton_*` would sweep in the transport.)
 
 **Read** (`readOnlyHint: true`; `openWorldHint: false` unless marked):
 
@@ -171,14 +193,14 @@ Here, a glob like `ableton_*` would sweep in the transport.)
 | `status` | `GET /health`, `GET /api/v1/pipeline/status`, `GET /api/v1/health/deps`, `GET /api/v1/pipeline/recent?state=error&limit=10` | state counts, `weighted_progress`, dep **statuses** (not `detail`), recent errors |
 | `search_tracks` | `GET /api/v1/tracks/search` (`tracks.py:57`) | id, title, artist, bpm, key, energy, state, tags |
 | `spotify_search` (open world) | `GET /api/v1/spotify/search` (`spotify.py:24`) | spotify_id, title, artist, duration. `ingest_track` needs the id |
-| `vibe_search` | `POST /api/v1/recommend/text` (`recommend.py:128`) | as `search_tracks`, plus score. The first call loads CLAP, ~12–30 s on MPS (`recommend.py:110`), so this call's HTTP timeout is 60 s |
+| `vibe_search` | `POST /api/v1/recommend/text` (`recommend.py:128`) | as `search_tracks`, plus score. The first call loads CLAP. A code comment puts that at ~12–30 s on MPS (`recommend.py:110`, not measured), so this call's HTTP timeout is 60 s |
 | `similar_tracks` | `GET /api/v1/recommend/by-seed/{track_id}` (`recommend.py:76`) | as above, plus reasons |
 | `get_track` | `GET /api/v1/tracks/{track_id}` + `…/regions` (`tracks.py:152`, `:163`) | analysis and sections. The route has no "track-level only" filter, so the tool drops rows that have a `stem_file_id` |
 | `list_sets` | `GET /api/v1/sets` | id, name, is_active, updated_at. Not `track_count` (finding 6) |
 | `get_plan` | `GET /api/v1/sets/{set_id}/plan`; with no `set_id`, `GET /api/v1/sets/active` first | queues by role |
 | `plan_recs` | `GET /api/v1/sets/{set_id}/plan-recs?role=` (`sets.py:635`) | recs with score_breakdown |
 | `live_state` | `GET /api/v1/ableton/state`, `GET /api/v1/ableton/decks` | tempo, is_playing, what's loaded where. No meters or playheads |
-| `wait_job` | polls `GET /api/v1/pipeline/jobs/{job_id}` every 1 s, `timeout_s ≤ 25` | job snapshot and `done`. For a `pipeline_run` it adds `/pipeline/status` counts, because every stage item just says "running…" (`pipeline.py:922`) |
+| `wait_job` | polls `GET /api/v1/pipeline/jobs/{job_id}` every 1 s, `timeout_s ≤ 25` | job snapshot and `done`. For a `pipeline_run` it adds `/pipeline/status` counts, because every stage item stays `pending` / "running…" until the run ends (`pipeline.py:922`, `:1045`) |
 
 **Write** (permission prompt on every call; `readOnlyHint: false`).
 `destructiveHint` is set explicitly on every tool because the spec defaults
@@ -191,8 +213,8 @@ it to `true` ([schema](https://github.com/modelcontextprotocol/modelcontextproto
 | `plan_append` | `POST /api/v1/sets/{set_id}/plan/append`. **Never** `PUT /plan` | F / T / F | no-op if already queued (`sets.py:626`; probe [4]) |
 | `ingest_track` | `POST /api/v1/pipeline/ingest/track` | F / T / **T** | idempotent on `spotify_id` (`pipeline.py:465`) |
 | `ingest_playlist` | `POST /api/v1/pipeline/ingest/playlist` | F / T / **T** | **no `user_token` argument**, because tool arguments land in transcripts. The route falls back to `DANCE_SPOTIFY_USER_TOKEN` |
-| `run_pipeline` | `POST /api/v1/pipeline/process` → job id | F / F / F | runs *every* pending track, not only the agent's. Demucs is ~6.9 min/track (16.7 h for 145 tracks, [`library-duplicates.md`](library-duplicates.md)) |
-| `export_als` | `POST /api/v1/tracks/{track_id}/als` | **T** / T / F | **no `out_path`**. It overwrites `<als_output_dir>/<title> - <artist>.als` (`generator.py:66-71`), including edits saved there from Live |
+| `run_pipeline` | `POST /api/v1/pipeline/process` → job id | F / F / F | runs *every* pending track, not only the agent's. Each pass is capped at 1 h (finding 8) |
+| `export_als` | `POST /api/v1/tracks/{track_id}/als` | **T** / T / F | **no `out_path`**. It overwrites `<als_output_dir>/<title> - <artist>.als` (`generator.py:68-73`), including edits saved there from Live |
 | `tag_track` | `POST /api/v1/tracks/{track_id}/tag`, CLAP only, never `deep` | **T** / T / F | replaces `inferred` tags. Ships after prerequisite 3 |
 
 `run_pipeline`, `ingest_playlist` and `export_als` also set
@@ -260,6 +282,7 @@ Why have a guard:
 | `503` Spotify not configured / `401` user token | "Ask the user to add the credential to `~/.dance/.env` and restart the backend (settings load once, `deps.py:29`). Never paste it into chat." |
 | `503 CLAP model unavailable` | + "`search_tracks` and `similar_tracks` work without it." |
 | `404 job not found` for an id it handed out | "Job evicted from the 50-job history (`jobs.py:106`). Use `status` or `get_track`." |
+| job `error: pipeline exceeded 1h timeout` | "The run hit the 1 h per-pass cap. Check `status` for what advanced, then ask the user before calling `run_pipeline` again." |
 
 **Results are projections.** Each tool names the fields it returns, so the
 path fields in finding 3 never leave the sidecar. Free text (error details,
@@ -289,8 +312,9 @@ localhost (probe [4]), so the polling is free. The 25 s cap keeps each call
 short and gives the user a chance to interrupt between calls. Claude Code moves
 a main-conversation MCP call to the background after 2 minutes, and the stdio
 idle timeout is 30 minutes ([docs](https://code.claude.com/docs/en/mcp)).
-A `run_pipeline` can last hours, so the instructions tell the agent to report
-progress and hand back to the user rather than loop on `wait_job`.
+A big `run_pipeline` outlasts any sensible wait and may hit the 1 h pass cap
+(finding 8), so the instructions tell the agent to report progress and hand
+back to the user rather than loop on `wait_job`.
 
 ### Packaging (precise)
 
@@ -323,13 +347,14 @@ constructor takes `instructions=` (read from the `v2.3.0` tag). `uv` and
 Code loads project-scoped servers without the approval prompt in `claude -p`,
 Agent SDK and cloud sessions
 ([docs](https://code.claude.com/docs/en/mcp#project-scope)). Each worktree has
-its own copy of `.mcp.json`. This repo has 19 linked worktrees right now, and
-the workflow agents in them run as Agent SDK sessions with permissions
+its own copy of `.mcp.json`. This repo had 21 linked worktrees when checked,
+and the workflow agents in them run as Agent SDK sessions with permissions
 bypassed (this proposal was drafted by one). A checked-in `.mcp.json` would
 give every one of them `plan_append` and `activate_set` against the real
 backend on :8000, which is exactly what those agents' rules forbid. Local
 scope is stored in `~/.claude.json` under the project's path, so worktrees
-don't get it. Run this from `/Users/arya/git/dance`:
+shouldn't get it. The docs don't mention worktrees, so verification step 4
+checks it. Run this from `/Users/arya/git/dance`:
 
 ```bash
 claude mcp add --env DANCE_API_URL=http://127.0.0.1:8000 --transport stdio --scope local \
@@ -400,24 +425,29 @@ re-include a path under an excluded directory, and the check confirmed it.
    included. The dispatcher no longer claims `pending:` placeholder rows
    mid-download (`dispatcher.py:275`). That matters here because *ingest →
    run_pipeline* is exactly the sequence an agent will issue.
-2. **Plan edits can't drop picks** ([`set-plan-revision.md`](set-plan-revision.md),
-   its C + D-lite). Until that lands, the Set view doesn't show an agent's
+2. **Plan edits can't drop picks** ([`set-plan-revision.md`](set-plan-revision.md)).
+   The two drafts differ: one recommends C + D-lite, the other C + a hash
+   check on the remaining PUT + a 5 s plan poll. Either works here: what this
+   needs is C (a server-side remove, so × stops PUTting a stale cache) plus a
+   plan refresh. Until that lands, the Set view doesn't show an agent's
    picks, and its next × erases them (probe [4]). The write tier waits for
    it. The read tier doesn't need it.
 3. **`tag_track` shares the encoder.** At `tracks.py:213`, pass
-   `text_encoder=_get_text_encoder(request, settings)` from `recommend.py`,
-   which also gates on `GPU_SEMAPHORE`. That's a three-line change with no
-   schema impact, so rule 1 doesn't apply. Until it lands, leave `tag_track`
-   out.
+   `text_encoder=_get_text_encoder(request, settings)` from `recommend.py:90`,
+   which also gates each encode on `GPU_SEMAPHORE`. That's about three lines
+   (a `request` parameter, an import, the argument) with no schema impact,
+   so rule 1 doesn't apply. Until it lands, leave `tag_track` out.
 
 ## Decisions for the user
 
 1. **Venv split** (recommended), or fastapi 0.103.0 + mcp 1.12.4 inside
-   `.venv`?
+   `.venv`? Within the split, `mcp` 2.x (recommended: `MCPServer`, current
+   docs) or the 1.x line (`FastMCP`, still releasing)?
 2. **Local-scope registration** (recommended), or the checked-in `.mcp.json`
    from the original brief? The checked-in file exposes the tools to every
-   headless worktree agent. Blocking that would need `disabledMcpjsonServers`
-   in each worktree, or the server refusing to run outside the main checkout.
+   headless worktree agent. Blocking that would need `disabledMcpjsonServers`,
+   `--strict-mcp-config` or `--setting-sources` on every agent launch (all
+   documented), or the server refusing to run outside the main checkout.
 3. **Ship in tiers?** Recommended: read tools now, write tools once
    prerequisite 2 has merged.
 4. **Which writes always prompt?** Proposed: `run_pipeline`,
@@ -428,6 +458,11 @@ re-include a path under an excluded directory, and the check confirmed it.
 6. **Preview:** ship the env-gated pair, or drop it from v1?
 7. **After set-plan-revision's C lands:** add `plan_remove` (so the user can
    undo an agent's pick by asking) and `plan_move`, or stay append-only?
+8. **The 1 h pass cap** (finding 8): accept it, so the agent re-runs
+   `run_pipeline` with the user's approval and each run picks up the tracks
+   still waiting (recommended for v1, no backend change; needs the
+   half-written-stems check), or raise or remove the cap in the backend first
+   (a separate small change)?
 
 ## Migration cost
 
@@ -448,8 +483,8 @@ re-include a path under an excluded directory, and the check confirmed it.
    - Spawn `dance-mcp` with the SDK's stdio client and run `create_set` →
      `activate_set` → `plan_append` ×3 → `get_plan`.
    - With `DANCE_API_TARGET=http://127.0.0.1:8765 npx vite --port 5174` open,
-     the picks should appear within 5 s (D-lite), and × on another pick must
-     leave them in place (C).
+     the picks should appear within 5 s (the plan-freshness fix), and × on
+     another pick must leave them in place (C).
 3. **Real rig, real weights (rule 2)**, against the user's backend:
    - `vibe_search("rolling bassline")`, timing the cold CLAP load;
    - `spotify_search` → `ingest_track` → `wait_job` → `run_pipeline` →
@@ -457,6 +492,9 @@ re-include a path under an excluded directory, and the check confirmed it.
    - `export_als`, then open the file in Live: 5 tracks load, audio plays,
      tempo is right;
    - with a deck clip playing, every write tool must refuse;
+   - kill a `dance process` pass mid-separation (as the 1 h cap would) and
+     check the track's state and stem files, to settle finding 8's open
+     question;
    - with preview on, check whether firing the Cue clip starts Live's
      transport (unverified), and that `preview_stop` leaves Live as it was.
 
