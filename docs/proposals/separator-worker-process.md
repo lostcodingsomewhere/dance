@@ -44,14 +44,17 @@ being analyzed, yet their message tells the user to change the Demucs device. Un
 | Successful separations in the 12 API job logs (2026-05-24/25) | 85 |
 | Demucs compute, from `Separating:` to `✓ separate` | median **93 s**, p90 188 s, max 343 s |
 | Claim to done (includes the semaphore wait) | median 197 s, max 981 s |
-| Compute ÷ track duration (81 tracks joined to `duration_seconds`) | median 0.44, max 0.87 |
+| Compute ÷ track duration (81 of the 85; tracks 201/202, incl. the 343 s one, have no `duration_seconds`) | median 0.42, p90 0.48, max 0.60 |
+| Duration of those 81 tracks | median 208 s, max 530 s |
 | Model load, from `Loading Demucs model` to the first `Separating:` | 1–3 s (once 7 s) |
 | The 5 pipeline jobs still in `jobs.json` | 1 done, 3 × `rc=-15` (SIGTERM), 1 × "pipeline exceeded 1h timeout", **0 × SIGBUS** |
 | ERROR tracks in the DB today | 4, all catchable errors in `separate`: 2 MPS OOM, 2 `AssertionError` |
 
-These logs were written at `shifts=1`. The default has been `shifts=2` since `f14e99d`
-(`config.py:103`), which runs two passes of the model, so expect about 3 min per track
-today. Two consequences:
+These logs were written at `shifts=1`: before `f14e99d` the stage passed no `shifts`, so
+demucs used its default of 1 (`demucs/apply.py:134`). (That commit's message says the old
+value was 0; the code says otherwise.) The default has been `shifts=2` since then
+(`config.py:103`). Each shift is one full pass of the model (`apply.py:206-218`), so expect
+roughly double the compute today, about 3 min for a median track. Two consequences:
 
 - **SIGBUS has not appeared in the recorded runs.** The crash is documented on an off-spec
   Python 3.14 venv (`docs/troubleshooting.md:44-46`, heal ledger `52ace3d`). The venv is
@@ -61,8 +64,8 @@ today. Two consequences:
   when job `a899e3e07547` was SIGTERMed. It was healed, claimed again, and was in flight when
   `58aad2d89779` was SIGTERMed too. Under today's ledger the next run would have flagged it
   "repeated native crash (likely SIGBUS)". In fact the run that started next (`57c01b005f54`)
-  separated it cleanly in 172 s. A child's own exit status is a direct signal; the ledger
-  is an inference.
+  separated it cleanly (about 170 s of compute). A child's own exit status is a direct
+  signal; the ledger is an inference.
 
 ## Proposal
 
@@ -92,7 +95,8 @@ dance process (parent: owns DB, dispatcher, GPU permit)      separator worker (c
   job and still parses cleanly.
 - **stderr is inherited.** Under the API it lands in `pipeline-logs/<job>.log`, as today.
 - **The parent validates every frame** with pydantic (already a dependency) and checks that
-  `id` matches. An unknown `v` fails the job.
+  `id` matches. An unknown `v` fails the job. This mirrors djbooth, which `zod`-parses each
+  helper result (`index.ts:22-59`, `.parse` at `:145-192`).
 - **Model and device are fixed when the worker is spawned.** A different
   `settings.demucs_model` means a respawn. `shifts` and the PCM subtype travel with each
   request.
@@ -131,28 +135,31 @@ dance process (parent: owns DB, dispatcher, GPU permit)      separator worker (c
 
 | deadline | value | basis |
 |---|---|---|
-| spawn → `ready` | 300 s | Spawn plus `import torch, demucs` plus MPS init measured 0.63–0.73 s (Experiment B), and the model load is 1–3 s. The rest is headroom for a first-run download of the 321 MB of weights. |
-| job on MPS | `120 s + 2.0 × max(1, shifts) × duration_s` | The worst observed ratio is 0.87 × duration per model pass. At `shifts=2` this allows 4× duration, about 2.3× headroom. For a median 228 s track that is 17 min. |
+| spawn → `ready` | 300 s | Spawn plus `import torch, demucs` plus MPS init measured 0.63–0.75 s over two runs of Experiment B, and the model load is 1–3 s. The rest is headroom for a first-run download of the weights: `htdemucs_ft` is a bag of 4 checkpoints of 84 MB each, 337 MB (321 MiB) in all. |
+| job on MPS | `120 s + 2.0 × max(1, shifts) × duration_s` | The worst observed ratio is 0.60 × duration per model pass. At `shifts=2` this allows 4× duration, about 3.3× headroom over the worst case. For a median 208 s track that is 16 min. |
 | job on CPU (after `retrying`, or in a CPU worker) | the MPS value × 4 | **Unmeasured**: the docs say CPU takes "a few minutes per track instead of ~1–3". Measure it in verification step 3. |
-| shutdown | 10 s | Then `killpg`. The worker gets `start_new_session=True` so the kill reaches any grandchildren. |
+| shutdown | 10 s | Then `killpg`. The worker gets `start_new_session=True` so the kill reaches any grandchildren. Side effect: a terminal Ctrl-C (SIGINT to the foreground process group) no longer reaches the worker directly; it stops when the parent shuts it down or, if the parent dies, via the watchdog below. |
 
 - **There is no heartbeat.** `apply_model` in demucs 4.0.1 takes only `progress: bool`,
   which drives tqdm, not a callback (`demucs/apply.py:132-138`). A heartbeat thread would
   also keep beating while the main thread is stuck inside a Metal call.
 - **No hang has been observed.** The deadline is a defensive bound.
 - **The API cap still applies.** Its 1 h `subprocess.run` cap per pass (`pipeline.py:986`)
-  is still the outer bound. One 3742 s track in the library would need about an hour of
-  compute on its own at `shifts=2`.
+  is still the outer bound. The longest track in the library (3742 s) would need about
+  50 min of compute on its own at `shifts=2` (3742 × 0.42 × 2).
 - **Idle shutdown.** The client stops the worker after 60 s with no request, and at
   interpreter exit. `dance ingest` keeps the interpreter alive for build-graph, tag and
   export-als after `process`, and the model should not sit resident through them. The worker
   also exits on stdin EOF.
 - **Orphans are measured (Experiment B2).**
-  - **With the watchdog:** SIGKILLing the parent mid-job, which is what the API cap does,
-    leaves the worker alive for 0.25 s.
+  - **With the watchdog:** after SIGKILLing the parent mid-job, the worker was gone within
+    0.25 s (the poll interval).
   - **Without it:** the worker was still computing 15 s later. Meanwhile a new run could
-    already take the dispatcher lock, because the orphan never held it: the lock fd is not
-    inheritable (`dispatcher_lock.py:292-293`). Two separators would then share the GPU.
+    already take the dispatcher lock, because the orphan never held it: the lock fd is
+    opened `O_CLOEXEC` (`dispatcher_lock.py:195`) and an adopted one is made
+    non-inheritable (`:292-293`). Two separators would then share the GPU.
+  - (The API cap raises `TimeoutExpired`, and `subprocess.run` then kills the pass with
+    SIGKILL, so this is the API's path, not a hypothetical.)
 
 ### GPU semaphore (`_gpu.py`)
 
@@ -176,8 +183,11 @@ dance process (parent: owns DB, dispatcher, GPU permit)      separator worker (c
   - **The MPS cache is not shared across processes.** The worker calls
     `torch.mps.empty_cache()` after each job so that CLAP in the parent can use the memory.
   - **Each process gets its own allocator cap.** `PYTORCH_MPS_HIGH_WATERMARK_RATIO` defaults
-    to 1.7 ([PyTorch 2.9 docs](https://docs.pytorch.org/docs/2.9/mps_environment_variables.html)).
-    The logged "max allowed: 18.13 GiB" on this 16 GB Mac is that cap. Giving the separator
+    to 1.7, a multiple of Metal's `recommendedMaxWorkingSetSize`
+    ([PyTorch 2.9 docs](https://docs.pytorch.org/docs/2.9/mps_environment_variables.html)).
+    The "max allowed: 18.13 GiB" in the two OOM tracks' `error_message` on this 16 GiB Mac is
+    that cap (18.13 / 1.7 ≈ 10.7 GiB working set; inferred, not queried). With two
+    processes, each may reach it, so their sum can exceed physical RAM. Giving the separator
     alone a lower ratio might turn swapping into a catchable OOM. That is a hypothesis.
   - **Measure peak memory** for the parent and the worker together in verification step 3.
 
@@ -251,6 +261,19 @@ bare multiprocessing.Process per track (spawn)
   - **Against:** it still needs a results channel, the same deadline and kill logic, and
     the same orphan watchdog.
 
+## Alternative: defer, with only the cheap fixes
+
+SIGBUS has not appeared in the recorded runs on the 3.13 venv, so waiting is defensible.
+
+- **Cheap fixes that need no worker:** set `separate.concurrency = 1` (removes the
+  pre-claimed bystander in `separate`), and the two message follow-ups at the end
+  (catch `AssertionError` in the CPU retry; stop the ledger blaming Demucs for every stage).
+  Under an hour, no protocol work.
+- **What it leaves:** a native crash still kills the run and the `analyze`/`embed` tracks in
+  flight, still needs three passes to settle, and still costs innocent ERRORs. There is
+  still no bound on a hang, and a RoFormer separator would still have to share the torch
+  venv or bring this design with it.
+
 ## Recommendation
 
 **Build the long-lived worker, in two steps.**
@@ -268,6 +291,8 @@ less code. Decision 1 is that trade.
 
 ## Decisions for the user
 
+0. **Now or later.** Build step 1 now (recommended: the blast radius in Experiment A is the
+   cost, not the crash rate), or defer and take only the cheap fixes above.
 1. **Worker shape.**
    - **Long-lived worker (recommended):** keeps the model warm and allows a pinned env.
    - **Per-track `Process`:** simpler, but stays in the same venv.
@@ -300,8 +325,8 @@ less code. Decision 1 is that trade.
 - **`config.py`** gets 3 settings.
 - **Tests:**
   - `tests/test_separate.py` (2 tests) and the stage tests in `test_stems_hygiene.py` patch
-    `sep.apply_model`, `sep.torch`, `sep.librosa` and `sep.sf`. They re-target the worker
-    core in `inline` mode.
+    `sep._DEMUCS_OK`, `sep.apply_model`, `sep.get_model`, `sep.torch`, `sep.librosa` and
+    `sep.sf`. They re-target the worker core in `inline` mode.
   - The pure-helper tests are unchanged.
 - **Docs:** rewrite the SIGBUS section of `docs/troubleshooting.md`.
 - **Behaviour changes:**
@@ -310,7 +335,8 @@ less code. Decision 1 is that trade.
     `DANCE_GPU_CONCURRENCY=1`
   - a hang now ERRORs at the deadline
   - error texts change
-- **Effort:** about one day of work, plus the real-data run.
+- **Effort (estimate):** about one day of work, plus the real-data run. The line counts
+  above are estimates too; the scratch prototype's client is 138 lines.
 
 ## Verification plan
 
@@ -377,4 +403,6 @@ less code. Decision 1 is that trade.
   no-progress timeout.
 
 Evidence scripts (scratch, not committed): `exp_a.py`, `exp_b.py`, `exp_b2.py`, `exp_c.py`,
-`parse_logs.py`, `rtf.py`. They ran against the worktree's `src` with an isolated HOME.
+`parse_logs.py`, `rtf.py`. They ran against the worktree's `src` with an isolated HOME;
+A, B, B2 (both modes) and C were re-run for the fact-check on 2026-10-13 and reproduced. The
+log and DB numbers come from read-only reads (`sqlite3 ...?immutable=1`).
