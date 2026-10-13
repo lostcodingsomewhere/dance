@@ -1,399 +1,408 @@
-# Separator worker process: Demucs out of the `dance process` interpreter
+# Separator worker: Demucs in a long-lived child process
 
-**Status:** proposal, not implemented
-**Date:** 2026-10-13
-**Touches:** `pipeline/stages/separate.py` (internals only), new `src/dance/separator/`
-(worker + client), three settings in `config.py`, `docs/troubleshooting.md`.
-**Does not touch:** the Stage protocol, the dispatcher, models/Alembic, API
-schemas, the OSC contract, or the `.als` writer.
+**Status:** proposed (2026-10-13), not implemented
+**Touches:** `pipeline/stages/separate.py` (internals of `process()` only), a new
+`src/dance/separator/` package, three settings in `config.py`, tests, `docs/troubleshooting.md`.
+**Does not touch:** the Stage protocol, the dispatcher, models/Alembic, API schemas, the OSC
+contract, the `.als` writer, or stem paths on disk.
 
 ---
 
-## The problem, measured
+## The problem
 
-Demucs runs inside the `dance process` interpreter (`separate.py:99-129`). A
-native crash in torch/MPS (SIGBUS, which a shell reports as exit 138) is not an
-exception. The dispatcher's `except Exception` (`dispatcher.py:445`) never sees
-it, so the whole interpreter dies. Every track that is in flight in *any*
-stage is left in its `*-ing` state. The next run handles those tracks in
-`_heal_inflight_orphans` (`dispatcher.py:534-621`): each orphan gets a heal-ledger
-count, and after 2 heals (`_MAX_HEALS_BEFORE_ERROR`, `dispatcher.py:50`) the track
-is set to ERROR. The ledger was added on 2026-06-13 (`52ace3d`).
+Demucs runs inside the `dance process` interpreter (`separate.py:67-78`, `:380`, `:399`). A
+native crash in torch/MPS (SIGBUS, exit 138 in a shell) is not an exception: the dispatcher
+thread's `except Exception` (`dispatcher.py:460`) never runs and the whole process dies. Every track
+in flight in *any* stage is left in its `*-ing` state. The next run's
+`_heal_inflight_orphans` (`dispatcher.py:553-640`) requeues each one and counts the heal in
+`heal_ledger.json`. On the second heal (`_MAX_HEALS_BEFORE_ERROR = 2`, `:52`) it sets
+the track to ERROR with "repeated native crash … try DANCE_DEMUCS_DEVICE=cpu" (`:602-607`).
 
-### Reproduced on today's code (Experiment A)
+### Reproduced on today's `main` (Experiment A)
 
-The harness uses this branch's real `Dispatcher` and `HealLedger` against a
-throwaway SQLite DB. The stages are fakes that copy the real stages' attributes:
-`separate` has concurrency 2 and `uses_gpu`, and `analyze` has concurrency 2. The
-fake `separate` raises a real `os.kill(getpid(), SIGBUS)` on track 1. Each pass
-runs in a fresh interpreter through `subprocess.run`, the same way the API runs
-`dance process` (`api/routers/pipeline.py:944`).
+This uses the real `Dispatcher`, `HealLedger` and dispatcher lock against a scratch HOME and
+SQLite DB. Only the stage bodies are fakes, and they keep the real stages' attributes:
+`separate` has concurrency 2 and `uses_gpu`, and `analyze` has concurrency 2. The fake
+`separate` raises a real `SIGBUS` on track 1. Each pass runs in a fresh interpreter, the
+same way the API runs `dance process` (`api/routers/pipeline.py:979`).
 
-| pass | returncode | after the pass |
+| pass | rc | after the pass |
 |---|---|---|
-| 1 | `-10` (SIGBUS) | tracks 1, 2 stuck `separating`; 5, 6 stuck `analyzing`; 3, 4 never reached |
-| 2 | `-10` | the four orphans are healed (count 1), the same crash happens, and the same four are stuck again |
-| 3 | `0` | 3, 4 `separated`. **1, 2, 5, 6 all `error`:** *"repeated native crash (likely SIGBUS/exit 138) during separate / during analyze … (try DANCE_DEMUCS_DEVICE=cpu)"* |
+| 1 | `-10` | 1, 2 stuck `separating`; 5, 6 stuck `analyzing`; 3, 4 never reached |
+| 2 | `-10` | the four are healed (count 1), the same crash happens, and the same four are stuck |
+| 3 | `0` | 3, 4 `separated`. **1, 2, 5, 6 all `error`**: "repeated native crash … during separate / during analyze … (try DANCE_DEMUCS_DEVICE=cpu)" |
 
-One bad track costs three runs and produces four ERRORs, three of them on
-innocent tracks:
+So one bad track takes three runs and leaves four ERRORs, three of them on innocent tracks.
+Track 2 never ran: it was claimed and then waited on the GPU semaphore. Tracks 5 and 6 were
+being analyzed, yet their message tells the user to change the Demucs device. Under the API,
+`rc != 0` ends the job (`pipeline.py:990-991`), so recovery takes three presses of Process.
 
-- Track 2 never ran. It had been claimed, then waited on the GPU semaphore
-  (`dispatcher.py:440-442`).
-- Tracks 5 and 6 were partway through `analyze`. Their error tells the user to
-  change the *Demucs* device.
+### What the real data says (read-only: `~/.dance/pipeline-logs`, `jobs.json`, DB via `immutable=1`)
 
-Under the API, each crashing pass also ends the job, because `rc != 0` breaks
-the loop at `pipeline.py:954`. Recovery therefore takes three presses of
-Process.
+| fact | number |
+|---|---|
+| Successful separations in the 12 API job logs (2026-05-24/25) | 85 |
+| Demucs compute, from `Separating:` to `✓ separate` | median **93 s**, p90 188 s, max 343 s |
+| Claim to done (includes the semaphore wait) | median 197 s, max 981 s |
+| Compute ÷ track duration (81 of the 85; tracks 201/202, incl. the 343 s one, have no `duration_seconds`) | median 0.42, p90 0.48, max 0.60 |
+| Duration of those 81 tracks | median 208 s, max 530 s |
+| Model load, from `Loading Demucs model` to the first `Separating:` | 1–3 s (once 7 s) |
+| The 5 pipeline jobs still in `jobs.json` | 1 done, 3 × `rc=-15` (SIGTERM), 1 × "pipeline exceeded 1h timeout", **0 × SIGBUS** |
+| ERROR tracks in the DB today | 4, all catchable errors in `separate`: 2 MPS OOM, 2 `AssertionError` |
 
-### What the real logs show
+These logs were written at `shifts=1`: before `f14e99d` the stage passed no `shifts`, so
+demucs used its default of 1 (`demucs/apply.py:134`). (That commit's message says the old
+value was 0; the code says otherwise.) The default has been `shifts=2` since then
+(`config.py:103`). Each shift is one full pass of the model (`apply.py:206-218`), so expect
+roughly double the compute today, about 3 min for a median track. Two consequences:
 
-These figures come from `~/.dance/pipeline-logs`, read-only. The 12 job logs
-date from 2026-05-24/25, before the heal ledger existed.
-
-- **Timing.** 85 successful separations.
-  - Demucs compute, measured from the `Separating:` line to `✓ separate` (so it
-    excludes the semaphore queue): min 51 s, **median 93 s**, p75 145 s, max
-    343 s.
-  - Claim-to-done wall time: median 197 s, max 981 s.
-  - Model load, from `Loading Demucs model` to the first `Separating:`: 1–3 s
-    (once 7 s).
-- **Runs that died without a trace.** 4 of the 8 non-empty job logs end with no
-  traceback and no end-of-run summary. The exit code was not recorded; it
-  lived only in the in-memory job registry.
-  - `a899e3e07547` stops 17 min in, at `Separating: … Surrender` (track 206),
-    with another separation still open.
-  - `58aad2d89779` heals 206 and starts separating it, then its log ends within
-    seconds.
-  - `57c01b005f54` heals 206 and 207, runs one Demucs at a time, and
-    **separates 206 cleanly in 172 s**.
-
-  Today's ledger would have marked 206 ERROR after the second death. That
-  argues against treating every crash as a property of the track.
-- **Runs that hit the time cap.** `57c01…` and `8fade2c81b76` each stop about
-  1 h after they start, mid-separation. Each is followed by `Healed 2 inflight
-  orphans {'separate': 2}`. This is consistent with the API's 1-hour per-pass
-  cap (`pipeline.py:951`), which SIGKILLs the whole pipeline.
-- **Catchable errors.** The same `57c01` run shows what a *catchable* failure
-  looks like. Track 222 hit a Python `RuntimeError: MPS backend out of memory
-  (MPS allocated: 14.44 GiB … max allowed: 18.13 GiB. Tried to allocate 4.92
-  GiB)` after 14.7 min. It was marked ✗ and the run continued. The run also
-  logged 131 `kIOGPUCommandBufferCallbackErrorOutOfMemory` lines. This is the
-  case the current code already handles, because the error surfaces as a
-  Python exception.
-
-### Why a warm model is a bonus, not the main argument
-
-Starting a cold worker interpreter costs 0.86–0.95 s. That covers importing
-torch, demucs and librosa plus the first MPS allocation, measured 3× with no
-weights loaded. Loading the model takes another 1–3 s. Together that is about
-3 % of the 93 s median for `htdemucs_ft`, whose weights are 4 × 84 MB
-checkpoints in `~/.cache/torch/hub/checkpoints`.
-
-That overhead becomes significant with the next separator. djbooth's
-Mel-Band-RoFormer checkpoint is **3.76 GB** (`djbooth_stems_mlx.py:25`), about
-11× larger. **The case for this change is isolation.** Keeping the model warm is
-cheap to add now and will be needed later.
+- **SIGBUS has not appeared in the recorded runs.** The crash is documented on an off-spec
+  Python 3.14 venv (`docs/troubleshooting.md:44-46`, heal ledger `52ace3d`). The venv is
+  3.13.3 today. The case for this proposal is the blast radius when a crash does happen
+  (Experiment A), a bound on hangs, and the second separator, not crash frequency.
+- **The ledger cannot tell a native crash from a killed parent.** Track 206 was in flight
+  when job `a899e3e07547` was SIGTERMed. It was healed, claimed again, and was in flight when
+  `58aad2d89779` was SIGTERMed too. Under today's ledger the next run would have flagged it
+  "repeated native crash (likely SIGBUS)". In fact the run that started next (`57c01b005f54`)
+  separated it cleanly (about 170 s of compute). A child's own exit status is a direct
+  signal; the ledger is an inference.
 
 ## Proposal
 
 ```
-dance process (parent; owns the DB)              separator worker (child; no `dance` imports)
-  Dispatcher ── separate thread (concurrency=1)    <separator_python> -I src/dance/separator/worker.py
-    SeparateStage.process()                          load model once ─▶ {"event":"ready",…}
-      SeparatorClient ── stdin: one JSON line ──▶    decode → apply_model → WAVs into tmp dir
-                     ◀── stdout: one JSON line ──    {"ok":true,"stems":{…},…}
-      validate → os.replace(tmp → stems_dir/<hash8>/<kind>.wav) → StemFile rows → SEPARATED
+dance process (parent: owns DB, dispatcher, GPU permit)      separator worker (child: no `dance` imports)
+  separate thread (concurrency 1)                              <separator_python> -I src/dance/separator/demucs_worker.py
+    StemSeparationStage.process()                                --model htdemucs_ft --device mps
+      SeparatorClient ── stdin: one JSON line per job ──▶        load model once ─▶ ready
+                      ◀── stdout: one JSON line per reply ──     decode → apply_model → QC → hidden temps
+      validate → delete stale rows → os.replace temps → StemFile rows → SEPARATED
 ```
 
-### Protocol (JSON lines, `v: 1`)
+### Protocol: JSON lines, `"v": 1`, one request in flight
 
 | direction | frame |
 |---|---|
 | child → parent, once | `{"v":1,"event":"ready","pid":…,"model":"htdemucs_ft","device":"mps","versions":{"torch":"2.9.1","demucs":"4.0.1"},"load_s":2.1}` |
-| parent → child | `{"v":1,"op":"separate","id":"<uuid>","audio":"/abs/in.mp3","tmp_dir":"<stems_dir>/.tmp-<hash8>-<id>","shifts":2,"bit_depth":"PCM_24"}` |
-| child → parent | `{"v":1,"id":…,"ok":true,"stems":{"drums":"…/drums.wav",…},"sample_rate":44100,"model":"htdemucs_ft","seconds":93.4}` |
-| child → parent | `{"v":1,"id":…,"ok":false,"error":{"type":"RuntimeError","message":"MPS backend out of memory …"}}` |
-| parent → child, end of run | `{"v":1,"op":"shutdown"}` → `{"v":1,"event":"bye"}`, exit 0 |
+| parent → child | `{"v":1,"op":"separate","id":"<hex>","audio":"/abs/mix.mp3","out_dir":"<stems_dir>/<hash8>","shifts":2,"subtype":"PCM_24"}` |
+| child → parent, optional | `{"v":1,"event":"retrying","id":…,"device":"cpu","reason":"RuntimeError: MPS backend out of memory …"}` |
+| child → parent | `{"v":1,"id":…,"ok":true,"stems":{"drums":"…/.drums.k3j2.partial.wav",…},"sample_rate":44100,"frames":…,"device":"mps","seconds":181.2,"residual_db":-20.7,"clipped":{"bass":12},"provenance":"htdemucs_ft\|s2\|pcm24\|demucs4.0.1"}` |
+| child → parent | `{"v":1,"id":…,"ok":false,"error":{"type":"AssertionError","message":""}}` |
+| parent → child / child → parent | `{"v":1,"op":"shutdown"}` / `{"v":1,"event":"bye"}`, then exit 0 |
 
-Rules:
-
-- **One request at a time.**
-- **stdout carries only protocol frames.** At startup the worker `dup`s fd 1
-  for frames and points fd 1 at stderr, so tqdm, torch warnings or a stray
-  `print()` cannot corrupt the channel. The prototype prints to stdout on
-  purpose and still parses cleanly.
-- **stderr is passed through** to the parent's log. The API already writes
-  `dance process` output to `pipeline-logs/<job>.log`.
-- **The parent validates every frame** with a pydantic model and checks that
-  `id` matches. djbooth validates its helper's output with zod in the same way
-  (`index.ts:31-57`, `:192`).
-- **Model and device are fixed when the worker is spawned**
-  (`--model htdemucs_ft --device auto`). Changing either means respawning, not
-  sending a new request.
-
-**Why not copy djbooth's shape as-is?** djbooth spawns one process per call and
-reads a single JSON object at exit (`runPython`, `index.ts:198-261`). Its batch
-mode loads the model once but reports only when the whole batch finishes
-(`separate_batch`, `djbooth_stems_mlx.py:452-517`), so a crash mid-batch loses
-every result in that batch. Streaming one answer per job keeps the model warm
-*and* limits the damage of a failure to one track.
+- **stdout carries frames and nothing else.** At startup the worker keeps a private `dup`
+  of fd 1 for frames and `dup2`s stderr onto fd 1. A `print()`, tqdm, or a C-level write
+  then lands in the log instead of the protocol. The prototype prints to stdout on every
+  job and still parses cleanly.
+- **stderr is inherited.** Under the API it lands in `pipeline-logs/<job>.log`, as today.
+- **The parent validates every frame** with pydantic (already a dependency) and checks that
+  `id` matches. An unknown `v` fails the job. This mirrors djbooth, which `zod`-parses each
+  helper result (`index.ts:22-59`, `.parse` at `:145-192`).
+- **Model and device are fixed when the worker is spawned.** A different
+  `settings.demucs_model` means a respawn. `shifts` and the PCM subtype travel with each
+  request.
+- **Why not copy djbooth as is?** Its `runPython` (`rekordbox-ts/src/stems/index.ts:198-261`)
+  spawns one process per call, parses stdout only at exit, and has no timeout. Its batch mode
+  loads the model once but answers once, at the end (`djbooth_stems_mlx.py:452-517`), so a
+  crash mid-batch loses the report for every finished job. One reply per job keeps the
+  model warm *and* limits a failure to one track.
 
 ### Crash isolation
 
-- **Worker death.** EOF on stdout means the worker died. The parent calls
-  `proc.wait()`; a return code below 0 gives the signal name. The track gets
-  `separate: separator worker died (signal SIGBUS) …`. The parent never dies.
-  It marks only that track and respawns the worker lazily on the next request.
-- **Retry once.** A track whose worker died gets **one more attempt in a fresh
-  worker**, which also means a fresh MPS heap, before it is marked ERROR. Track
-  206 above is the reason. This replaces the ledger's "2 heals across 2 runs"
-  with "2 attempts within one run".
-- **Python-level errors.** An `ok:false` reply, such as a catchable MPS OOM,
-  marks the track ERROR at once with the worker's message. The worker stays up.
-- **Timeouts.** The worker is killed and the track is marked ERROR, with no
-  retry. A hang usually repeats, and each one costs a full timeout.
-- **Circuit breaker.** After 3 worker deaths in a row on different tracks,
-  `SeparateStage` stops spawning for the rest of the run. It marks each
-  remaining claimed track ERROR with *"separator disabled for this run after 3
-  consecutive worker deaths, not this track's fault"*. The stage cannot
-  un-claim a track without a busy loop in `_worker_loop`, and adding a "stage
-  unavailable" signal would change the protocol.
-- **Heal ledger stays.** It is still needed when the *parent* is killed:
-  Ctrl-C, the API's 1-hour cap, or a power cut. It just stops firing for
-  separator crashes.
-- **No partial output.** The worker writes into `stems_dir/.tmp-…`. The parent
-  `os.replace`s each file to the unchanged final path
-  `stems_dir/<hash8>/<kind>.wav` only after a valid `ok` frame. The move stays
-  on one filesystem, so it is atomic. Final paths matter because Live
-  references stems by absolute path. Today the code writes straight to the
-  final path (`separate.py:145-154`).
+| in the child | the parent sees | track | worker |
+|---|---|---|---|
+| SIGBUS / segfault on MPS | EOF; `wait()` gives `rc < 0`, which names the signal | partials swept, then **one retry in a fresh `--device cpu` worker**. If that also fails: ERROR "separator worker died (SIGBUS on mps, SIGBUS on cpu)" | the next track respawns on MPS |
+| Python error | an `ok:false` frame | ERROR `separate: <Type>: <message>` | stays up |
+| no reply by the deadline | timeout | ERROR "no answer within N s; worker killed" (no retry: a second hang would cost a second full deadline) | `killpg(SIGKILL)`, respawned lazily |
+| cannot start (bad interpreter, import error) | spawn error, or EOF before `ready` | ERROR "separator worker failed to start: <stderr tail>", the same per-track behaviour as today's "Demucs not installed" (`separate.py:363-367`) | none |
+| the *parent* dies (Ctrl-C, SIGTERM, the API's 1 h cap) | — | heal ledger, unchanged | a watchdog thread sees `getppid()` change and calls `_exit` |
+
+- **Why the retry is on CPU:** CPU is the documented workaround for the crash
+  (`troubleshooting.md:48-54`). In-process, the stage already retries a Python-level MPS
+  error on CPU (`separate.py:339-358`). That logic moves into the worker unchanged, which is
+  why the `retrying` frame exists.
+- **Breaker:** after 2 *consecutive* tracks whose MPS attempt died, the client pins CPU for
+  the rest of the run and logs it once. A systematically broken MPS then costs two crashes,
+  not one per track.
+- **No partial output.** This is today's two-phase write (`write_stems_atomic`,
+  `separate.py:210-248`), split across the two processes. The worker does phase 1, writing
+  hidden `.<kind>.*.partial.wav` temps into the final directory. The parent does phase 2, the
+  four `os.replace`s (`:237-242`), only after a validated `ok` frame. A worker death strands
+  only hidden temps, and `sweep_partials` (`:198-207`) removes them before the retry. Live
+  still never sees a truncated `<kind>.wav`, and final paths are unchanged.
+- **The heal ledger stays** for parent deaths. Separate-stage crashes stop reaching it.
 
 ### Timeouts
 
-| timeout | default | basis |
+| deadline | value | basis |
 |---|---|---|
-| ready (spawn → `ready`) | 300 s | Measured 0.9 s imports plus 1–3 s load. The rest covers a first-run weight fetch (4 × 84 MB). |
-| per job (`DANCE_SEPARATOR_TIMEOUT_S`) | 900 s | 2.6× the slowest compute observed (343 s), about 10× the median. Today the only bound is the API's 1-hour cap on the *whole pipeline* (`pipeline.py:951`); the CLI has none. |
-| shutdown | 10 s | Then SIGKILL. Spawn with `start_new_session=True` so the kill reaches any grandchildren. |
+| spawn → `ready` | 300 s | Spawn plus `import torch, demucs` plus MPS init measured 0.63–0.75 s over two runs of Experiment B, and the model load is 1–3 s. The rest is headroom for a first-run download of the weights: `htdemucs_ft` is a bag of 4 checkpoints of 84 MB each, 337 MB (321 MiB) in all. |
+| job on MPS | `120 s + 2.0 × max(1, shifts) × duration_s` | The worst observed ratio is 0.60 × duration per model pass. At `shifts=2` this allows 4× duration, about 3.3× headroom over the worst case. For a median 208 s track that is 16 min. |
+| job on CPU (after `retrying`, or in a CPU worker) | the MPS value × 4 | **Unmeasured**: the docs say CPU takes "a few minutes per track instead of ~1–3". Measure it in verification step 3. |
+| shutdown | 10 s | Then `killpg`. The worker gets `start_new_session=True` so the kill reaches any grandchildren. Side effect: a terminal Ctrl-C (SIGINT to the foreground process group) no longer reaches the worker directly; it stops when the parent shuts it down or, if the parent dies, via the watchdog below. |
 
-There is no heartbeat. Demucs 4.0.1's `apply_model` exposes no progress
-callback: its signature has only `progress: bool`, which drives tqdm. A
-heartbeat thread would also keep beating while the main thread is stuck in a
-Metal call. A fixed deadline is the honest option.
+- **There is no heartbeat.** `apply_model` in demucs 4.0.1 takes only `progress: bool`,
+  which drives tqdm, not a callback (`demucs/apply.py:132-138`). A heartbeat thread would
+  also keep beating while the main thread is stuck inside a Metal call.
+- **No hang has been observed.** The deadline is a defensive bound.
+- **The API cap still applies.** Its 1 h `subprocess.run` cap per pass (`pipeline.py:986`)
+  is still the outer bound. The longest track in the library (3742 s) would need about
+  50 min of compute on its own at `shifts=2` (3742 × 0.42 × 2).
+- **Idle shutdown.** The client stops the worker after 60 s with no request, and at
+  interpreter exit. `dance ingest` keeps the interpreter alive for build-graph, tag and
+  export-als after `process`, and the model should not sit resident through them. The worker
+  also exits on stdin EOF.
+- **Orphans are measured (Experiment B2).**
+  - **With the watchdog:** after SIGKILLing the parent mid-job, the worker was gone within
+    0.25 s (the poll interval).
+  - **Without it:** the worker was still computing 15 s later. Meanwhile a new run could
+    already take the dispatcher lock, because the orphan never held it: the lock fd is
+    opened `O_CLOEXEC` (`dispatcher_lock.py:195`) and an adopted one is made
+    non-inheritable (`:292-293`). Two separators would then share the GPU.
+  - (The API cap raises `TimeoutExpired`, and `subprocess.run` then kills the pass with
+    SIGKILL, so this is the API's path, not a hypothetical.)
 
 ### GPU semaphore (`_gpu.py`)
 
-- **What the semaphore actually covers.** `GPU_SEMAPHORE` is a
-  `threading.Semaphore`, so it only coordinates threads within one interpreter.
-- **Its use is unchanged.** The dispatcher still wraps `process()` in it
-  (`dispatcher.py:440-442`). The parent thread holds a permit for the whole
-  round trip, so CLAP `embed` in the parent still never overlaps Demucs in the
+- **Nothing changes in how it is used.** The dispatcher wraps `process()` in
+  `GPU_SEMAPHORE` (`dispatcher.py:455-457`), and the parent thread holds that permit for the
+  whole round trip. CLAP `embed` in the parent therefore still never overlaps Demucs in the
   child.
-- **No existing coordination is lost.** The semaphore never coordinated with
-  the API's CLAP text encode, despite what the `_gpu.py` docstring says,
-  because the API runs `dance process` as a subprocess (`pipeline.py:865-952`).
-  A cross-process GPU lock is a separate problem and out of scope.
-- **`separate.concurrency` goes from 2 to 1.**
-  - At the default `DANCE_GPU_CONCURRENCY=1`, the two threads already
-    serialize completely: the semaphore wraps decode, compute *and* WAV
-    writes. The second thread can only pre-claim a track and wait. That is
-    track 2 in Experiment A, and it is the "Healed 2" pattern in the real logs.
-  - At 2, two copies of the model share 16 GB of unified memory. The
-    `separate.py:53` comment promising overlap is only true in that mode.
-  - If parallel separation is ever wanted, it means N workers holding N model
-    copies. See the decisions below.
-- **Lifetime.** One worker per `dance process` run. It is spawned on the first
-  `separate` claim and shut down when the dispatcher returns. Nothing stays
-  resident between runs.
+- **It is a `threading.Semaphore`** (`_gpu.py:21`), so it only coordinates threads within
+  one process.
+  - It already fails to coordinate the API's text encode (`recommend.py:99-122`) with
+    `dance process`, which runs as a subprocess (`pipeline.py:936-988`). The `_gpu.py`
+    docstring overstates what it covers.
+  - The worker makes this no worse. A cross-process lock is out of scope.
+- **`concurrency` goes from 2 to 1** (`separate.py:264-266`).
+  - At the default `DANCE_GPU_CONCURRENCY=1`, the second thread can only pre-claim a track
+    and wait. That is why claim-to-done (197 s) is about twice the compute time (93 s). It is
+    also why track 2 was a bystander in Experiment A.
+  - One worker means one model in memory. Overlapping separations would take N workers and
+    N model copies (decision 3).
+- **Memory.**
+  - **The MPS cache is not shared across processes.** The worker calls
+    `torch.mps.empty_cache()` after each job so that CLAP in the parent can use the memory.
+  - **Each process gets its own allocator cap.** `PYTORCH_MPS_HIGH_WATERMARK_RATIO` defaults
+    to 1.7, a multiple of Metal's `recommendedMaxWorkingSetSize`
+    ([PyTorch 2.9 docs](https://docs.pytorch.org/docs/2.9/mps_environment_variables.html)).
+    The "max allowed: 18.13 GiB" in the two OOM tracks' `error_message` on this 16 GiB Mac is
+    that cap (18.13 / 1.7 ≈ 10.7 GiB working set; inferred, not queried). With two
+    processes, each may reach it, so their sum can exceed physical RAM. Giving the separator
+    alone a lower ratio might turn swapping into a catchable OOM. That is a hypothesis.
+  - **Measure peak memory** for the parent and the worker together in verification step 3.
 
-### Separate pinned environment
+### A separate, pinned environment (later)
 
-- **The worker stands alone.** It is launched by path with `-I` and imports
-  nothing from `dance`: only the standard library plus torch, demucs, librosa
-  and soundfile.
-- **`DANCE_SEPARATOR_PYTHON` chooses the interpreter.** It defaults to
-  `sys.executable`, which is today's venv, so step 1 needs no migration.
-- **A future RoFormer gets its own env.** It would ship as
-  `separators/<name>/pyproject.toml` plus a lockfile, launched the way djbooth
-  launches its helper: `uv run --python 3.12 --project … --locked --no-dev
-  python worker.py` (`index.ts:205-216`).
-- **This machine:**
-  - `uv` is **not installed** (`which uv` finds nothing).
-  - Homebrew `python3.11`, `python3.12` and `python3.13` are all present.
-  - The main venv is **3.13.3**, while `docs/troubleshooting.md:40` blames
-    "Python 3.14". A pinned separator env makes the separator's torch
-    independent of that drift.
-- **Per-process MPS memory settings (hypothesis, untested).** A separate
-  process can set its own `PYTORCH_MPS_HIGH_WATERMARK_RATIO`, which defaults to
-  1.7 ([PyTorch 2.9 docs](https://docs.pytorch.org/docs/2.9/mps_environment_variables.html)).
-  The log's "max allowed: 18.13 GiB" on a 16 GB machine is that 1.7×. Lowering
-  it for the separator alone might turn paging into a catchable OOM without
-  affecting CLAP.
+- **The worker imports nothing from `dance`** and is launched by path with `-I`, so it runs
+  on any interpreter that has its own dependencies.
+- **`DANCE_SEPARATOR_PYTHON`** defaults to `sys.executable`, today's 3.13.3 venv, so step 1
+  needs no new environment.
+- **A RoFormer separator would bring its own locked project**, launched the way djbooth
+  launches its helper: `uv run --python 3.12 --project <dir> --locked --no-dev python
+  <worker>.py` (`index.ts:205-216`).
+  - djbooth pins `requires-python = ">=3.12,<3.13"` and `mlx-audio-separator==0.1.5`
+    (`stems-mlx/pyproject.toml:5-6`).
+  - It also pins a 3.76 GB checkpoint by revision and sha256 (`djbooth_stems_mlx.py:21-27`).
+  - Neither belongs in the torch venv. The frames above are the seam: a RoFormer worker
+    answers the same protocol.
+- **On this Mac:** `uv` is not installed. Homebrew `python3.11`, `3.12` and `3.13` are present.
+- **Demucs itself is archived upstream** and has been read-only since 2025-01-01
+  ([facebookresearch/demucs](https://github.com/facebookresearch/demucs)). A pinned env is
+  also how it stays reproducible.
 
 ### Stage protocol: unchanged
 
-- `StemSeparationStage` keeps its name, states, `error_state`, `uses_gpu` and
-  the `process(session, track, settings) -> bool` signature. All of the work
-  stays inside `process()`. Only the *value* of `concurrency` changes.
-- The idempotent short-circuit (`separate.py:88-94`) and all DB writes stay in
-  the parent.
-- The torch and demucs imports (`separate.py:21-32`) move into the worker.
-  `_DEMUCS_OK` becomes the `ready` handshake.
-- **A worker that cannot start is an environment failure, not a track
-  failure.** Examples are a missing demucs or a bad interpreter path. Unless
-  `--skip-stems` is set, `dance process` runs `worker.py --doctor` once, next
-  to the ffmpeg preflight (`preflight.py`). If it fails, `dance process` exits
-  and prints the worker's stderr tail. Without this check, every track would
-  ERROR one by one, as `separate.py:82-86` does today.
-
-### Prototype (Experiment B, scratch; not committed)
-
-The prototype is a fake worker (about 60 lines) plus a client (about 90 lines),
-run through this branch's real parallel `Dispatcher`. Seven tracks:
-
-- Track 1 SIGBUSes.
-- Track 2 hangs; the job timeout is 3 s for the test.
-- Track 3 replies `ok:false`.
-- Tracks 4 and 5 succeed.
-- Tracks 6 and 7 start `pending`: they go through a 4-second fake `analyze`,
-  then separate.
-
-The worker imports torch and demucs and initialises MPS on startup, so respawn
-cost is real:
-
-```
-track 1: attempt 1: separator worker died (signal SIGBUS)
-track 1: attempt 2: separator worker died (signal SIGBUS)
-✗ separate — track 1: separate: separator worker died (signal SIGBUS) on 2 attempts
-✗ separate — track 2: separate: no answer within 3s; worker killed
-✗ separate — track 3: separate: RuntimeError: MPS backend out of memory
-result: {"analyze": {"processed": 2, "errors": 0, …}, "separate": {"processed": 4, "errors": 3, …}}
-worker spawns=4 ready_latency_s=[0.89, 0.71, 0.7, 0.69]
-parent returncode=0 · heal_ledger.json: (none) · stems on disk: tracks 4–7 only (16 files)
-```
-
-Same failures as Experiment A: one pass instead of three, zero false ERRORs,
-and a bounded hang.
+- `StemSeparationStage` keeps its `name`, its states, `error_state`, `uses_gpu`, and
+  `process(session, track, settings) -> bool` (`stage.py:65-82`). Only the *value* of
+  `concurrency` changes. The dispatcher is untouched.
+- **Stays in `process()` (parent):**
+  - the idempotent short-circuit (`separate.py:369-375`)
+  - the stale-row delete (`:422-429`)
+  - `sweep_partials`, phase 2 of the write, the `StemFile` rows with provenance and
+    residual, and the state change.
+- **Moves to the worker:**
+  - the decode (`:392-396`)
+  - `_ensure_model` and the MPS→CPU retry (`:282-358`)
+  - the residual and clipping QC (`:411-420`)
+  - phase 1 of the write
+- **Settings:**
+  - `DANCE_SEPARATOR_MODE=inline` runs the same worker core in-process: today's behaviour.
+    It is the rollback switch and what the existing mocked tests use.
+  - Added: `separator_python`, `separator_mode` and `separator_timeout_scale`.
 
 ## Alternative: a fresh process per track (`multiprocessing`)
 
-This means `ProcessPoolExecutor(max_workers=1, mp_context=spawn,
-max_tasks_per_child=1)`, or a bare `multiprocessing.Process` per track.
+Experiment C, with the child importing `dance.pipeline.stages.separate` the way a real one
+would:
 
-- **For:** about 40 lines and no protocol. A crash is still contained.
-  Spawning measured 0.62–0.75 s per task including torch and MPS init.
-- **Against, measured (scratch `alt_pool.py`):**
-  - The crash surfaces as `BrokenProcessPool: A process in the process pool was
-    terminated abruptly…`. The signal is lost, and the pool refuses every later
-    submit until it is rebuilt.
-- **Against, from the docs:**
-  - `max_tasks_per_child` needs Python 3.11+, but the repo targets py310.
-  - Python **3.15** fixes a deadlock where the executor hangs after a worker
-    exits at its `max_tasks_per_child` limit while tasks are queued
-    ([concurrent.futures docs](https://docs.python.org/3/library/concurrent.futures.html),
-    gh-115634).
-- **Against, by construction:**
-  - A spawned child unpickles a function from `dance`, so it must run an
-    interpreter where `dance` is installed. That rules out a separately pinned
-    env.
-  - The model reloads for every track: about 3 s today, but roughly 11× the
-    checkpoint size for RoFormer.
+```
+ProcessPoolExecutor(max_workers=1, mp_context=spawn, max_tasks_per_child=1)
+  a.wav        ok, child started 0.90 s after submit
+  b-crash.wav  BrokenProcessPool: A process in the process pool was terminated abruptly …
+  c.wav        BrokenProcessPool: A child process terminated abruptly, the process pool is not usable anymore
+bare multiprocessing.Process per track (spawn)
+  a.wav exitcode=0 1.16 s · b-crash.wav exitcode=-10 1.20 s · c.wav exitcode=0 1.09 s
+```
 
-Also considered, as the status quo: `DANCE_DEMUCS_DEVICE=cpu`
-(`troubleshooting.md:44-50`). It avoids the MPS crash at several times the
-cost. It remains the documented fallback, and the worker passes `--device`
-through unchanged.
+- **Pool: rejected.**
+  - It loses the signal, and one crash poisons every later submit until the pool is rebuilt.
+  - `max_tasks_per_child` needs Python 3.11, but the repo targets py310.
+  - 3.15 fixes a hang that can follow `max_tasks_per_child` (gh-115634,
+    [docs](https://docs.python.org/3/library/concurrent.futures.html)).
+- **A bare `Process` per track is a real option.**
+  - **For:** about 40 lines, no framing, and the exit code survives.
+  - **For:** with Demucs the overhead is small, about 1 s to spawn plus 1–3 s to load the
+    model, against ~3 min of compute.
+  - **Against:** a spawned child unpickles a function from `dance`, so it must run on an
+    interpreter where `dance` and all its dependencies are installed. That rules out a
+    pinned separator env.
+  - **Against:** the model reloads on every track (djbooth added batch mode for its 3.76 GB
+    checkpoint for this reason).
+  - **Against:** it still needs a results channel, the same deadline and kill logic, and
+    the same orphan watchdog.
+
+## Alternative: defer, with only the cheap fixes
+
+SIGBUS has not appeared in the recorded runs on the 3.13 venv, so waiting is defensible.
+
+- **Cheap fixes that need no worker:** set `separate.concurrency = 1` (removes the
+  pre-claimed bystander in `separate`), and the two message follow-ups at the end
+  (catch `AssertionError` in the CPU retry; stop the ledger blaming Demucs for every stage).
+  Under an hour, no protocol work.
+- **What it leaves:** a native crash still kills the run and the `analyze`/`embed` tracks in
+  flight, still needs three passes to settle, and still costs innocent ERRORs. There is
+  still no bound on a hang, and a RoFormer separator would still have to share the torch
+  venv or bring this design with it.
 
 ## Recommendation
 
-**Build the long-lived worker in two steps.**
+**Build the long-lived worker, in two steps.**
 
-1. **Isolation only, in the current venv.** Add `worker.py` and `client.py`,
-   shrink `separate.py` to the client call plus DB writes, set `concurrency`
-   to 1, use retry-once and a 900 s timeout, and add the `--doctor` preflight.
-   This needs no new environment and no new dependency.
-2. **A pinned environment, only when a second separator (RoFormer) lands.**
-   Until then a pinned env costs tooling (`uv`) without fixing anything.
+1. **Isolation, in the current venv.**
+   - Add `demucs_worker.py` and `client.py`, and shrink `process()`.
+   - Set `concurrency` to 1, retry once on CPU after a worker death, and use the deadlines
+     above.
+   - No new environment and no new dependency.
+2. **A pinned environment, when a second separator lands.** Until then it costs tooling
+   (`uv`) and fixes nothing.
 
-Demucs upstream is archived ("not maintained anymore", read-only since
-2025-01-01: [facebookresearch/demucs](https://github.com/facebookresearch/demucs)).
-Step 2 is when the separator can move without touching the rest of the venv.
+If no second separator is planned, a bare `Process` per track buys the same isolation for
+less code. Decision 1 is that trade.
 
 ## Decisions for the user
 
-1. **Retry once on worker death, or ERROR on the first crash?** I recommend
-   retrying once because of track 206. The cost is one more attempt (about
-   1.5 min) on a track that really is bad.
-2. **Per-job timeout:** a fixed 900 s (recommended, configurable) or one scaled
-   to track duration. Scaling needs duration-vs-compute data, which I did not
-   pull from the DB for this proposal.
-3. **Separation concurrency:** one worker (recommended; one model in memory) or
-   N workers following `DANCE_GPU_CONCURRENCY`.
-4. **Pinned-env tooling for step 2:** `uv` (djbooth's precedent, needs an
-   install) or a plain `python3.12 -m venv` plus a hash-pinned `pip`
-   lockfile.
+0. **Now or later.** Build step 1 now (recommended: the blast radius in Experiment A is the
+   cost, not the crash rate), or defer and take only the cheap fixes above.
+1. **Worker shape.**
+   - **Long-lived worker (recommended):** keeps the model warm and allows a pinned env.
+   - **Per-track `Process`:** simpler, but stays in the same venv.
+2. **After a worker death.**
+   - **Retry once on CPU (recommended):** costs one CPU separation for a track that really
+     is bad.
+   - **Retry once on MPS.**
+   - **ERROR at once.**
+3. **Concurrency.**
+   - **One worker (recommended).**
+   - **N workers when `DANCE_GPU_CONCURRENCY` ≥ 2:** N model copies in 16 GB.
+4. **The `inline` mode:** keep it permanently, or remove it one release after the worker
+   proves out.
+5. **Tooling for the step 2 environment:** `uv` (djbooth's precedent; needs an install), or
+   `python3.12 -m venv` plus a hash-pinned requirements file. This can wait for the
+   RoFormer proposal.
 
 ## Migration cost
 
-- No schema, Alembic, API, OSC or `.als` change. The Stage protocol and
-  dispatcher are unchanged. Step 1 adds no dependency.
-- Existing stems and `StemFile` rows are untouched, and final stem paths are
-  identical.
+- **What does not change:**
+  - no schema, Alembic, API, OSC or `.als` change, and no new dependency
+  - the Stage protocol and the dispatcher
+  - existing stems, `StemFile` rows and final paths
+- **New `src/dance/separator/`:**
+  - `protocol.py`: pydantic frames, parent side, about 60 lines
+  - `client.py`: spawn, deadlines, retry, breaker, idle shutdown, watchdog-friendly launch;
+    about 150 lines
+  - `demucs_worker.py`: about 200 lines, mostly moved from `separate.py:104-358`
+- **`separate.py`** shrinks by about 150 lines.
+- **`config.py`** gets 3 settings.
+- **Tests:**
+  - `tests/test_separate.py` (2 tests) and the stage tests in `test_stems_hygiene.py` patch
+    `sep._DEMUCS_OK`, `sep.apply_model`, `sep.get_model`, `sep.torch`, `sep.librosa` and
+    `sep.sf`. They re-target the worker core in `inline` mode.
+  - The pure-helper tests are unchanged.
+- **Docs:** rewrite the SIGBUS section of `docs/troubleshooting.md`.
 - **Behaviour changes:**
-  - A separator crash now costs one track instead of the run.
-  - `separate` runs one track at a time. That is throughput-neutral at the
-    default `DANCE_GPU_CONCURRENCY=1`. Users who set it to 2 lose the overlap,
-    which is the configuration in which two separations were open together.
-- **Code size:**
-  - `worker.py`: about 150 lines (today's `separate.py:65-163` minus the DB).
-  - `client.py`: about 120 lines (spawn, frames, deadlines, respawn, breaker).
-  - `separate.py`: shrinks to about 80 lines.
-  - `config.py`: 3 settings (`separator_python`, `separator_timeout_s`,
-    `separator_ready_timeout_s`).
-  - Roughly a day of work, including the real-data run.
+  - a native crash costs at most one track, not the run
+  - `separate` runs one track at a time, which is neutral at the default
+    `DANCE_GPU_CONCURRENCY=1`
+  - a hang now ERRORs at the deadline
+  - error texts change
+- **Effort (estimate):** about one day of work, plus the real-data run. The line counts
+  above are estimates too; the scratch prototype's client is 138 lines.
 
 ## Verification plan
 
-1. **CI, synthetic, no torch: `tests/test_separator_worker.py`.** This turns
-   Experiment B into a test.
-   - A fake worker script picks its behaviour from the audio file name: SIGBUS,
-     hang, `ok:false`, junk `print()` to stdout, or success.
-   - Assertions, through a real parallel `Dispatcher`:
-     - One pass with return code 0.
-     - The crasher is ERROR with `signal SIGBUS … 2 attempts`; the hanger is
-       ERROR with a timeout message.
-     - Bystanders in `analyze` are unaffected.
-     - The heal ledger is empty, and the failed tracks have no file at the
-       final path.
-     - The respawn count is exact, and the breaker trips after 3 consecutive
-       deaths.
-   - Follows `tests/conftest.py` isolation.
-2. **Contract test against the real `worker.py --doctor`** in the current venv,
-   skipped when demucs is absent. It checks the `ready` frame schema and the
-   versions.
-3. **Real data (rule 2), before calling it done:**
-   - Setup: temp `DANCE_DATA_DIR`, `DANCE_LIBRARY_DIR` and `DANCE_STEMS_DIR`,
-     with 3 real tracks *copied* in.
-   - Run `dance process --track-id …` on MPS.
-     - **Expect:** compute in line with the 93 s median, and one `Loading
-       Demucs model` per run.
-     - **Expect:** per-stem RMS within 0.5 dB of the existing stems for the
-       same tracks.
-   - **Crash e2e with no code hook:** mid-separation, run `kill -BUS $(pgrep
-     -f separator/worker.py)` from another shell.
-     - **Expect:** the parent logs `separator worker died (signal SIGBUS)`,
-       retries in a fresh worker, and finishes the run with exit code 0.
-   - Repeat the kill on both attempts.
-     - **Expect:** exactly that one track is ERROR, and the next track
-       separates in the same run.
-4. **No Live check is needed**, because no `.als` or stem path changes.
+1. **CI, no torch: new `tests/test_separator_worker.py`.**
+   - **Setup:** a stdlib-only fake worker that picks its behaviour from the audio file name,
+     as in the scratch prototype:
+     - `crash`: SIGBUS on any device
+     - `mpsonly`: SIGBUS on MPS only
+     - `hang`
+     - `oom`: an `ok:false` reply
+     - a stray stdout `print`
+     - success
+   - **Run:** through the real parallel `Dispatcher` with the `conftest.py` isolation.
+   - **Assert:**
+     - one pass
+     - `crash` is ERROR naming both signals, and `mpsonly` is SEPARATED via CPU
+     - `hang` is ERROR after its deadline, and `oom` is ERROR with the message
+     - bystanders in `analyze` are untouched
+     - no `heal_ledger.json`, and no stranded partials
+     - the exact respawn count, and the breaker trips after 2 consecutive MPS deaths
+     - killing the parent kills the worker within 1 s
+   - **The scratch prototype already shows this** (Experiment B, real torch import, one
+     pass, rc 0):
+
+     ```
+     separate: processed 5, errors 3 · spawns mps 0.73 s, cpu 0.65, mps 0.66, cpu 0.63, mps 0.70, mps 0.67
+     track 1: separator worker died (signal SIGBUS on mps, signal SIGBUS on cpu)
+     track 3 (mpsonly): separated on the CPU retry
+     track 4: no answer within 3s; worker killed
+     track 5: RuntimeError: MPS backend out of memory (fake)
+     final stems for tracks 2, 3, 6, 7, 8 · stranded partials: [] · heal_ledger: (none)
+     ```
+2. **Contract test.** Run the real `demucs_worker.py --probe` (imports plus the `ready`
+   frame, no weights) and check the frame schema. Skip it if demucs is absent. `dance
+   doctor` gets the same probe as a check next to `check_demucs_weights` (`doctor.py:1243`).
+3. **Real data (rule 2), before calling it done.**
+   - **Setup:** temp `DANCE_DATA_DIR`, `DANCE_LIBRARY_DIR` and `DANCE_STEMS_DIR`, with 3 real
+     tracks *copied* in. Run `dance process --track-id <id>` on MPS.
+   - **Expect a normal run:**
+     - one `Loading Demucs model` per run
+     - compute within the shifts-adjusted range above
+     - `residual_db` within 0.5 dB of the in-process value for the same track (`shifts`
+       randomises, so the output is not bit-identical)
+   - **Crash, with no code hook:** run `kill -BUS $(pgrep -f demucs_worker.py)` mid-job.
+     Expect the CPU retry and `rc 0`.
+   - **Crash twice:** kill both attempts. Expect only that track ERROR, and the next track
+     separating in the same run.
+   - **Record:**
+     - the CPU/MPS time ratio, to replace the ×4 guess
+     - peak memory for the parent and the worker during `embed` plus `separate`
+4. **No Live check is needed:** stem paths and the `.als` output do not change.
 
 ## Follow-ups (not in this proposal)
 
-- `_heal_inflight_orphans` puts the Demucs hint ("try DANCE_DEMUCS_DEVICE=cpu")
-  on orphans from every stage (`dispatcher.py:583-588`; Experiment A tracks 5
-  and 6). The message should name the stage's own remedy.
-- The API's 1-hour per-pass `subprocess.run(timeout=…)` SIGKILLs every stage.
-  With per-track deadlines it could become a no-progress timeout instead.
+- **The MPS→CPU retry catches only `RuntimeError`** (`separate.py:347`).
+  - Tracks 235 and 236 died on `assert sum_weight.min() > 0` (`demucs/apply.py:255`), right
+    after `kIOGPUCommandBufferCallbackErrorOutOfMemory`; one run logged that line 131 times.
+  - They sit in ERROR with the message `"separate: "`, because `str(AssertionError())` is
+    empty (`dispatcher.py:468`).
+- **The heal ledger's message blames SIGBUS and Demucs** for any stage and for any parent
+  death (`dispatcher.py:602-607`). See track 206.
+- **The API's 1 h cap per pass SIGKILLs healthy runs.** Job `57c01…` finished 21
+  separations in its hour at `shifts=1`. With per-job deadlines, the cap could become a
+  no-progress timeout.
+
+Evidence scripts (scratch, not committed): `exp_a.py`, `exp_b.py`, `exp_b2.py`, `exp_c.py`,
+`parse_logs.py`, `rtf.py`. They ran against the worktree's `src` with an isolated HOME;
+A, B, B2 (both modes) and C were re-run for the fact-check on 2026-10-13 and reproduced. The
+log and DB numbers come from read-only reads (`sqlite3 ...?immutable=1`).
