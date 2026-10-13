@@ -1,366 +1,469 @@
-# Analysis provenance, loudness and track identity: one migration
+# Analysis provenance, loudness and track identity — one migration
 
-**Status:** proposal, not implemented. Needs your go-ahead (CLAUDE.md rule 1: SQLAlchemy models, Alembic, API response schemas).
+**Status:** proposal — not implemented (CLAUDE.md rule 1: SQLAlchemy models + Alembic)
 **Date:** 2026-10-13
-**Touches:** `core/database.py` (`Track`, `AudioAnalysis`), one Alembic revision, `alembic/env.py`, `api/schemas.py` (additive fields only), the writes in `analyze.py` / `analyze_stems.py`, the download finalizer, one backfill script. No Stage-protocol, `.als` or OSC change.
-**Related:** [`warp-guard.md`](warp-guard.md), [`library-duplicates.md`](library-duplicates.md), branches `claude/analysis-fixes` (BPM/duration fixes + `dance reprocess`) and `claude/acquisition` (scored, verified downloads)
+**Touches:** `audio_analysis` (6 columns), `tracks` (3 columns + 1 index), one Alembic
+revision, `src/dance/alembic/env.py`. No API schema, OSC or `.als` change.
 
 ---
 
-Nine small columns that three separate improvements need. They are bundled
-because every migration costs you a manual backup plus `alembic upgrade head`
-(`init_db()` only runs `create_all`, which never adds a column to an existing
-table, `database.py:832-836`), and because the expensive part of the backfill
-is the library re-decode that `dance reprocess` is about to do anyway.
+## Why one proposal
 
-All library numbers below come from the real DB, read only through
-`file:/Users/arya/.dance/dance.db?immutable=1` on 2026-10-13: head
-`e4a91c7b2d05`, 282 tracks, 1,646 `audio_analysis` rows.
+Three improvements each need a few small columns, and all of their backfills
+ride on the `dance reprocess --from analyze` that the BPM fix (5b9a65f, merged
+today in d2ab400) already requires. One revision, one upgrade, one reprocess.
 
-## The problem, measured
+No real-library data was read to write this. Library numbers below are quoted
+from the commits that measured them; everything else was measured on synthetic
+audio and synthetic databases in a scratch directory (see **Verification plan**).
 
-### 1. Bad analysis rows can't be told apart from good ones
+## The problems
 
-- **All 282 full-mix rows have `bpm_confidence = 0.7`**, the hard-coded librosa
-  fallback (`analyze.py:183`). Essentia never ran: `analyze.py:174` calls
-  `len()` on RhythmExtractor2013's confidence, which is a scalar. Reproduced
-  with the installed essentia: `TypeError: object of type 'float' has no len()`.
-  The 282 tracks share 26 distinct BPMs. `claude/analysis-fixes` fixes this.
-- After that fix and a `dance reprocess`, the 0.7 marker no longer identifies anything. On stem
-  rows `bpm_confidence` also changes **meaning**: today it is a beat-count
-  heuristic (1,111 of 1,112 live stem rows read 0.4), afterwards it is tempo
-  coherence in [0, 1]. No row records which code wrote it, so if a reprocess
-  stops partway, no query can tell the old rows from the new ones.
-- Rule 3 has no guard. Nothing writes an Ableton or manual BPM to the DB yet. When
-  warp-guard Option C lands and something does, the next
-  `dance reprocess --from analyze` overwrites it: the upsert at
-  `analyze.py:116-131` sets `bpm` unconditionally, and `detect_regions`
-  re-derives every `beats` row from that value.
+### 1. Analysis rows don't say which analyzer wrote them
 
-### 2. The energy features measure mastering level, not energy
+Today the only way to find rows from the broken analyzer is a float fingerprint:
 
-`energy_overall = mean(RMS) / 0.2`, clipped to 1 (`utils/audio.py:32`). That is
-linear in gain. On a synthetic track, +6 dB moved `energy_overall` from 0.349 to
-0.696 and integrated loudness by exactly 6.00 LU. Across the library:
+- Old full-mix rows: `bpm_confidence = 0.7`, always. The Essentia path raised a
+  `TypeError` every time, and the librosa fallback hard-coded 0.7
+  (`analyze.py` at 5b9a65f^, `_analyze_bpm`). 5b9a65f: "282 tracks shared 26 BPMs".
+- Old stem rows: 0.4 or 0.7 (`analyze_stems.py` at 5b9a65f^ :199), or 0.0 with
+  `bpm = 0` for empty audio. In practice they are nearly all 0.4, because the
+  test was `beats_per_bar >= 8` and a 4/4 bar has 4 beats.
+- New rows hold continuous values: Essentia's confidence / 5.32, ≤ 0.4 for the
+  librosa fit, or 0.1 (`utils/tempo.py:58-73`). On stem rows `bpm_confidence`
+  now means something else, tempo coherence (`analyze_stems.py:179`).
 
-| | full mix | drums stem |
-|---|---|---|
-| `energy_overall` saturated at 1.0 | **237 / 282** | 41 / 278 |
-| `energy_peak` saturated at 1.0 | **265 / 282** | 251 / 278 |
-| `floor_energy` 9 or 10 | **257 / 282** (91%) | |
+That works once, and only by luck. The next analyzer change (for example
+loudness-normalised energy, below) leaves no fingerprint at all.
 
-So the energy term in tail recs (`tail.py:142`) mostly compares tracks that all
-score 9 or 10. Because the stored values are clipped, they can't be renormalised
-after the fact. No loudness figure is stored anywhere either, so every clip
-loads at its mastering level. How far apart those levels are in this library
-is unmeasured (verification step 4 measures it).
+**Rule 3 has no column.** If Live's grid or a hand-typed BPM ever goes into
+`audio_analysis.bpm`, the next `dance reprocess --from analyze` (f2bb065)
+overwrites it, because `upsert` sets every column it is given
+(`pipeline/utils/db.py:18-30`). Regions already solve this with `source`:
+`_clear_auto_data` deletes only `auto` rows (`detect_regions.py:144-157`). The
+tempo grid has nothing like it.
 
-### 3. The DB forgets what Spotify said and where the audio came from
+### 2. No loudness measurement
 
-- **`duration_seconds` stores Spotify's claim** for app-ingested rows
-  (`routers/pipeline.py:508`, `:694`), because analyze only fills it when it is
-  empty (`analyze.py:94`). I compared it with each track's real length, taken
-  from its stems' RMS curves (`rms_curve_length × hop`):
+`energy_overall` is mean frame RMS / 0.2, clipped to 1 (`utils/audio.py:23-34`).
+It measures how loud the master is, and it saturates. Here is the same synthetic
+track at six master levels, run through `analyze.py`'s own energy code on 60 s:
 
-  | ingested | rows | off by > 2 s | > max(10 s, 3.5%) | > 30 s |
-  |---|---|---|---|---|
-  | 2026-05-17 | 196 | 0 | 0 | 0 |
-  | 2026-05-24 / 05-26 | 82 | 27 | **22** | 14 |
+| integrated loudness (LUFS) | −18.0 | −14.0 | −12.1 | −10.2 | −8.4 | −6.7 |
+|---|---|---|---|---|---|---|
+| `energy_overall` | 0.38 | 0.61 | 0.76 | 0.96 | **1.00** | **1.00** |
+| `energy_peak` | 0.59 | 0.93 | **1.00** | **1.00** | **1.00** | **1.00** |
 
-  The worst is #300 *Cycles*: Spotify says 185.8 s and the file is 414.1 s. All
-  14 rows off by more than 30 s must have come from the unfiltered yt-dlp retry
-  (`csv_importer.py:223`), because the first attempt filters at ±30 s. Two
-  consumers read the wrong value today. The `.als` writer places the end warp
-  marker and loop end from it (`writer.py:479-480` via `generator.py:159,167`),
-  so *Cycles* would loop over the first 186 s of a 414 s file. The warp check
-  computes expected beats from it (`routers/ableton.py:484`, `:564-569`).
-  `claude/analysis-fixes` correctly makes `duration_seconds` the measured
-  length. That also deletes the only stored copy of the Spotify duration, so a
-  wrong-version download would show up only as a log warning.
-- **The download source is not recorded anywhere.** yt-dlp runs with `--quiet` and no
-  `--print` (`csv_importer.py:191-201`). Example: #206 *Surrender* and #207
-  *Surrender - TH;EN Remix* are listed by Spotify at 200 s and 210 s, but both files are 375.5 s.
-  Their sizes differ by exactly 21 bytes, which is the length difference of
-  their ID3 artist and title strings. Every stem of both has the same
-  3,755-frame RMS curve. So the same upload was downloaded twice, and a stored
-  source URL would have shown that with one query.
-- **There is no ISRC**, the only identifier for a recording that works across
-  catalogs ([ISO 3901, 12 characters](https://en.wikipedia.org/wiki/International_Standard_Recording_Code)).
-  Spotify removed `external_ids` for development-mode apps in
-  [February 2026](https://developer.spotify.com/documentation/web-api/references/changes/february-2026)
-  and [reverted that in March](https://developer.spotify.com/documentation/web-api/references/changes/march-2026).
-  The playlist reader doesn't request the field (`search.py:181-182`).
-  Aside, not verified against this account: that same reader calls
-  `/playlists/{id}/tracks` (`search.py:180`), which the February changelog lists
-  as removed in favour of `/playlists/{id}/items`.
+`floor_energy` is 50 % `energy_overall` + 30 % `energy_peak` + 20 % brightness
+(`analyze.py:277-297`), so above about −10 LUFS 80 % of its weight is pinned
+at 1.0 and only brightness still separates tracks.
+
+Clip-gain normalisation on load has nothing to compute from. The `.als` writer
+emits `SampleVolume` = 1 (`als/writer.py:531`), and Live's `Clip.gain` is a
+0.0–1.0 value with no documented dB mapping ([LOM Clip][lom]); the read-only
+`gain_display_string` (e.g. "1.3 dB") means the mapping can be measured, which
+is the clip-gain consumer's job, not this proposal's.
+
+### 3. Track identity gets overwritten or was never kept
+
+- **Spotify duration.** Ingest stores Spotify's `duration_ms` in
+  `duration_seconds` (`api/routers/pipeline.py:528, 714`). Since d2ab400 the
+  analyze stage overwrites it with the decoded length (`analyze.py:172-190`).
+  That is right for Live, but it destroys the reference that d1b9222 (on
+  `claude/acquisition`) used to find "22/278 files >10 s off Spotify, 11
+  >60 s" (Cycles 414 s vs 186 s). Once the library is reprocessed, the
+  wrong-version check has nothing to compare against.
+- **ISRC.** It is never stored. Search and Get Track return full track
+  objects, but `_parse_hit` (`spotify/search.py:297-315`) keeps no
+  `external_ids`, and the playlist `fields=` filter leaves it out
+  (`search.py:181-182`). spotDL writes `TSRC` into the mp3s it makes (spotDL
+  4.4.3 `utils/metadata.py:238`), but `extract_metadata` reads only title,
+  artist, album, date and length (`ingest.py:96-130`). Spotify marked
+  `external_ids` removed in its [February 2026 changelog][sp-feb], then
+  reverted that in [March 2026][sp-mar], so the field is available.
+  Separately, the same Feb 2026 changelog removed `GET /playlists/{id}/tracks`
+  ("use `GET /playlists/{id}/items` instead") and the `popularity` field, and
+  `search.py:180-182` still requests both. That is a bug of its own, outside
+  this proposal; until it is fixed, adding `external_ids` to that `fields=`
+  filter does nothing.
+- **Download source.** Never stored. Main's in-app path downloads YouTube's first
+  search result (`csv_importer.py:189`) and keeps no URL. The acquisition branch
+  writes the URL into a tag comment only. spotDL puts its YouTube URL in the
+  mp3 `COMM` frame (`metadata.py:251-252`).
 
 ## Proposed columns
 
-### `audio_analysis`: on every row, mix and stems alike (rule 4)
+All are nullable or defaulted, with no FKs and no CHECKs. Enums are plain
+strings, like `Region.source` (`database.py:467`).
 
-| column | type | null | meaning |
-|---|---|---|---|
-| `analyzer_version` | `String(32)` | yes | Which code wrote the row, e.g. `analyze/2` or `analyze_stems/2`, with a `+librosa` suffix when the tempo fallback produced `bpm`. NULL means written before this migration, which today is all 1,646 rows. Follows the precedent of `TrackEmbedding.model_version` and `StemFile.model_used`. |
-| `grid_source` | `String(16)` | no, default `'analyzer'` | `analyzer` \| `ableton` \| `manual`. Validated by a Python `GridSource` enum, as `RegionSource` is; no CHECK constraint. Stem rows copy it from the mix row, the same way they copy `bpm`. |
-| `analyzer_bpm` | `Float` | yes | The rule-3 hint: the analyzer's latest estimate whenever `grid_source != 'analyzer'`, NULL otherwise. `bpm` remains the tempo every consumer already reads. |
-| `loudness_lufs` | `Float` | yes | BS.1770 integrated loudness. Essentia reports −70.0 when everything is gated, which identifies a silent stem. |
-| `true_peak_dbtp` | `Float` | yes | Maximum over both channels of the 4× oversampled \|x\|. Floored at −120, because digital silence gives −inf and JSON can't carry it. |
-| `loudness_range_lu` | `Float` | yes | LRA. It comes out of the same essentia call at no extra cost. |
+| table | column | type | null | written by | meaning |
+|---|---|---|---|---|---|
+| `audio_analysis` | `analyzer_version` | INTEGER | yes | analyze / analyze_stems | the writing stage's hand-bumped constant; NULL = unknown |
+| | `grid_source` | VARCHAR(16) | no, default `'analyzer'` | analyze; later Live/UI | `analyzer` \| `ableton` \| `manual`: who owns `bpm` |
+| | `analyzer_bpm` | FLOAT | yes | analyze | the analyzer's own estimate, always written (the rule-3 hint) |
+| | `loudness_lufs` | FLOAT | yes | analyze / analyze_stems | integrated loudness, ITU-R BS.1770 / EBU R128 |
+| | `loudness_range_lu` | FLOAT | yes | same | LRA, free from the same call |
+| | `true_peak_dbtp` | FLOAT | yes | same | max over channels, 4× oversampled |
+| `tracks` | `isrc` | VARCHAR(12), non-unique index | yes | ingest, backfill | ISRC of the recording the row was *requested as* |
+| | `source_url` | TEXT | yes | acquisition, ingest, backfill | URL the audio bytes came from (not the Spotify URL) |
+| | `expected_duration_seconds` | FLOAT | yes | ingest, backfill | Spotify's duration at request time; never overwritten |
 
-### `tracks`
+Naming follows the existing `duration_seconds`. Semantics worth pinning down:
 
-| column | type | null | meaning |
-|---|---|---|---|
-| `isrc` | `String(12)` | yes | Spotify's `external_ids.isrc`, uppercased, no hyphens. **Not unique**: single and album releases share an ISRC, and so do rows marked `duplicate_of`. |
-| `source_url` | `Text` | yes | Where the audio was downloaded from (yt-dlp `webpage_url`, spotDL `download_url`). NULL means unknown or a local file. |
-| `expected_duration_seconds` | `Float` | yes | Spotify's `duration_ms / 1000` at ingest, never overwritten by analysis. NULL for rows not from Spotify. The name pairs it with `duration_seconds`. |
+- **`analyzer_version`.** Version 1 is the pre-5b9a65f analyzer, tagged by the
+  migration (below). Version 2 is 5b9a65f; it never stamped anything, so its
+  rows stay NULL. Version 3 is the first stamped version and adds loudness.
+  `ANALYZE_VERSION` and `ANALYZE_STEMS_VERSION` sit next to their stages; bump
+  them whenever stored numbers change meaning. Library versions are logged, not
+  stored.
+- **`grid_source`.** It lives on the full-mix row. Stem rows copy it together
+  with `bpm` (`_track_bpm`, `analyze_stems.py:106-147`, already copies `bpm`). When the mix row
+  is not `analyzer`, analyze writes `analyzer_bpm` and leaves `bpm` alone.
+  `detect_regions` rebuilds beats from `bpm` (`detect_regions.py:109`), so beats
+  follow whoever owns it. On day one every row is `analyzer`. Nothing writes
+  `ableton` or `manual` today, on main or on any local `claude/*` branch. Warp-guard
+  Option C (`scripts/warp_probe.py --repair --bpm`) goes the other way: it
+  pushes *dance's* BPM into Live (`docs/proposals/warp-guard.md`, "the target
+  BPM must come from dance's analysis"). The grid harness on
+  `claude/grid-metrics` reads Live's grid (`dance.als.reader`,
+  `/live/clip/get/warp_marker_times`) but opens the DB with `immutable=1`, so
+  it is read-only. Those are the pieces a future "adopt Live's grid" writer
+  would use. The guard has to exist before that writer lands, or the next
+  reprocess clobbers the adopted grid.
+- **Loudness.** Measure what Live plays: a stereo decode at the file's own rate
+  (`es.AudioLoader`). A mono file is measured as dual-mono, which reads 3.01 dB
+  higher than a single channel would (measured: −22.99 vs −26.00 LUFS).
+  Essentia returns exactly −70.0 for digital silence (measured), so store NULL
+  at or below −70, which also covers silent stems. On gated stems such as
+  vocals, `loudness_lufs` is the level of the audible part. `presence_ratio`
+  already says how much of the track that part is.
+- **`isrc` vs the file.** An ISRC names one recording, and edits and remixes get
+  their own codes ([ISRC][isrc]). A radio-edit download filed under an extended
+  mix's ISRC is exactly the d1b9222 failure. The file *is* that recording only
+  when |`duration_seconds` − `expected_duration_seconds`| ≤ max(10 s, 3.5 %),
+  the threshold already in `analyze.py:30-31`. Any code that uses `isrc` to mean
+  "same recording" must check both. The index is non-unique: `duplicate_of`
+  copies share an ISRC, and Spotify lists one recording under several track IDs
+  (album and single). Normalise to upper case without
+  hyphens, and store NULL unless the value matches `^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$`.
 
-Rules that come with them. These are stage logic only, with no protocol change:
+## Options considered
 
-- **Grid guard.** When the existing mix row has `grid_source != 'analyzer'`, the
-  analyze stage writes its estimate to `analyzer_bpm`, leaves `bpm` alone, and
-  logs both values.
-- **ISRC binding.** Set `isrc` only from the Spotify entry the row was created
-  from, or from a match confirmed by duration. That is the rule
-  `claude/acquisition` (`c69b40e`) already applies to `spotify_id`. A name-only
-  match must not copy it, because a remix or extended mix has its own ISRC.
-- **Wrong version** means `|duration_seconds − expected_duration_seconds| > max(10 s, 3.5%)`,
-  the tolerance both branches already use.
+**Provenance.**
+- *A0: an `analyzed_at` cutoff* (no schema change). Rejected: the cutoff is when
+  this machine ran the new code, not a property of the code, and it cannot say
+  that stem rows were re-analysed while mix rows were not.
+- *A1: one integer per stage.* Recommended.
+- *A2: a provenance string* like `stem_files.model_used`
+  (`htdemucs_ft|s2|pcm24|demucs4.0.1`, `database.py:278-280`). Richer, but every
+  new Essentia dev build would mark the whole library stale. The string fits
+  separation, where the model *is* the output; it does not fit analysis.
 
-### Measuring loudness: what the probes showed
+**Grid authority.**
+- *G0: nothing.* Breaks rule 3 as soon as Live's grid is adopted.
+- *G1: `grid_source` + `analyzer_bpm`.* Recommended. Every consumer keeps
+  reading `bpm` unchanged.
+- *G2: a `grids` table* (track, source, bpm, first beat, markers JSON). This is
+  the right shape once variable-tempo warp markers are stored, but today it
+  would be a new table with an FK (so a batch rebuild, see S2b) and nothing
+  writing to it. Revisit together with the first writer that adopts Live's grid.
+- *G1 later:* add the two columns in that writer's own revision. Costs one more
+  migration and leaves a window in which a reprocess can overwrite an adopted
+  grid if the writer ships without them.
 
-All of these were run with the installed essentia 2.1-beta6-dev on synthetic
-audio:
+**Loudness placement.** Compute it inside `analyze` and `analyze_stems`. A
+separate stage would need new `TrackState` values, which means changing the
+enum and the dispatcher. For true peak, use `scipy.signal.resample_poly(x, 4, 1)`
+(scipy is already a direct dependency, `pyproject.toml`: `scipy>=1.10`) rather than
+`es.TruePeakDetector`: they agree, and scipy is 8× faster (table below).
 
-- `LoudnessEBUR128` accepts **stereo only**. A mono vector is rejected with
-  `cannot convert argument VECTOR_REAL to VECTOR_STEREOSAMPLE`. It works at
-  22.05, 44.1 and 48 kHz: a 1 kHz sine at −20 dBFS reads −19.96, −19.99 and
-  −19.99 LUFS. It does not compute true peak
-  ([docs](https://essentia.upf.edu/reference/std_LoudnessEBUR128.html)).
-- **Don't measure the mono decode the stages already hold.** Downmixing to mono
-  and duplicating to L/R reads 0.00, −1.25 and −3.01 LU low for identical,
-  partly correlated and uncorrelated channels. Decode once in stereo at the
-  native rate and downmix that for the existing features, so the file is still
-  decoded only once. A mono file is duplicated to L/R, which is how Live plays
-  it.
-- **True peak: use `scipy.signal.resample_poly(x, 4, 1)`, not essentia's
-  `TruePeakDetector`.** At its default quality TruePeakDetector takes 2.51 s per
-  mono minute. scipy gives the same answer in 0.31 s (0.04 dBTP for both, on a
-  planted intersample peak). TruePeakDetector at `quality=4` misses that peak
-  entirely: it returns the −1.84 dB sample peak. scipy is already a dependency.
-- **Cross-check** on a synthetic 24-bit stereo WAV: essentia and scipy give
-  I = −14.74 LUFS and TP = +0.02 dBTP; `ffmpeg -af ebur128=peak=true` gives
-  −14.7 LUFS and 0.0 dBTP.
-- **Cost** on a synthetic 6-minute stereo file on the M2 Pro: loudness takes
-  3.7 s and true peak about 3.7 s. That is about 37 s per track for the mix plus
-  4 stems, or about 1.5 h of wall time for 282 tracks at stage concurrency 2.
-  It is added to a reprocess that runs anyway.
+## Evidence (scratch, synthetic)
 
-## Options
+Loudness, with essentia 2.1-beta6-dev, scipy 1.17.0 and ffmpeg 8.1.1, on the
+M2 Pro while other jobs were running:
 
-**A. One migration with all nine columns (recommended).** You migrate once, and
-the reprocess that is due anyway fills the analysis columns in a single pass
-over the library.
+| signal | essentia I | ffmpeg `ebur128` I | sample peak | TP essentia | TP scipy ×4 | TP ffmpeg |
+|---|---|---|---|---|---|---|
+| stereo 1 kHz sine −23 dBFS, 20 s ([EBU Tech 3341][ebu3341] test-signal shape; BS.1770 gives −23.0) | −22.99 | −23.0 | | | | |
+| same, −33 dBFS | −32.99 | −33.0 | | | | |
+| same, 48 kHz | −22.99 | | | | | |
+| 6-min synthetic techno, 320k mp3 | −23.85 | −23.8 | | | | |
+| fs/4 sine at 45°, true peak −0.01 dBTP by construction | | | −3.02 | +0.11 | +0.11 | +0.6 |
+| 7 kHz sine, true peak −0.50 dBTP | | | −0.50 | −0.38 | −0.32 | +0.2 |
 
-**B. One migration per consumer, as each one lands.** That means three manual
-backup-and-upgrade rounds. If the reprocess runs before the loudness columns
-exist, the library has to be decoded a second time later.
+Essentia and scipy over-read the true peak by at most 0.18 dB; ffmpeg's
+`ebur128` over-reads by 0.6–0.7 dB. Integrated loudness agrees with ffmpeg
+within 0.05 LU.
 
-**C. Don't store anything; measure at load time.** Measuring loudness and true
-peak on a 6-minute mix takes about 7 s, which is too slow for the interactive
-load-track path. Provenance can't be recomputed at all.
+Cost on a 6-minute stereo file, set against what analyze already spends:
 
-Alternatives I rejected for individual columns:
+| step | seconds |
+|---|---|
+| today's full-mix analyze (load 1.84 + BPM 3.30 + key 0.12 + energy 1.23) | 6.5 |
+| mix loudness: stereo decode 0.50 + `LoudnessEBUR128` 1.59 + TP (scipy) 1.69 | 3.8 |
+| …TP with `es.TruePeakDetector` instead | 13.62 |
+| one stem: PCM24 read 0.15 + 1.59 + 1.69 | 3.4 (×4 = 13.7) |
 
-- **`analyzer_version` on `tracks`.** Different stages write the rows at
-  different times, so a partial reprocess leaves mixed versions within one track.
-- **A JSON `provenance` blob.** The one query that matters,
-  `WHERE analyzer_version IS NULL`, can't use it.
-- **An analyzer-owned `bpm` plus a new `grid_bpm`.** Every BPM reader (writer,
-  warp check, recommenders, graph) would need a `coalesce`. Keeping `bpm` as the
-  effective tempo moves only the hint.
+Spot-checked during fact-check (same venv, essentia 2.1b6.dev1389): stereo
+−23 dBFS 1 kHz → −22.99 LUFS; one channel only → −26.00; digital silence →
+exactly −70.0; fs/4 sine at 45° → sample peak −3.02 dBFS, scipy ×4 TP +0.11.
+`LoudnessEBUR128` takes one stereo `signal` and returns `momentaryLoudness`,
+`shortTermLoudness`, `integratedLoudness`, `loudnessRange` (no true peak, hence
+the separate TP step). On 6 min of stereo noise: `LoudnessEBUR128` 1.67 s,
+scipy TP 1.95 s, `TruePeakDetector` (default 4× oversampling) 14.6 s, so
+"≈ 8×" holds. The energy-saturation table and the per-step analyze timings
+were not re-run.
+
+That totals about 17.5 s per track. For the 244 visible tracks
+(`library-duplicates.md`) it comes to about 71 min of CPU, or about 36 min at
+the stages' `concurrency = 2`.
+
+Migration, through dance's real Alembic chain, on a populated synthetic DB: 40
+tracks, 160 stems, 200 analysis rows, 4,000 beats, plus edges, tags, plays and
+set rows.
+
+| scenario | result |
+|---|---|
+| S1: `e4a91c7b2d05` (rebuilds `tracks`), shipped env.py | all rows survive |
+| S2: same, with `PRAGMA foreign_keys=ON` on the migration connection | `IntegrityError` at `DROP TABLE tracks`, because `session_plays`/`set_tracks` reference `tracks` with no `ON DELETE`. Nothing lost. |
+| **S2b**: same, with no `session_plays`/`set_tracks` rows | **reports success.** `tracks` keeps 40 rows; `stem_files`, `audio_analysis`, `regions`, `track_embeddings`, `track_edges`, `track_tags`, `beats`, `phrases` all drop to **0** |
+| S3: proposed revision with FKs forced **on** | 9 × `ALTER TABLE … ADD COLUMN` + 1 `CREATE INDEX`, no `_alembic_tmp_` table, all rows survive; the fingerprint tags 100 of 200 rows `analyzer_version = 1` |
+| S4: proposed downgrade as batch `drop_column`, FKs on | fails the same way as S2 |
+| S5: same as S4, shipped env | rebuilds `tracks` **and** `audio_analysis` (77 statements); safe only because FKs are off |
+| S6: downgrade via native `ALTER TABLE … DROP COLUMN`, FKs on | 9 statements, no rebuild, all rows survive |
+| S7: a revision that adds a column and then raises, shipped env | the column **stays**, `alembic_version` does not move, and re-running fails with `duplicate column name: isrc` |
+| S8: S7, and S2b's chain, with the env.py hardening below | nothing left behind; the full chain keeps every row |
+
+S2b is SQLite behaving as documented: with FKs on, `DROP TABLE` first runs an
+implicit `DELETE` that "may invoke foreign key actions" ([foreignkeys §5][fk]),
+here `ON DELETE CASCADE`. S7 is pysqlite behaving as documented: in its legacy
+mode it skips `BEGIN` before DDL, so each `ALTER` commits on its own
+([SQLAlchemy][sa-txn]).
+
+Re-run independently during fact-check (dance's real chain, 5-track scratch DB,
+FKs forced on through a class-level `Engine` connect listener): S1, S2 and S2b
+reproduce exactly (S2b: `tracks` 5, `stem_files`/`audio_analysis`/`beats` 0,
+`alembic_version` = head). S7 reproduces (`duplicate column name: isrc` on
+retry). S8 with a hardened copy of env.py: the failed revision leaves no column
+behind, and the populated chain keeps every row even with the global FK
+listener on. S3–S6 were not re-run.
 
 ## Alembic notes
 
-- **The upgrade doesn't rebuild either table.** Every column is nullable or has a constant
-  server default, so batch mode emits plain `ALTER TABLE … ADD COLUMN`. I ran
-  the exact operations on a scratch copy of the real DB (copied via the
-  immutable URI, then deleted): 9 ALTERs, no `_alembic_tmp_` table, 6 ms. All
-  243,005 rows in 15 tables were unchanged, and the partial unique indexes and
-  the `duplicate_of` FK were intact. **Don't add a CHECK, FK or UNIQUE constraint.** Any of
-  them forces a move-and-copy; verified with `create_check_constraint`, which
-  produced CREATE `_alembic_tmp_audio_analysis` / INSERT / DROP / RENAME.
-- **The downgrade does rebuild.** Each `drop_column` triggers move-and-copy of
-  both tables. With foreign keys off it took 0.1 s and every count survived.
-- **Rebuilding `tracks` (as `e4a91c7b2d05` already does) is safe only by
-  accident.** I populated a scratch DB at `b7d4e2f1a9c3` and upgraded it:
-
-  | Alembic connection | result |
-  |---|---|
-  | as shipped (`env.py:64` uses `engine_from_config`, no pragma) | all counts survive |
-  | `PRAGMA foreign_keys=ON` forced | **reports success**, while stem_files 12→0, audio_analysis 15→0, and regions, embeddings, beats and track_edges all →0 |
-  | the same, plus one `session_plays` row (FK with no `ON DELETE`) | `IntegrityError` |
-
-  `DROP TABLE` performs an implicit DELETE that fires `ON DELETE CASCADE`
-  ([sqlite.org/foreignkeys.html §5](https://www.sqlite.org/foreignkeys.html)).
-  If `env.py` were ever changed to reuse `get_engine()`, whose connect listener
-  turns foreign keys on (`database.py:770`), the next table rebuild would wipe
-  every child table without reporting an error.
-- **Migrations are not atomic with this driver.** pysqlite doesn't issue BEGIN
-  before DDL
-  ([SQLAlchemy: transactions with the sqlite3 driver](https://docs.sqlalchemy.org/en/20/dialects/sqlite.html)).
-  On a scratch copy, a migration that failed in its second batch left
-  `audio_analysis.loudness_lufs` added and an `_alembic_tmp_tracks` table
-  behind, so the next attempt would fail with "table already exists". With
-  SQLAlchemy's documented recipe (`isolation_level = None` on connect, then emit
-  `BEGIN` on begin), the same failure left nothing behind.
-- **The real DB already fails `foreign_key_check`: 252 rows.** They are stem
-  analysis rows for `stem_files` ids 257–508, which no longer exist: 63 tracks,
-  all analysed 2026-05-17 between 18:18 and 18:22. Those 63 tracks have fresh
-  stems and fresh analysis. Any check therefore has to compare before and after
-  rather than expect zero. Deleting the 252 rows is a one-line DELETE and out of
-  scope here.
-
-**Recommended in the same change:**
-
-1. In `env.py`, add a connect listener that issues `PRAGMA foreign_keys=OFF`
-   before any BEGIN (SQLite ignores the pragma inside a transaction, §2 of the
-   page above) and applies the BEGIN recipe. After `run_migrations()`, fail if
-   `PRAGMA foreign_key_check` reports a violation that wasn't there before.
-2. Add `tests/test_alembic_populated.py`. Walk every revision from initial to
-   head and back, with rows in every table that exists at each step. Assert
-   that per-table counts and `foreign_key_check` are unchanged after each
-   `+1` and `-1`. Run the walk a second time with a global listener forcing
-   `foreign_keys=ON`, to prove that env.py's OFF wins. `docs/dev.md:150` already
-   claims `test_alembic.py` walks up and down, but it only upgrades an empty DB.
-3. Give `grid_source` `server_default="analyzer"` in the model too, so DBs
-   created by `init_db()` match migrated ones. Base the new revision on main's
-   head at the time it's implemented; other branches may add revisions first.
+- **Stay on the plain ALTER path.** In batch mode, Alembic rebuilds the table
+  for any operation other than `add_column` and `create_index`/`drop_index`, and
+  also when a `server_default` is a SQL expression (`alembic/ddl/sqlite.py:49-75`
+  in 1.18.4). So: no FKs, no CHECKs, and `server_default="analyzer"` as a plain
+  string. That emitted `ADD COLUMN grid_source VARCHAR(16) DEFAULT 'analyzer'
+  NOT NULL`. ADD COLUMN takes the same time at any table size; a CHECK would make
+  SQLite scan every row ([ALTER TABLE][alter]).
+- **Backfill that needs no audio goes in the revision.** Two UPDATEs:
+  `UPDATE audio_analysis SET analyzer_version = 1 WHERE (stem_file_id IS NULL
+  AND bpm_confidence = 0.7) OR (stem_file_id IS NOT NULL AND (bpm_confidence IN
+  (0.4, 0.7) OR bpm = 0))`, and `UPDATE audio_analysis SET analyzer_bpm = bpm
+  WHERE stem_file_id IS NULL`. The fingerprint cannot mis-tag a v2 row in
+  practice: v2 mix confidences are Essentia/5.32, ≤ 0.4 or 0.1, never exactly
+  0.7, and v2 stem rows hold a continuous coherence with `bpm` NULL (not 0)
+  when no tempo is found (`analyze_stems.py:146`). Anything
+  that needs audio or the network stays out, following e4a91c7b2d05's precedent.
+- **Downgrade with native `DROP COLUMN`** (SQLite ≥ 3.35; the venv links
+  3.53.1). Drop `ix_tracks_isrc` first: SQLite refuses to drop an indexed
+  column.
+- **Harden `env.py`** (`run_migrations_online`, `env.py:61-79`). Today's safety
+  rests on two accidents: env.py builds its own engine with `engine_from_config`,
+  which skips dance's `PRAGMA foreign_keys=ON` listener (`database.py:772-779`),
+  and SQLite's compile-time default leaves FKs off. Three changes, verified in S8:
+  1. Set `PRAGMA foreign_keys=OFF` explicitly on connect. The PRAGMA is ignored
+     inside a transaction ([foreignkeys §2][fk]), so a revision cannot do this
+     itself.
+  2. Get real transactional DDL from SQLAlchemy's documented recipe: set
+     `isolation_level = None` on connect and emit `BEGIN` on the `begin` event
+     ([SQLAlchemy][sa-txn]). Alembic's SQLite impl declares
+     `transactional_ddl = False` (`alembic/ddl/sqlite.py:44`), so this gives
+     one transaction *per revision*: a failing revision rolls back, while
+     earlier revisions in the same `upgrade head` stay committed. That is the
+     behaviour we want; passing `transactional_ddl=True` to `configure()`
+     would instead make the whole run one transaction.
+  3. Run `PRAGMA foreign_key_check` before and after the migration and fail if
+     the count grew. Comparing counts, rather than demanding zero, means
+     violations already in the DB cannot block migrations.
+- **New test, `tests/test_alembic_populated.py`.** Populate every table at
+  `b7d4e2f1a9c3`, in two variants: with plays/set rows and without (the S2b
+  shape). Upgrade to head, `downgrade -1`, `upgrade head`. Assert that per-table
+  row counts are unchanged and `foreign_key_check` is empty. A class-level
+  `event.listens_for(Engine, "before_cursor_execute")` also catches env.py's own
+  engine, so the test can assert that the new revision never creates an
+  `_alembic_tmp_` table. Today nothing checks that data survives: despite
+  `docs/dev.md:148` saying it walks "up and down", `tests/test_alembic.py` only
+  upgrades an empty DB.
 
 ## Backfill
 
-| column | how | cost |
+| column | source | how |
 |---|---|---|
-| `grid_source` | The migration default `'analyzer'`, which is true for every existing row. | 0 |
-| `analyzer_bpm` | Left NULL; it only matters once something writes an Ableton or manual BPM. | 0 |
-| `analyzer_version`, loudness ×3 | `dance reprocess --from analyze --all --skip-embeddings` (from `claude/analysis-fixes`). Until it runs, NULL means "needs reprocess". | the reprocess, plus about 37 s per track |
-| `isrc`, `expected_duration_seconds` | One-off script: `GET /tracks/{id}` for each of the 142 `spotify_id`s, reading `external_ids.isrc` and `duration_ms`. **Don't copy `duration_seconds` instead**: for the 57 rows whose `spotify_id` was attached by name match on 2026-05-17, it is the file's tag duration. | ~2 min with acquisition's 429 backoff |
-| `isrc`, `source_url` from file tags | The same script reads tags read-only. spotDL 4.4.3 embeds `TSRC` (ISRC) and `COMM` (download URL) in mp3s (`.venv/…/spotdl/utils/metadata.py:601-604`). How many of the 2026-05-17 files carry them is unmeasured; the dry run prints it. | seconds |
-| `source_url` for yt-dlp rows (2026-05-24 / 05-26) | Unrecoverable: yt-dlp ran without `--print` or `--embed-metadata`, so these stay NULL. New downloads write `AcquireResult.chosen` (`claude/acquisition`) in `_finalize_track_after_download` (`routers/pipeline.py:761`). | 0 |
+| `analyzer_version`, `analyzer_bpm`, `grid_source` | fingerprint / `bpm` / default | in the revision |
+| `loudness_*`, `true_peak_dbtp`, `analyzer_version = 3` | audio | `dance reprocess --from analyze --all --skip-embeddings` (already needed for the BPM fix; Demucs short-circuits), plus a new `--stale` flag that selects rows whose version is NULL or below the stage constant |
+| `isrc`, `expected_duration_seconds` | Spotify `GET /tracks/{id}` via the existing `SpotifySearchClient.get_track` (`search.py:126`; the endpoint is listed as still available in [Feb 2026][sp-feb]; whether this app's credentials can call it was not checked); else spotDL's `TSRC` tag; else spotDL's sync file, `~/.dance/spotdl_sync.spotdl` (`downloader.py:97`; `songs[].isrc`, `duration`, `song_id`) | new `dance backfill-identity`, dry-run by default, `--apply` (same pattern as `dance dedupe`) |
+| `source_url` | `COMM` frame of spotDL mp3s | same command. Rows from main's in-app yt-dlp path stay NULL; that URL was never kept |
 
-**Order:** migrate, then run the backfill script, then reprocess. The library is
-decoded once.
+Plain mutagen 1.47 reads spotDL-style tags back: `EasyID3['isrc']`,
+`ID3.getall('WOAS')` and `ID3.getall('COMM')` all worked on a tagged synthetic
+mp3.
 
-## API and UI exposure
+**For `expected_duration_seconds`, the order matters.** Rows not yet
+re-analysed still hold their ingest-time duration, and for app-ingested rows
+that is Spotify's. The reprocess destroys it. So before running any `dance
+reprocess --from analyze`, take this snapshot (read-only, plus your own backup
+file; no approval needed):
 
-Additive optional fields only, defaulting to `None`, so older clients are
-unaffected. The companion's TS types change in the same commit.
+```bash
+mkdir -p ~/.dance/backups
+sqlite3 -readonly -csv -header ~/.dance/dance.db \
+  "SELECT id, spotify_id, duration_seconds, file_path FROM tracks" \
+  > ~/.dance/backups/durations-pre-reprocess.csv
+```
 
-- **`AnalysisOut`** gains `loudness_lufs` and `true_peak_dbtp`. The Set view
-  can then show a level jump between two tracks before gain normalisation
-  exists.
-- **`TrackOut`** gains `expected_duration_seconds` and `source_url`. They feed a
-  Pipeline-view chip ("file 414 s · Spotify 186 s") with a link to the upload.
-  This is the only UI that ships with the migration.
-- **Not exposed:** `analyzer_version` (`dance status` prints "N rows predate
-  analyzer v2" instead), `grid_source` and `analyzer_bpm` (there is no
-  write-back UI yet), `isrc`, stem loudness and LRA. `DeckCellOut` is unchanged.
+Then:
 
-## What this unblocks (each a separate change)
+1. Stop the backend and run `sqlite3 ~/.dance/dance.db ".backup
+   ~/.dance/backups/dance-pre-provenance.db"`. `.backup` includes the WAL; a
+   plain `cp` of a WAL database can miss committed pages.
+2. `alembic upgrade head`.
+3. `dance backfill-identity --apply`.
+4. The reprocess.
 
-1. **Clip-gain normalisation on load.** One gain is applied to a track's four
-   stems and its mix, so the stems still sum to the mix:
-   `gain_db = min(target − mix_lufs, ceiling − mix_true_peak)`. In the `.als`,
-   `SampleVolume` is linear amplitude. Live's bundled *Sample Reference.als*
-   has 2,679 clips: 2,664 at `1`, and the rest at values such as `1.99526238`
-   (+6 dB), `0.7943282127` (−2 dB) and `10` (+20 dB), all exactly
-   10^(dB/20). The writer emits `1` today (`writer.py:531`). Over OSC, stock
-   AbletonOSC has `/live/clip/set/gain`, but LOM `Clip.gain` is a normalised
-   0–1 value whose dB mapping isn't documented
-   ([LOM Clip](https://docs.cycling74.com/apiref/lom/clip/)). It needs
-   calibrating against `gain_display_string`, which stock AbletonOSC doesn't
-   expose, so that half needs an OSC-contract proposal. Either half has to be
-   re-verified in Live.
-2. **Energy features that don't depend on mastering.** Compute energy on
-   loudness-normalised audio, and use stem LUFS minus mix LUFS as a measure of
-   how prominent each stem is (rule 4). This is an analyzer change: bump
-   `analyzer_version`. It also changes rec behaviour, so it needs the real-set
-   check described in `set-rail-verification.md`.
-3. **Wrong-version and duplicate-upload queries.** These become plain SQL
-   against `expected_duration_seconds` and `source_url`.
-4. **Writing Live's grid back (warp-guard Option C).** It sets `bpm` and
-   `grid_source='ableton'`, and the grid guard keeps it through every later
-   reprocess.
+The snapshot and `.backup` commands were both checked on a scratch WAL
+database: the snapshot sees rows still sitting in the `-wal` file, and the
+backup passes `integrity_check`.
+
+To size the work first (read-only; use `-readonly`, not `?immutable=1`, which
+ignores the `-wal` file. Checked on a scratch WAL DB: `-readonly` saw 100
+rows, `immutable=1` saw no table at all):
+
+```bash
+sqlite3 -readonly ~/.dance/dance.db "SELECT CASE WHEN stem_file_id IS NULL
+  THEN 'mix' ELSE 'stem' END, SUM((stem_file_id IS NULL AND bpm_confidence = 0.7) OR
+  (stem_file_id IS NOT NULL AND (bpm_confidence IN (0.4, 0.7) OR bpm = 0))), COUNT(*)
+  FROM audio_analysis GROUP BY 1"
+```
+
+## API / UI exposure
+
+**None in this change.** `AnalysisOut`, `StemAnalysisOut` and `TrackOut`
+(`api/schemas.py:39-62, 118-126`) stay as they are. Each consumer adds its own
+fields in its own proposal: clip gain on load, a "wrong version?" badge
+(expected vs measured duration), a grid-owner marker. `dance doctor` gets one
+read-only line: "N analysis rows older than the current analyzer → `dance
+reprocess --from analyze --stale`".
 
 ## What NOT to add
 
-- **No `bpm_method` or other per-field provenance columns.** The version suffix
-  covers the one runtime branch, the tempo fallback.
-- **No constraints and no indexes.** Constraints force a rebuild, and Python
-  enums are the project's convention. 282 rows don't need indexes, and adding
-  one later doesn't require a rebuild either.
-- **No loudness curves.** `rms_curve` already exists. Short-term LUFS at 10 Hz
-  would add about 3,600 floats per row.
-- **No stored gain or target columns.** Gain is derived at load time from LUFS
-  and a setting, so a stored value would go stale whenever the target changes.
-- **No ReplayGain or loudness tags written into library files.** dance never
-  modifies library audio, and `file_hash` covers the first 1 MB
-  (`ingest.py:67-94`), which includes the ID3 header.
-- **No downbeat or grid-offset column** until warp-guard Option C step 5 shows
-  that a repaired grid persists.
-- **No download-history table.** One URL per row is enough; earlier attempts
-  are recorded in job messages.
+- Momentary/short-term loudness curves. `rms_curve` already exists, and at 10 Hz
+  a curve is about 3,600 floats per row × 5 rows per track.
+- Sample peak, PLR, ReplayGain values and per-stem gain offsets; all of them can
+  be derived. Clip gain must be **one value per track** (target − mix
+  `loudness_lufs`) applied to all four stems alike; normalising stems
+  individually would re-balance the mix.
+- A `source` enum (spotdl / yt-dlp / local): the host in `source_url` already
+  says it.
+- Match score, video ID, upload title: they stay in the acquisition job message
+  and the tag comment.
+- A unique constraint on `isrc`, or FKs / CHECKs on any of these columns.
+- Spotify `popularity` / `available_markets`: both removed from the API in
+  [February 2026][sp-feb].
+- New API fields (see above).
 
-## Decisions for you
+## Recommendation
 
-1. **Option A, a single migration?** Recommended.
-2. **`loudness_range_lu`: include it or drop it?** Recommend including it: it
-   costs nothing during this pass, and adding it later means decoding the whole
-   library again.
-3. **`grid_source` and `analyzer_bpm` now, while they're dormant, or later with
-   the write-back?** Recommend now: it costs no extra migration, and it protects
-   any grid written before the next reprocess.
-4. **Harden `env.py` in the same change** (explicit FK OFF, the BEGIN recipe,
-   the `foreign_key_check` gate)? Recommend yes.
-5. **The Spotify backfill makes 142 `GET /tracks/{id}` calls with your
-   credentials.** Is that OK? Development mode now requires Premium on the app
-   owner's account
-   ([migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide)).
-6. **The 252 orphaned stem-analysis rows:** delete them in this change or
-   separately?
+Add all nine columns in **one** revision, using plain ALTERs and a downgrade
+that uses native DROP COLUMN. Ship the `env.py` hardening and the populated-DB
+test **in the same PR**. The revision itself is safe even with FKs on (S3), but
+the next migration that carries an FK or CHECK will rebuild a table, and S2b
+shows that going wrong silently. Compute loudness inside the two analyze stages,
+using scipy for true peak. Stamp `analyzer_version = 3`. Put the `grid_source`
+guard in now: it is two ADD COLUMNs and about 25 lines of code, and no writer
+for a non-analyzer grid exists yet to forget it. Take the duration snapshot
+**today**, before anyone reprocesses the real library.
+
+## Decisions for the user
+
+1. **All three groups in one revision**, or loudness first and identity later?
+   (Recommended: one. Each extra revision means another upgrade and another
+   reprocess.)
+2. **Add `grid_source` + `analyzer_bpm` now**, or in the revision of whatever
+   first adopts Live's grid into the DB (no such writer exists or is planned
+   yet; Option C pushes dance's BPM *into* Live)? (Recommended: now. It costs
+   two columns, and adding it later costs another migration plus the risk that
+   the writer ships without it.)
+3. **`analyzer_version` as an integer** (A1) or a provenance string (A2)?
+   (Recommended: A1.)
+4. **True peak on stems too** (≈ 6.8 s/track), or on the mix only? Rule 4 argues
+   for stems, since a soloed stem gets the track's gain as well.
+   (Recommended: stems too.)
+5. **`env.py` hardening in this PR**, or separately? (Recommended: this PR.)
+6. **Identity source:** a Spotify re-fetch (needs credentials; authoritative), or
+   tags + the spotDL sync file only (works offline)? (Recommended: try
+   Spotify first, fall back to tags and the sync file, as in the Backfill
+   table. Check with one real `get_track` call that the credentials still
+   work before relying on it.)
+7. **ISRC on a probable wrong-version file:** store it and rely on the
+   documented duration check (recommended), or leave it NULL until the
+   durations agree?
+8. **The removed playlist endpoint** (`search.py:180`, `/tracks` → `/items`,
+   `popularity` dropped): fix it in its own small PR (recommended; it is a
+   live breakage, not schema work), or fold it into this one?
 
 ## Migration cost
 
-- **Code:** about 10 model lines, one revision (~40 lines), ~20 lines in
-  `env.py`, two schema classes plus TS types, ~40 lines of stage writes, a
-  backfill script of ~120 lines, and two new test files.
-- **Your part:** stop the backend, back up with
-  `sqlite3 ~/.dance/dance.db ".backup ~/.dance/backups/dance-pre-<rev>.db"`
-  (`.backup` handles WAL; a plain `cp` can miss committed pages), run
-  `alembic upgrade head`, run the backfill, then reprocess.
-- **Ongoing:** about 37 s more per new track, on top of Demucs.
+- **Schema:** 1 revision of 12 statements (9 ADD COLUMN, 1 CREATE INDEX, 2
+  backfill UPDATEs on `audio_analysis`). No table is copied, and ADD COLUMN
+  takes the same time at any table size.
+- **Code (estimate, lines):** models 25; `pipeline/utils/loudness.py` 60;
+  stamping + grid guard 25; ingest 15 (`pipeline.py:528, 714` also write
+  `expected_duration_seconds` and `isrc`, `_parse_hit` reads
+  `external_ids.isrc`, `extract_metadata` reads `TSRC`/`COMM`; the playlist
+  `fields=` change waits on the `/items` fix); `dance backfill-identity` 120;
+  `reprocess --stale` 30; `env.py` 25; tests 250.
+- **Data:** one reprocess. That is about 36 min of loudness CPU on top of the
+  analysis it re-runs anyway, plus one Spotify call per track with a
+  `spotify_id` (at most 357). Get Several Tracks is gone, so there is no
+  batching.
 
 ## Verification plan
 
-1. **Tests.** `test_alembic_populated.py` (above). A stage test on synthetic
-   audio: a 1 kHz sine at −20 dBFS in stereo reads −20.0 ±0.1 LUFS, a mono file
-   is duplicated to L/R, and silence gives −70.0 with the true-peak floor. A
-   grid-guard test: a row with `grid_source='ableton'` keeps its `bpm` through a
-   reprocess and gains `analyzer_bpm`.
-2. **Migration on a copy of the real DB:**
-   ```bash
-   sqlite3 'file:/Users/arya/.dance/dance.db?immutable=1' ".backup /tmp/dance-mig/dance.db"
-   alembic -x url=sqlite:////tmp/dance-mig/dance.db upgrade head
-   ```
-   Then compare per-table counts. `foreign_key_check` should show 252 rows
-   before and after, and `integrity_check` should return `ok`. Repeat after
-   `alembic … downgrade -1`.
-3. **Real data (rule 2).** Copy 3 library files to a temp dir: one mastered hot,
-   one quiet, one with a silent vocal stem. Analyse them into a temp DB, as
-   `claude/analysis-fixes` did. Their `loudness_lufs` and `true_peak_dbtp`
-   should be within 0.1 of `ffmpeg -i <file> -af ebur128=peak=true -f null -`.
-4. **Library spread.** After the reprocess, run
-   `SELECT min(loudness_lufs), max(loudness_lufs), avg(loudness_lufs) FROM audio_analysis WHERE stem_file_id IS NULL`.
-   The clip-gain consumer needs this to pick a target.
-5. **Identity.** After the backfill, the wrong-version query lists the 22 rows
-   counted above, including *Cycles*, *Surrender* and *Vision Blurred*.
+1. **Unit tests, synthetic:**
+   - stereo 1 kHz −23 dBFS sine reads −23.0 ± 0.1 LUFS; silence stores NULL;
+     dual-mono vs one channel differs by 3.01 dB
+   - the fs/4 sine at 45° reads −3.02 dBFS sample peak and ≈ 0 dBTP true peak
+   - a mix row with `grid_source='ableton'` and `bpm = 125.0`, run through the
+     stage on a 128-BPM click track, keeps `bpm` at 125.0 and gets
+     `analyzer_bpm` ≈ 128
+   - the fingerprint SQL tags hand-made v1 rows and leaves v2 rows alone
+   - `tests/test_alembic_populated.py`, as described above
+2. **Real data (rule 2)**, on a `.backup` copy in a throwaway install with HOME
+   and `DANCE_*` redirected, as f2bb065 did:
+   - record per-table counts, run `alembic upgrade head`, and compare; the
+     counts must be identical
+   - run `dance reprocess --from analyze -t <3 ids> --skip-embeddings`; check
+     each mix's `loudness_lufs` against `ffmpeg -af ebur128=peak=true`
+     (|ΔI| ≤ 0.2 LU) and confirm `analyzer_version = 3`
+   - run `dance backfill-identity` as a dry-run on the copy: the ISRC count,
+     and how many rows exceed the duration threshold
+   - check that `dance doctor` reports head
+
+   Live is not involved until the clip-gain consumer, which changes `.als`
+   emission and needs its own in-Live check.
+
+Apart from the fact-check re-runs noted inline, every number above comes from
+the author's scratch scripts kept outside the repo
+(`loudness_probe.py`, `migration_probe.py`, `tags_and_cost_probe.py`), which
+use synthetic audio and synthetic DBs only.
+
+[lom]: https://docs.cycling74.com/apiref/lom/clip/
+[sp-feb]: https://developer.spotify.com/documentation/web-api/references/changes/february-2026
+[sp-mar]: https://developer.spotify.com/documentation/web-api/references/changes/march-2026
+[isrc]: https://en.wikipedia.org/wiki/International_Standard_Recording_Code
+[ebu3341]: https://tech.ebu.ch/publications/tech3341
+[fk]: https://www.sqlite.org/foreignkeys.html
+[alter]: https://www.sqlite.org/lang_altertable.html
+[sa-txn]: https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#enabling-non-legacy-sqlite-transactional-modes-with-the-sqlite3-or-aiosqlite-driver
