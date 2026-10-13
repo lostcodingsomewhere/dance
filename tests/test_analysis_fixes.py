@@ -1,5 +1,6 @@
 """Analysis fixes: precise BPM, honest key names, per-stem tempo, decoded
-duration.
+duration, and ``dance reprocess`` to push the fixes through an existing
+library.
 
 The BPM tests run the REAL :class:`AnalysisStage` with REAL essentia on
 synthetic accented click tracks at tempos that are NOT librosa lag bins
@@ -10,18 +11,36 @@ bins at 44.1 kHz, hop 512), so a quantised detector cannot pass them.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pytest
+from click.testing import CliRunner
 
-from dance.config import Settings
+from dance import cli
+from dance.config import Settings, get_settings
 from dance.core.database import (
     AudioAnalysis,
+    Region,
     StemFile,
     StemKind,
     Track,
     TrackState,
+    get_session,
+    init_db,
     now_utc,
+)
+from dance.pipeline import preflight
+from dance.pipeline.reprocess import (
+    SKIP_DUPLICATE,
+    SKIP_ERROR,
+    SKIP_LIMIT,
+    SKIP_MISSING,
+    SKIP_UPSTREAM,
+    STATE_ORDER,
+    apply_reprocess,
+    find_stage,
+    plan_reprocess,
 )
 from dance.pipeline.stages.analyze import AnalysisStage
 from dance.pipeline.stages.analyze_stems import StemAnalysisStage
@@ -443,3 +462,281 @@ def test_duration_mismatch_threshold(caplog, stored, decoded, warns):
         AnalysisStage._reconcile_duration(track, decoded)
     assert track.duration_seconds == decoded
     assert ("Duration mismatch" in caplog.text) is warns
+
+
+# ---------------------------------------------------------------------------
+# (e) Reprocess — planning
+# ---------------------------------------------------------------------------
+
+
+def test_state_order_matches_every_default_stage(settings, session):
+    from dance.pipeline.dispatcher import Dispatcher
+
+    for stage in Dispatcher(settings, session).stages:
+        i = STATE_ORDER.index(stage.input_state.value)
+        j = STATE_ORDER.index(stage.inflight_state.value)
+        k = STATE_ORDER.index(stage.output_state.value)
+        assert i < j < k, stage.name
+
+
+def _seed_states(make_track, session):
+    t = {
+        "pending": make_track(state=TrackState.PENDING.value),
+        "analyzed": make_track(state=TrackState.ANALYZED.value),
+        "separated": make_track(state=TrackState.SEPARATED.value),
+        "stems": make_track(state=TrackState.STEMS_ANALYZED.value),
+        "complete": make_track(state=TrackState.COMPLETE.value),
+        "error": make_track(state=TrackState.ERROR.value, error_message="boom"),
+        "dupe": make_track(state=TrackState.COMPLETE.value),
+    }
+    t["dupe"].duplicate_of = t["complete"].id
+    session.commit()
+    return t
+
+
+def test_plan_only_rewinds_tracks_at_or_after_the_stage(make_track, session):
+    t = _seed_states(make_track, session)
+    plan = plan_reprocess(session, StemAnalysisStage())
+
+    assert plan.reset_to == TrackState.SEPARATED.value
+    assert plan.track_ids == [t["separated"].id, t["stems"].id, t["complete"].id]
+    assert {r.track_id for r in plan.skipped[SKIP_UPSTREAM]} == {
+        t["pending"].id,
+        t["analyzed"].id,
+    }
+    assert [r.track_id for r in plan.skipped[SKIP_DUPLICATE]] == [t["dupe"].id]
+    assert [r.track_id for r in plan.skipped[SKIP_ERROR]] == [t["error"].id]
+
+
+def test_plan_flags_limit_and_ids(make_track, session):
+    t = _seed_states(make_track, session)
+    analyze = AnalysisStage()
+
+    everything = plan_reprocess(session, analyze, include_duplicates=True, include_errors=True)
+    assert len(everything.track_ids) == 7
+
+    limited = plan_reprocess(session, analyze, limit=2)
+    assert limited.track_ids == [t["pending"].id, t["analyzed"].id]
+    assert len(limited.skipped[SKIP_LIMIT]) == 3
+
+    picked = plan_reprocess(session, analyze, track_ids=[t["complete"].id, 9999])
+    assert picked.track_ids == [t["complete"].id]
+    assert [r.track_id for r in picked.skipped[SKIP_MISSING]] == [9999]
+
+
+def test_apply_rewinds_and_clears_errors(make_track, session, settings):
+    t = _seed_states(make_track, session)
+    plan = plan_reprocess(session, AnalysisStage(), track_ids=[t["error"].id], include_errors=True)
+    assert apply_reprocess(session, plan, data_dir=settings.data_dir) == 1
+    session.refresh(t["error"])
+    assert t["error"].state == TrackState.PENDING.value
+    assert t["error"].error_message is None
+
+
+def test_find_stage_rejects_unknown_names():
+    with pytest.raises(ValueError, match="Unknown stage"):
+        find_stage([AnalysisStage()], "analyse")
+
+
+# ---------------------------------------------------------------------------
+# (e) Reprocess — CLI, including a real end-to-end run on a temp DB
+# ---------------------------------------------------------------------------
+
+
+def _cli_db():
+    settings = get_settings()  # the conftest autouse fixture points this at tmp
+    settings.ensure_directories()
+    init_db(settings.db_url)
+    return settings, get_session(settings.db_url)
+
+
+def _add_track(session, n: int, path: Path, **kw) -> Track:
+    defaults = dict(
+        file_hash=f"{n:064d}",
+        file_path=str(path),
+        file_name=path.name,
+        file_size_bytes=1024,
+        title=f"Track {n}",
+        artist="Artist",
+        state=TrackState.COMPLETE.value,
+        created_at=now_utc(),
+        updated_at=now_utc(),
+    )
+    defaults.update(kw)
+    track = Track(**defaults)
+    session.add(track)
+    session.flush()
+    return track
+
+
+def test_cli_dry_run_lists_and_changes_nothing(tmp_path):
+    settings, session = _cli_db()
+    try:
+        a = _add_track(session, 1, tmp_path / "a.wav", title="Alpha Song")
+        b = _add_track(
+            session, 2, tmp_path / "b.wav", title="Beta Song", state=TrackState.ANALYZED.value
+        )
+        session.commit()
+        ids = (a.id, b.id)
+    finally:
+        session.close()
+
+    result = CliRunner().invoke(
+        cli.main, ["reprocess", "--from", "analyze_stems", "--all", "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "DRY RUN" in result.output
+    assert "Alpha Song" in result.output
+    assert "1 track(s)" in result.output
+    assert "not yet at this stage" in result.output
+
+    session = get_session(settings.db_url)
+    try:
+        states = {t.id: t.state for t in session.query(Track).filter(Track.id.in_(ids))}
+    finally:
+        session.close()
+    assert states == {ids[0]: "complete", ids[1]: "analyzed"}
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["--from", "analyze"], "exactly one of --all or --track-id"),
+        (["--from", "analyze", "--all", "-t", "1"], "exactly one of --all or --track-id"),
+        (["--from", "analyse", "--all"], "Unknown stage"),
+        (["--from", "analyze", "--all", "--limit", "0"], "--limit"),
+    ],
+)
+def test_cli_usage_errors(args, message):
+    _cli_db()[1].close()
+    result = CliRunner().invoke(cli.main, ["reprocess", *args])
+    assert result.exit_code != 0
+    assert message in result.output
+
+
+def _fake_embed_ensure_model(self, settings) -> None:  # noqa: ARG001
+    self._model = object()
+    self._processor = object()
+    self._model_name = "fake-clap"
+    self._model_version = "test"
+
+
+def _fake_embed_encode(self, audio: np.ndarray) -> np.ndarray:  # noqa: ARG001
+    v = np.ones(512, dtype=np.float32)
+    return v / np.linalg.norm(v)
+
+
+def _demucs_must_not_load(self, settings):  # noqa: ARG001
+    raise AssertionError("separate should short-circuit: stems are already on disk")
+
+
+def test_cli_reprocess_end_to_end_fixes_a_stale_library_row(tmp_path, monkeypatch):
+    """A COMPLETE track carrying the old bugs (lag-bin BPM, 0.7 confidence,
+    'Cm' for a major key, wrong duration, per-stem librosa BPMs) is rewound by
+    ``dance reprocess --from analyze`` and carried back to COMPLETE by the
+    real dispatcher: real analyze, real separate (short-circuited — Demucs
+    would raise), real analyze_stems + detect_regions, fake CLAP."""
+    from dance.pipeline import dispatcher as dispatcher_mod
+    from dance.pipeline.stages.embed import EmbeddingStage
+    from dance.pipeline.stages.separate import StemSeparationStage
+
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(dispatcher_mod, "_IDLE_GRACE_S", 1.0)
+    monkeypatch.setattr(dispatcher_mod, "_POLL_INTERVAL_S", 0.05)
+    monkeypatch.setattr(StemSeparationStage, "_ensure_model", _demucs_must_not_load)
+    monkeypatch.setattr(EmbeddingStage, "_ensure_model", _fake_embed_ensure_model)
+    monkeypatch.setattr(EmbeddingStage, "_encode", _fake_embed_encode)
+
+    spec = TrackSpec(bpm=124.0, bars=16)
+    settings, session = _cli_db()
+    try:
+        mix = write_track(tmp_path / "mix124.wav", spec)
+        track = _add_track(session, 1, mix, title="Stale Track", duration_seconds=300.0)
+        dupe = _add_track(session, 2, tmp_path / "dupe.wav", title="Dupe", duplicate_of=track.id)
+        for kind, layer in STEM_LAYERS.items():
+            path = write_layer(tmp_path / f"{kind.value}.wav", layer(spec))
+            stem = StemFile(
+                track_id=track.id, kind=kind.value, path=str(path), model_used="htdemucs_ft"
+            )
+            session.add(stem)
+            session.flush()
+            session.add(
+                AudioAnalysis(
+                    track_id=track.id,
+                    stem_file_id=stem.id,
+                    bpm=117.45,
+                    bpm_confidence=0.7,
+                    analyzed_at=now_utc(),
+                )
+            )
+        for t in (track, dupe):
+            session.add(
+                AudioAnalysis(
+                    track_id=t.id,
+                    stem_file_id=None,
+                    bpm=123.046875,
+                    bpm_confidence=0.7,
+                    key_standard="Cm",
+                    key_camelot="8B",
+                    analyzed_at=now_utc(),
+                )
+            )
+        session.commit()
+        track_id, dupe_id = track.id, dupe.id
+    finally:
+        session.close()
+
+    result = CliRunner().invoke(cli.main, ["reprocess", "--from", "analyze", "--all"])
+    assert result.exit_code == 0, result.output
+    assert "Rewound 1 track(s) to pending" in result.output
+    assert "duplicate_of set" in result.output
+
+    session = get_session(settings.db_url)
+    try:
+        track = session.get(Track, track_id)
+        assert track.state == TrackState.COMPLETE.value, track.error_message
+        assert track.duration_seconds == pytest.approx(spec.duration_seconds, abs=0.05)
+
+        full = _fullmix(session, track_id)
+        assert abs(full.bpm - 124.0) < 0.15, full.bpm
+        assert full.bpm_confidence != pytest.approx(0.7)
+        assert 0.0 <= full.bpm_confidence <= 1.0
+        assert full.key_standard is not None and full.key_camelot is not None
+        assert full.key_standard.endswith("m") == full.key_camelot.endswith("A")
+
+        stems = _stem_rows(session, track_id)
+        assert len(stems) == 4
+        assert {row.bpm for row in stems.values()} == {full.bpm}
+        assert all(0.0 <= row.bpm_confidence <= 1.0 for row in stems.values())
+        assert (
+            stems[StemKind.DRUMS.value].bpm_confidence > stems[StemKind.OTHER.value].bpm_confidence
+        )
+        assert session.query(Region).filter_by(track_id=track_id).count() > 0
+
+        # The duplicate was left exactly as it was.
+        assert session.get(Track, dupe_id).state == TrackState.COMPLETE.value
+        assert _fullmix(session, dupe_id).bpm == 123.046875
+    finally:
+        session.close()
+
+
+def test_cli_reprocess_skips_rows_already_upstream(tmp_path, monkeypatch):
+    """--from embed on a track still at ANALYZED must not jump it forward."""
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    settings, session = _cli_db()
+    try:
+        t = _add_track(session, 1, tmp_path / "x.wav", state=TrackState.ANALYZED.value)
+        session.commit()
+        tid = t.id
+    finally:
+        session.close()
+
+    result = CliRunner().invoke(cli.main, ["reprocess", "--from", "embed", "-t", str(tid)])
+    assert result.exit_code == 0, result.output
+    assert "Nothing to reprocess" in result.output
+
+    session = get_session(settings.db_url)
+    try:
+        assert session.get(Track, tid).state == TrackState.ANALYZED.value
+    finally:
+        session.close()

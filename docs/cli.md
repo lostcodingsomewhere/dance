@@ -61,6 +61,35 @@ See `docs/architecture.md` for the stage table. A skipped stage auto-advances it
 
 ---
 
+## `dance reprocess`
+
+Re-run the pipeline from a stage on tracks that already went past it — how a fix to a stage (e.g. the analyzer) reaches a library that is already `complete`. `dance process` only moves tracks forward, so it never would.
+
+```bash
+dance reprocess --from analyze --all --dry-run       # list what would be rewound
+dance reprocess --from analyze --all --limit 3       # try it on 3 tracks first
+dance reprocess --from analyze --all --skip-embeddings
+dance reprocess --from analyze_stems -t 12 -t 40     # specific tracks
+```
+
+`--from` takes a stage name: `analyze`, `separate`, `analyze_stems`, `detect_regions`, `embed`. Exactly one of `--all` / `--track-id` is required.
+
+What it does (logic in `src/dance/pipeline/reprocess.py`):
+
+1. Selects tracks whose state is **at or after** the stage's `input_state` (pipeline order = `TrackState` declaration order). Tracks still upstream are left alone — rewinding them "back" to a later stage would skip work they never had. Lowest ids first, capped by `--limit`.
+2. Leaves out tracks with `duplicate_of` set unless `--include-duplicates`, and tracks in `error` unless `--include-errors` (their failure point isn't recorded in their state).
+3. `--dry-run` prints the selection and the skip reasons, then exits without touching anything.
+4. Otherwise rewinds the selection to the stage's `input_state` (clearing `error_message` and the heal-ledger entry), then runs the normal parallel dispatcher — the same path as `dance process` (no library scan). `separate` short-circuits when all four stems are already on disk, so `--from analyze` does not re-run Demucs. The dispatcher is re-run while passes still make progress, so a single command carries the selection back to `complete`.
+5. `--skip-embeddings` auto-advances `embed` instead of re-running CLAP. Embeddings depend only on the audio, so this is safe after an analysis fix.
+
+Afterwards run `dance build-graph` (tempo / harmonic edges use BPM and key) and `dance export-als --all` (Live Sets carry the tempo and warp markers).
+
+Don't run it while another `dance process` or the API's pipeline worker is running — tracks mid-stage are rewound too, and the command warns when it sees any.
+
+**State changes:** selected tracks → stage `input_state` → … → `complete` (or `error`). Rewrites the stage's outputs for those tracks (`audio_analysis` rows are upserted; auto regions/beats/phrases are replaced; user regions are kept).
+
+---
+
 ## `dance list`
 
 Read-only browse of the `tracks` table joined to `audio_analysis`.

@@ -310,6 +310,141 @@ def _print_remaining_work_hint(settings: Settings) -> None:
         )
 
 
+@main.command()
+@click.option(
+    "--from",
+    "from_stage",
+    required=True,
+    help="Stage to re-run from: analyze, separate, analyze_stems, detect_regions, embed.",
+)
+@click.option("--all", "all_tracks", is_flag=True, help="Every track that has reached the stage.")
+@click.option(
+    "--track-id", "-t", "track_ids", type=int, multiple=True, help="Only these tracks (repeatable)."
+)
+@click.option("--limit", "-n", type=int, help="Rewind at most N tracks (lowest ids first).")
+@click.option(
+    "--include-duplicates", is_flag=True, help="Also reprocess tracks marked duplicate_of."
+)
+@click.option("--include-errors", is_flag=True, help="Also rewind tracks in the error state.")
+@click.option(
+    "--skip-embeddings",
+    is_flag=True,
+    help="Don't re-run CLAP (embeddings depend only on the audio); auto-advances instead.",
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be rewound; change nothing.")
+@click.pass_context
+def reprocess(
+    ctx: click.Context,
+    from_stage: str,
+    all_tracks: bool,
+    track_ids: tuple[int, ...],
+    limit: int | None,
+    include_duplicates: bool,
+    include_errors: bool,
+    skip_embeddings: bool,
+    dry_run: bool,
+) -> None:
+    """Re-run the pipeline from a stage on tracks that already passed it.
+
+    Rewinds the selected tracks to the stage's input state, then runs the
+    normal dispatcher (same path as ``dance process``; ``separate`` skips
+    Demucs when stems already exist). Use after fixing a stage so existing
+    tracks pick the fix up.
+    """
+    from dance.core.database import get_session_factory
+    from dance.pipeline.dispatcher import Dispatcher
+    from dance.pipeline.reprocess import (
+        apply_reprocess,
+        find_stage,
+        inflight_states,
+        plan_reprocess,
+        run_until_settled,
+    )
+
+    settings: Settings = ctx.obj["settings"]
+    if all_tracks == bool(track_ids):
+        raise click.UsageError("Pass exactly one of --all or --track-id.")
+    if limit is not None and limit < 1:
+        raise click.UsageError("--limit must be at least 1.")
+
+    session_factory = get_session_factory(settings.db_url)
+    dispatcher = Dispatcher(settings, session_factory=session_factory)
+    try:
+        stage = find_stage(dispatcher.stages, from_stage)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--from") from exc
+
+    session = session_factory()
+    try:
+        plan = plan_reprocess(
+            session,
+            stage,
+            track_ids=track_ids or None,
+            limit=limit,
+            include_duplicates=include_duplicates,
+            include_errors=include_errors,
+        )
+        _print_reprocess_plan(plan, full=dry_run)
+        if dry_run:
+            console.print("[yellow]DRY RUN[/yellow] — nothing changed.")
+            return
+        if not plan.selected:
+            console.print("Nothing to reprocess.")
+            return
+
+        midflight = [r for r in plan.selected if r.state in inflight_states(dispatcher.stages)]
+        if midflight:
+            console.print(
+                f"[yellow]{len(midflight)} selected track(s) are mid-stage[/yellow] — if "
+                "another [cyan]dance process[/cyan] or the API worker is running, stop it "
+                "first."
+            )
+        _require_ffmpeg_or_exit()
+        apply_reprocess(session, plan, data_dir=settings.data_dir)
+    finally:
+        session.close()
+
+    console.print(
+        f"[cyan]Rewound {len(plan.selected)} track(s) to {plan.reset_to}; running the "
+        "pipeline...[/cyan]"
+    )
+    skip = {"embed"} if skip_embeddings else set()
+    result = run_until_settled(dispatcher, plan.track_ids, skip=skip)
+    for stage_name, counts in result.items():
+        console.print(f"[green]{stage_name}:[/green] {counts}")
+
+    console.print(
+        "\n[bold]Next:[/bold] BPM/key feed the graph and the Live Sets — run "
+        "[cyan]dance build-graph[/cyan] and [cyan]dance export-als --all[/cyan]."
+    )
+    _print_remaining_work_hint(settings)
+
+
+def _print_reprocess_plan(plan, *, full: bool) -> None:
+    """Selected tracks (all of them when ``full``) + skip reasons."""
+    from rich.markup import escape
+
+    console.print(
+        f"Reprocess from [cyan]{plan.stage_name}[/cyan]: {len(plan.selected)} track(s) "
+        f"would be rewound to [cyan]{plan.reset_to}[/cyan]"
+    )
+    rows = plan.selected if full else plan.selected[:20]
+    if rows:
+        table = Table()
+        table.add_column("ID", justify="right")
+        table.add_column("Title")
+        table.add_column("State now")
+        for r in rows:
+            table.add_row(str(r.track_id), escape(r.title[:50]), r.state)
+        console.print(table)
+        if len(rows) < len(plan.selected):
+            console.print(f"[dim]... and {len(plan.selected) - len(rows)} more[/dim]")
+    for reason, skipped in plan.skipped.items():
+        ids = ", ".join(str(r.track_id) for r in skipped[:10])
+        more = f", +{len(skipped) - 10} more" if len(skipped) > 10 else ""
+        console.print(f"[dim]Skipped {len(skipped)} — {reason}: {ids}{more}[/dim]")
+
+
 @main.command("list")
 @click.option("--energy", "-e", type=click.IntRange(1, 10))
 @click.option("--bpm-range", "-b")
