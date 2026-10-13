@@ -886,3 +886,74 @@ def test_real_dance_process_exits_75_while_locked(tmp_path, child_home, hold_loc
     assert proc.returncode == EXIT_BUSY, out
     assert f"pid {holder.pid}" in out
     assert "already in progress" in out
+
+
+def _complete_track_in_cli_db(tmp_path) -> int:
+    from dance.core.database import Track, TrackState, get_session, init_db, now_utc
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "lib",
+        stems_dir=tmp_path / "stems",
+        als_output_dir=tmp_path / "als",
+    )
+    settings.ensure_directories()
+    init_db(settings.db_url)
+    session = get_session(settings.db_url)
+    try:
+        track = Track(
+            file_hash="r" * 64,
+            file_path=str(tmp_path / "lib" / "t.mp3"),
+            file_name="t.mp3",
+            file_size_bytes=1,
+            state=TrackState.COMPLETE.value,
+            created_at=now_utc(),
+            updated_at=now_utc(),
+        )
+        session.add(track)
+        session.commit()
+        return track.id
+    finally:
+        session.close()
+
+
+def _cli_track_state(tmp_path, track_id: int) -> str:
+    import sqlite3
+
+    con = sqlite3.connect(tmp_path / "data" / "dance.db")
+    try:
+        return con.execute("select state from tracks where id=?", (track_id,)).fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_cli_reprocess_refuses_while_locked_and_rewinds_nothing(tmp_path, cli_stubs, hold_lock):
+    """reprocess rewinds states, so it must hold the lock like process does —
+    otherwise it could rewind tracks another run is mid-way through."""
+    cli, _ = cli_stubs
+    track_id = _complete_track_in_cli_db(tmp_path)
+    holder = hold_lock(tmp_path / "data")
+
+    result = CliRunner().invoke(
+        cli.main, ["reprocess", "--from", "analyze", "--all"], env=_cli_env(tmp_path)
+    )
+
+    assert result.exit_code == EXIT_BUSY, result.output
+    assert f"pid {holder.pid}" in result.output
+    assert _cli_track_state(tmp_path, track_id) == "complete"
+
+
+def test_cli_reprocess_dry_run_does_not_need_the_lock(tmp_path, cli_stubs, hold_lock):
+    cli, _ = cli_stubs
+    track_id = _complete_track_in_cli_db(tmp_path)
+    hold_lock(tmp_path / "data")
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["reprocess", "--from", "analyze", "--all", "--dry-run"],
+        env=_cli_env(tmp_path),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "DRY RUN" in result.output
+    assert _cli_track_state(tmp_path, track_id) == "complete"

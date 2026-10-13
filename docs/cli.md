@@ -89,7 +89,7 @@ What it does (logic in `src/dance/pipeline/reprocess.py`):
 
 Afterwards run `dance build-graph` (tempo / harmonic edges use BPM and key) and `dance export-als --all` (Live Sets carry the tempo and warp markers).
 
-Don't run it while another `dance process` or the API's pipeline worker is running — tracks mid-stage are rewound too, and the command warns when it sees any.
+The rewind and the run hold the dispatcher lock, like `dance process`: if another run (terminal or the API worker) holds it, `reprocess` exits with status 75 naming its pid and changes nothing — add `--wait` to queue behind it. `--dry-run` doesn't take the lock.
 
 **State changes:** selected tracks → stage `input_state` → … → `complete` (or `error`). Rewrites the stage's outputs for those tracks (`audio_analysis` rows are upserted; auto regions/beats/phrases are replaced; user regions are kept).
 

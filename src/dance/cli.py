@@ -434,6 +434,7 @@ def _print_remaining_work_hint(settings: Settings) -> None:
     help="Don't re-run CLAP (embeddings depend only on the audio); auto-advances instead.",
 )
 @click.option("--dry-run", is_flag=True, help="Show what would be rewound; change nothing.")
+@_WAIT_OPTION
 @click.pass_context
 def reprocess(
     ctx: click.Context,
@@ -445,6 +446,7 @@ def reprocess(
     include_errors: bool,
     skip_embeddings: bool,
     dry_run: bool,
+    wait: bool,
 ) -> None:
     """Re-run the pipeline from a stage on tracks that already passed it.
 
@@ -452,13 +454,16 @@ def reprocess(
     normal dispatcher (same path as ``dance process``; ``separate`` skips
     Demucs when stems already exist). Use after fixing a stage so existing
     tracks pick the fix up.
+
+    The rewind and the run happen under the dispatcher lock, so a terminal
+    ``dance process`` or the API worker can't be mid-way through the same
+    tracks. A dry run doesn't take the lock.
     """
     from dance.core.database import get_session_factory
     from dance.pipeline.dispatcher import Dispatcher
     from dance.pipeline.reprocess import (
         apply_reprocess,
         find_stage,
-        inflight_states,
         plan_reprocess,
         run_until_settled,
     )
@@ -476,42 +481,37 @@ def reprocess(
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--from") from exc
 
-    session = session_factory()
-    try:
-        plan = plan_reprocess(
-            session,
-            stage,
-            track_ids=track_ids or None,
-            limit=limit,
-            include_duplicates=include_duplicates,
-            include_errors=include_errors,
-        )
-        _print_reprocess_plan(plan, full=dry_run)
-        if dry_run:
-            console.print("[yellow]DRY RUN[/yellow] — nothing changed.")
-            return
-        if not plan.selected:
-            console.print("Nothing to reprocess.")
-            return
-
-        midflight = [r for r in plan.selected if r.state in inflight_states(dispatcher.stages)]
-        if midflight:
-            console.print(
-                f"[yellow]{len(midflight)} selected track(s) are mid-stage[/yellow] — if "
-                "another [cyan]dance process[/cyan] or the API worker is running, stop it "
-                "first."
+    with ExitStack() as stack:
+        if not dry_run:
+            stack.enter_context(_pipeline_lock(settings, wait=wait))
+        session = session_factory()
+        try:
+            plan = plan_reprocess(
+                session,
+                stage,
+                track_ids=track_ids or None,
+                limit=limit,
+                include_duplicates=include_duplicates,
+                include_errors=include_errors,
             )
-        _require_ffmpeg_or_exit()
-        apply_reprocess(session, plan, data_dir=settings.data_dir)
-    finally:
-        session.close()
+            _print_reprocess_plan(plan, full=dry_run)
+            if dry_run:
+                console.print("[yellow]DRY RUN[/yellow] — nothing changed.")
+                return
+            if not plan.selected:
+                console.print("Nothing to reprocess.")
+                return
+            _require_ffmpeg_or_exit()
+            apply_reprocess(session, plan, data_dir=settings.data_dir)
+        finally:
+            session.close()
 
-    console.print(
-        f"[cyan]Rewound {len(plan.selected)} track(s) to {plan.reset_to}; running the "
-        "pipeline...[/cyan]"
-    )
-    skip = {"embed"} if skip_embeddings else set()
-    result = run_until_settled(dispatcher, plan.track_ids, skip=skip)
+        console.print(
+            f"[cyan]Rewound {len(plan.selected)} track(s) to {plan.reset_to}; running the "
+            "pipeline...[/cyan]"
+        )
+        skip = {"embed"} if skip_embeddings else set()
+        result = run_until_settled(dispatcher, plan.track_ids, skip=skip)
     for stage_name, counts in result.items():
         console.print(f"[green]{stage_name}:[/green] {counts}")
 
