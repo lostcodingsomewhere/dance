@@ -275,7 +275,12 @@ class StemFile(Base):
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     kind = Column(String(16), nullable=False)
     path = Column(Text, nullable=False)
+    # Provenance, e.g. "htdemucs_ft|s2|pcm24|demucs4.0.1" (model|shifts|PCM
+    # subtype|Demucs version); rows from before 2026-10 hold the bare model name.
     model_used = Column(String(64), default="htdemucs_ft")
+    # Reconstruction residual in dB: 20*log10(rms(mix - sum(stems)) / rms(mix)),
+    # track-level (same on all 4 rows); more negative = cleaner. NULL = not
+    # measured (older rows) or silent mix. Written by pipeline/stages/separate.py.
     separation_quality = Column(Float, nullable=True)
     created_at = Column(DateTime, default=now_utc, nullable=False)
 

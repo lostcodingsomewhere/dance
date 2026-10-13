@@ -27,6 +27,8 @@ python -c "from transformers import ClapModel, ClapProcessor; ClapModel.from_pre
 WARNING  MPS load failed (...); falling back to CPU
 ```
 
+Demucs also retries a failed *separation*: a Python-level `RuntimeError` from `apply_model` on MPS (e.g. `MPS backend out of memory`) is retried once on a separate CPU copy of the model (`Demucs failed on MPS (...); retrying once on CPU`). Only catchable errors get this — a native SIGBUS (next section) kills the process before Python sees it.
+
 To verify what each stage chose, search the backend startup logs for `Loading CLAP model ... on mps` / `... on cpu` and `Loading Demucs model ... on mps`. There is no `dance llm-status` command — the logs are the source of truth.
 
 To force CPU for a session:
@@ -39,7 +41,7 @@ The deep tagger's Qwen2-Audio is the most fragile on MPS — see `src/dance/llm/
 
 ## Demucs separation crashes (SIGBUS / exit 138) on Python 3.14
 
-On this machine's off-spec **Python 3.14** venv, Demucs stem-separation can die with a **bus error (SIGBUS)** — the process exits with code **138** (128 + signal 10) and the track makes no progress (no stems produced, the run bounces straight to the next track or to an `error` state). This is a native crash in the torch/Demucs stack under the non-standard interpreter, not a bug in the pipeline code.
+On this machine's off-spec **Python 3.14** venv, Demucs stem-separation can die with a **bus error (SIGBUS)** — the process exits with code **138** (128 + signal 10) and the track makes no progress (no stems produced, the run bounces straight to the next track or to an `error` state). This is a native crash in the torch/Demucs stack under the non-standard interpreter, not a bug in the pipeline code. Stems are written to hidden `.<kind>.*.partial.wav` temps and renamed into place only once all four are complete, so a crash never leaves a truncated `<kind>.wav` for Live to load; stranded temps are swept on the next separation of that track.
 
 **Workaround — run separation on CPU:**
 
