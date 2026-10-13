@@ -14,6 +14,7 @@ import importlib.util
 import json
 import random
 import socket
+import sqlite3
 import sys
 import threading
 from pathlib import Path
@@ -552,17 +553,64 @@ def test_gate_flags_a_metric_that_became_unknown() -> None:
     assert find_regressions(cur, cur).regressions == []
 
 
-def test_failing_track_is_gated_on_tempo_only() -> None:
-    base = {"9": _m(f1_70=0.4, median_abs_error_ms=80.0, abs_bpm_error_pct=0.6, passes=False)}
-    # F1 and timing swing with the phase sawtooth of a grid that is already
-    # off: a warning, not a regression …
-    worse_f1 = find_regressions(base, {"9": _m(f1_70=0.3, median_abs_error_ms=120.0, passes=False)})
-    assert worse_f1.regressions == []
-    assert {r.metric for r in worse_f1.warnings} == {"f1_70", "median_abs_error_ms"}
-    # … but a worse tempo error is a regression, and so is losing the tempo.
-    worse_tempo = find_regressions(base, {"9": _m(f1_70=0.4, abs_bpm_error_pct=1.2, passes=False)})
+def test_failing_track_waiver_needs_a_tempo_fix() -> None:
+    base = {
+        "9": _m(
+            f1_70=0.4,
+            median_abs_error_ms=80.0,
+            abs_bpm_error_pct=0.6,
+            abs_grid_bpm_error_pct=0.6,
+            abs_drift_ms_per_100_beats=300.0,
+            passes=False,
+        )
+    }
+    same_tempo = {"abs_grid_bpm_error_pct": 0.6, "abs_drift_ms_per_100_beats": 300.0}
+    # Worse F1 / timing with the grid's tempo untouched: there is no phase
+    # sawtooth to blame (a phase shift, a broken tracker) — regressions.
+    shifted = find_regressions(
+        base, {"9": _m(f1_70=0.3, median_abs_error_ms=120.0, passes=False, **same_tempo)}
+    )
+    assert {r.metric for r in shifted.regressions} == {"f1_70", "median_abs_error_ms"}
+    assert shifted.warnings == []
+    # The same drop in the run where the beats' tempo got measurably better
+    # is the sawtooth moving: warnings, each saying why it was waived …
+    fixed = find_regressions(
+        base,
+        {
+            "9": _m(
+                f1_70=0.3,
+                median_abs_error_ms=120.0,
+                abs_bpm_error_pct=0.6,
+                abs_grid_bpm_error_pct=0.2,
+                abs_drift_ms_per_100_beats=300.0,
+                passes=False,
+            )
+        },
+    )
+    assert fixed.regressions == []
+    assert {r.metric for r in fixed.warnings} == {"f1_70", "median_abs_error_ms"}
+    assert all("abs_grid_bpm_error_pct improved 0.6 -> 0.2" in r.detail for r in fixed.warnings)
+    # … but an improvement inside tolerance (0.6 -> 0.57 %) is not a fix.
+    noise = find_regressions(
+        base,
+        {
+            "9": _m(
+                f1_70=0.3,
+                abs_grid_bpm_error_pct=0.57,
+                abs_drift_ms_per_100_beats=299.0,
+                passes=False,
+            )
+        },
+    )
+    assert "f1_70" in {r.metric for r in noise.regressions}
+    # Tempo error itself is never waived, and losing the tempo is flagged.
+    worse_tempo = find_regressions(
+        base, {"9": _m(f1_70=0.4, abs_bpm_error_pct=1.2, passes=False, **same_tempo)}
+    )
     assert [r.metric for r in worse_tempo.regressions] == ["abs_bpm_error_pct"]
-    lost_tempo = find_regressions(base, {"9": _m(f1_70=0.4, abs_bpm_error_pct=None, passes=False)})
+    lost_tempo = find_regressions(
+        base, {"9": _m(f1_70=0.4, abs_bpm_error_pct=None, passes=False, **same_tempo)}
+    )
     assert [r.metric for r in lost_tempo.regressions] == ["abs_bpm_error_pct_missing"]
 
 
@@ -720,7 +768,7 @@ def test_grid_diff_end_to_end_and_gate(
     assert rc == 0
     data = json.loads(out.read_text())
     assert data["schema"] == "dance.grid_diff/1"
-    assert data["db"].endswith("?immutable=1")
+    assert data["db"].endswith("?mode=ro&immutable=1")
     t1, t2, t3 = (data["tracks"][k] for k in ("1", "2", "3"))
     for t in (t1, t2, t3):
         assert t["status"] == "ok"
@@ -782,15 +830,234 @@ def test_grid_diff_end_to_end_and_gate(
     assert "FAIL" in capsys.readouterr().out
 
 
-def test_grid_diff_gate_with_nothing_to_judge_fails(
-    grid_diff: ModuleType, graded_library, tmp_path: Path
+def test_grid_diff_gate_judges_every_baseline_track(
+    grid_diff: ModuleType, graded_library, tmp_path: Path, capsys
 ) -> None:
     db_path, als = graded_library
     base = tmp_path / "base.json"
     assert grid_diff.main(["--db", str(db_path), "--als", str(als[0]), "--json", str(base)]) == 0
-    # Only track 2 this time: track 1 is "not compared", nothing was judged.
-    rc = grid_diff.main(["--db", str(db_path), "--als", str(als[1]), "--baseline", str(base)])
-    assert rc == 1
+    # Only track 2's Set this time. Track 1 is still judged — its reference
+    # is gone, which is a regression, not "not selected".
+    out = tmp_path / "r.json"
+    argv = ["--db", str(db_path), "--als", str(als[1]), "--baseline", str(base)]
+    assert grid_diff.main([*argv, "--json", str(out)]) == 1
+    data = json.loads(out.read_text())
+    assert data["tracks"]["1"]["status"] == "no_reference"
+    assert {(r["track_id"], r["metric"]) for r in data["gate"]["regressions"]} == {
+        ("1", "grid_missing")
+    }
+    assert "judged as missing: 1" in capsys.readouterr().out
+    # --track narrows on purpose: track 1 is then listed as not judged, and
+    # with nothing left to judge the gate still fails.
+    assert grid_diff.main([*argv, "--track", "2"]) == 1
+    printed = capsys.readouterr().out
+    assert "left out by --track (not judged): 1" in printed
+    assert "the gate judged nothing" in printed
+
+
+def test_grid_diff_gate_catches_a_reference_that_stopped_matching(
+    grid_diff: ModuleType, graded_library, session, tmp_path: Path, capsys
+) -> None:
+    # Review probe: a re-ingest renames track 1's file and stems (so the Set
+    # no longer matches it) while a tracker change wrecks its beats. The old
+    # gate listed it as "not selected" and passed.
+    db_path, als = graded_library
+    base = tmp_path / "base.json"
+    argv = ["--db", str(db_path), "--als", *map(str, als)]
+    assert grid_diff.main([*argv, "--json", str(base)]) == 0
+    t = session.get(Track, 1)
+    t.file_path = t.file_path.replace("song1.mp3", "song1-v2.mp3")
+    for sf in session.query(StemFile).filter_by(track_id=1):
+        sf.path = sf.path.replace("/s1/", "/s1v2/")
+    for b in session.query(Beat).filter_by(track_id=1):
+        b.position_ms += 250
+    session.commit()
+    out = tmp_path / "after.json"
+    assert grid_diff.main([*argv, "--baseline", str(base), "--json", str(out)]) == 1
+    gate = json.loads(out.read_text())["gate"]
+    assert gate["not_compared"] == []
+    assert {(r["track_id"], r["metric"]) for r in gate["regressions"]} == {("1", "grid_missing")}
+    assert "FAIL: 1 regression(s)" in capsys.readouterr().out
+
+
+def test_grid_diff_gate_catches_a_phase_shift_on_a_failing_track(
+    grid_diff: ModuleType, graded_library, session, tmp_path: Path
+) -> None:
+    # Review probe: track 3 already fails (half-time). Shifting every beat
+    # 200 ms leaves its tempo, drift and coverage untouched, so the sawtooth
+    # waiver must NOT apply — the wrecked F1 / timing / downbeats fail.
+    db_path, als = graded_library
+    base = tmp_path / "base.json"
+    argv = ["--db", str(db_path), "--als", *map(str, als)]
+    assert grid_diff.main([*argv, "--json", str(base)]) == 0
+    assert json.loads(base.read_text())["tracks"]["3"]["metrics"]["passes"] is False
+    for b in session.query(Beat).filter_by(track_id=3):
+        b.position_ms += 200
+    session.commit()
+    out = tmp_path / "after.json"
+    assert grid_diff.main([*argv, "--baseline", str(base), "--json", str(out)]) == 1
+    gate = json.loads(out.read_text())["gate"]
+    flagged = {(r["track_id"], r["metric"]) for r in gate["regressions"]}
+    assert {
+        ("3", "f1_70"),
+        ("3", "median_abs_error_ms"),
+        ("3", "p95_abs_error_ms"),
+        ("3", "downbeat_f1_70"),
+    } <= flagged
+    assert gate["warnings"] == []
+    assert not any(tid != "3" for tid, _ in flagged)
+
+
+def test_grid_diff_gate_flags_a_changed_reference(
+    grid_diff: ModuleType, graded_library, session, tmp_path: Path, capsys
+) -> None:
+    db_path, als = graded_library
+    drums = session.query(StemFile).filter_by(track_id=1, kind="drums").one()
+    session.add(AudioAnalysis(track_id=1, stem_file_id=drums.id, bpm=120.0, analyzed_at=now_utc()))
+    session.commit()
+    base = tmp_path / "base.json"
+    argv = ["--db", str(db_path), "--track", "1"]
+    assert grid_diff.main([*argv, "--als", str(als[0]), "--json", str(base)]) == 0
+    fp = json.loads(base.read_text())["tracks"]["1"]["reference"]["fingerprint"]
+    # Same Set, same DB: same yardstick, the gate passes.
+    out = tmp_path / "r.json"
+    rerun = [*argv, "--als", str(als[0]), "--baseline", str(base), "--json", str(out)]
+    assert grid_diff.main(rerun) == 0
+    assert json.loads(out.read_text())["tracks"]["1"]["reference"]["fingerprint"] == fp
+    # Switching the reference clip to the drums stem (identical grid and BPM
+    # here, so every metric is unchanged) is still a different yardstick.
+    assert grid_diff.main([*rerun, "--ref-kind", "drums"]) == 1
+    gate = json.loads(out.read_text())["gate"]
+    assert [r["metric"] for r in gate["regressions"]] == ["reference_changed"]
+    assert "re-measure the baseline" in capsys.readouterr().out
+    # So is a Set whose warps were re-corrected in Live (121 BPM now).
+    root = gzip.decompress(als[0].read_bytes()).decode()
+    fixed = tmp_path / "fixed.als"
+    fixed.write_bytes(gzip.compress(root.replace('BeatTime="120', 'BeatTime="121').encode()))
+    moved = [*argv, "--als", str(fixed), "--baseline", str(base), "--json", str(out)]
+    assert grid_diff.main(moved) == 1
+    metrics = {r["metric"] for r in json.loads(out.read_text())["gate"]["regressions"]}
+    assert "reference_changed" in metrics
+    # --allow-reference-change: reported, and the metrics are compared anyway.
+    assert grid_diff.main([*rerun, "--ref-kind", "drums", "--allow-reference-change"]) == 0
+    gate = json.loads(out.read_text())["gate"]
+    assert gate["allow_reference_change"] is True
+    assert [r["metric"] for r in gate["warnings"]] == ["reference_changed"]
+
+
+def test_reference_fingerprint_is_stable_and_specific() -> None:
+    from dance.pipeline.utils.grid_metrics import reference_fingerprint
+
+    ms = [WarpMarker(0.0, 0.0), WarpMarker(60.0, 120.0)]
+    fp = reference_fingerprint("mix", True, ms, 60.0)
+    assert fp == reference_fingerprint("mix", True, list(ms), 60.0000004)
+    assert fp != reference_fingerprint("drums", True, ms, 60.0)
+    assert fp != reference_fingerprint("mix", False, ms, 60.0)
+    assert fp != reference_fingerprint("mix", True, [ms[0], WarpMarker(60.0, 121.0)], 60.0)
+    assert fp != reference_fingerprint("mix", True, ms, 61.0)
+
+
+def test_grid_diff_db_is_never_created(grid_diff: ModuleType, tmp_path: Path, capsys) -> None:
+    # Review probe: immutable=1 alone opens URIs read-write-CREATE, so a
+    # typo left an empty database behind (worst case: ~/.dance/dance.db).
+    als = tmp_path / "x.als"
+    als.write_bytes(b"")
+    for arg in (str(tmp_path / "nope1.db"), f"file:{tmp_path / 'nope2.db'}"):
+        assert grid_diff.main(["--db", arg, "--als", str(als)]) == 2
+    assert "no such database" in capsys.readouterr().err
+    assert not (tmp_path / "nope1.db").exists() and not (tmp_path / "nope2.db").exists()
+    real = tmp_path / "real.db"
+    sqlite3.connect(real).close()
+    assert grid_diff.db_uri(str(real)).endswith("?mode=ro&immutable=1")
+    # A user URI keeps its parameters but is forced read-only.
+    uri = grid_diff.db_uri(f"file:{real}?mode=rwc&cache=shared")
+    assert "mode=ro" in uri and "mode=rwc" not in uri and "cache=shared" in uri
+
+
+def pin_warp_markers_to_beats(
+    src: Path, dst: Path, sample_path: str, times: list[float], downbeats: list[int]
+) -> int:
+    """Rewrite ``src`` into ``dst`` with one warp marker on every given beat.
+
+    That is a Set in which someone pinned Live's grid onto dance's own beats
+    (each beat ``i`` of ``times`` -> Live beat ``i + shift``, ``shift``
+    chosen so the first flagged downbeat lands on a bar line). Scoring the
+    same beats against it must be perfect, so it checks the alignment,
+    phase and bar-phase plumbing end to end — on synthetic data here, and on
+    real tracks by the real-data sanity check. Only clips of ``sample_path``
+    are touched; returns how many. A test helper: dance's writer is untouched.
+    """
+    from lxml import etree
+
+    d0 = downbeats[0] if downbeats else 0
+    shift = (-d0) % 4
+    root = etree.fromstring(gzip.decompress(src.read_bytes()))
+    done = 0
+    for clip in root.iter("AudioClip"):
+        path = clip.find("SampleRef/FileRef/Path")
+        if path is None or Path(path.get("Value") or "").resolve() != Path(sample_path).resolve():
+            continue
+        wms = clip.find("WarpMarkers")
+        for child in list(wms):
+            wms.remove(child)
+        for i, t in enumerate(times):
+            m = etree.SubElement(wms, "WarpMarker")
+            m.set("Id", str(i))
+            m.set("SecTime", repr(float(t)))
+            m.set("BeatTime", str(i + shift))
+        done += 1
+    dst.write_bytes(gzip.compress(etree.tostring(root, xml_declaration=True, encoding="UTF-8")))
+    return done
+
+
+def test_grid_diff_is_perfect_against_markers_pinned_on_its_own_beats(
+    grid_diff: ModuleType, graded_library, session, tmp_path: Path
+) -> None:
+    # A frame-quantised, irregular grid (librosa-style 21/22-hop beats at
+    # 22.05 kHz) whose first downbeat is beat 1, not beat 0. A dance export
+    # only encodes one tempo from 0:00, so it cannot score this perfectly;
+    # a Set whose warp markers sit on these very beats must.
+    db_path, als = graded_library
+    session.query(Beat).filter_by(track_id=1).delete()
+    hop = 512 / 22050
+    t, k = 0.1, 0
+    while t <= 59.0:
+        session.add(
+            Beat(
+                track_id=1,
+                position_ms=round(t * 1000),
+                beat_number=(k - 1) % 4 + 1,
+                bar_number=(k + 3) // 4,
+                downbeat=k % 4 == 1,
+            )
+        )
+        t += hop * (21 if k % 2 else 22)
+        k += 1
+    session.commit()
+    idx = grid_diff.DbIndex.open(grid_diff.db_uri(str(db_path)))
+    times, downbeats = idx.beats(1)
+    assert downbeats[0] == 1
+    pinned = tmp_path / "pinned.als"
+    sample = idx.tracks[1].file_path
+    assert pin_warp_markers_to_beats(als[0], pinned, sample, times, downbeats) == 1
+    out = tmp_path / "p.json"
+    argv = ["--db", str(db_path), "--track", "1", "--json", str(out)]
+    assert grid_diff.main([*argv, "--als", str(pinned)]) == 0
+    m = json.loads(out.read_text())["tracks"]["1"]["metrics"]
+    assert m["f1_70"] == 1.0 and m["f1_100"] == 1.0
+    assert m["matched_beats"] == len(times) == m["reference_beats"]
+    assert m["median_abs_error_ms"] == pytest.approx(0.0, abs=1e-6)
+    assert m["p95_abs_error_ms"] == pytest.approx(0.0, abs=1e-6)
+    assert m["phase_offset_ms"] == pytest.approx(0.0, abs=1e-6)
+    assert m["drift_ms_per_100_beats"] == pytest.approx(0.0, abs=1e-6)
+    assert m["grid_bpm_error_pct"] == pytest.approx(0.0, abs=1e-9)
+    assert m["bar_phase_accuracy"] == 1.0 and m["downbeat_f1_70"] == 1.0
+    # The plain export of the same track (one 120 BPM segment from 0:00)
+    # does not line up with this grid — which is why it is only a tempo
+    # plumbing check.
+    assert grid_diff.main([*argv, "--als", str(als[0])]) == 0
+    plain = json.loads(out.read_text())["tracks"]["1"]["metrics"]
+    assert plain["f1_70"] < 0.9 and plain["bar_phase_accuracy"] < 1.0
 
 
 def test_grid_diff_reports_tracks_without_grid_or_reference(
@@ -911,7 +1178,7 @@ def test_grid_diff_stem_reference_uses_that_stems_bpm(
     assert t1["metrics"]["passes"] is False
 
 
-def test_grid_diff_reports_conflicting_clips(
+def test_grid_diff_refuses_to_guess_between_conflicting_clips(
     grid_diff: ModuleType, graded_library, tmp_path: Path, capsys
 ) -> None:
     db_path, als = graded_library
@@ -924,14 +1191,21 @@ def test_grid_diff_reports_conflicting_clips(
     argv = ["--db", str(db_path), "--track", "1", "--json", str(out)]
     # The same Set twice is one clip, not a conflict.
     assert grid_diff.main([*argv, "--als", str(als[0]), str(als[0])]) == 0
-    assert json.loads(out.read_text())["tracks"]["1"]["reference"]["conflicting_clips"] == 0
+    assert json.loads(out.read_text())["tracks"]["1"]["status"] == "ok"
     capsys.readouterr()
+    # Two different warps for one sample: not scored, candidates listed.
     assert grid_diff.main([*argv, "--als", str(als[0]), str(other)]) == 0
-    ref = json.loads(out.read_text())["tracks"]["1"]["reference"]
-    assert ref["conflicting_clips"] == 1
-    assert ref["source"].startswith(als[0].name)  # first in document order wins
+    t1 = json.loads(out.read_text())["tracks"]["1"]
+    assert t1["status"] == "ambiguous_reference" and "metrics" not in t1
+    assert [c.split(":")[0] for c in t1["candidates"]] == [als[0].name, "other.als"]
+    assert t1["candidates"][0].split(":")[1] == "session"  # the location is part of the source
     printed = capsys.readouterr().out
-    assert "1 other mix clip(s)" in printed and f"used {ref['source']}" in printed
+    assert "pick one with --ref-source" in printed and "other.als:session:" in printed
+    # --ref-source picks one.
+    assert grid_diff.main([*argv, "--als", str(als[0]), str(other), "--ref-source", "OTHER"]) == 0
+    t1 = json.loads(out.read_text())["tracks"]["1"]
+    assert t1["status"] == "ok" and t1["reference"]["source"].startswith("other.als:")
+    assert t1["metrics"]["reference_bpm"] == pytest.approx(121.0)
 
 
 def test_grid_diff_strict_flag_gates_failing_tracks_on_everything(
@@ -941,10 +1215,11 @@ def test_grid_diff_strict_flag_gates_failing_tracks_on_everything(
     base.write_text(json.dumps({"schema": grid_diff.SCHEMA, "tracks": {"1": _tempo_run(125.41)}}))
     improved = {"1": _tempo_run(125.92)}
     default = grid_diff.run_gate(base, improved)
-    assert default["passed"] is True and default["policy"] == "failing-tracks-on-tempo"
+    assert default["passed"] is True and default["policy"] == "waive-phase-on-tempo-fix"
     assert default["warnings"]
     strict = grid_diff.run_gate(base, improved, strict=True)
     assert strict["passed"] is False and strict["policy"] == "strict"
+    assert strict["waiver_requires_improved"] == []
     assert "f1_70" in {r["metric"] for r in strict["regressions"]}
 
 
@@ -1070,6 +1345,54 @@ def test_grid_diff_live_reads_the_playing_grid(
     # The DB grid runs ahead of Live's by 0.417 ms per beat.
     assert m["drift_ms_per_100_beats"] == pytest.approx(-(60 / 119.9 - 0.5) * 1e5, rel=1e-2)
     assert m["f1_70"] == pytest.approx(1.0, abs=0.01)
+    # song1.mp3 is not on disk, so the end of Live's grid could only come
+    # from Spotify metadata — and the result says so.
+    assert t1["reference"]["end_source"] == "tracks.duration_seconds"
+    assert "metadata" in t1["note"]
+
+
+def test_grid_diff_live_takes_the_grid_end_from_the_sample_file(
+    grid_diff: ModuleType, graded_library, tmp_path: Path
+) -> None:
+    import numpy as np
+    import soundfile
+
+    db_path, _ = graded_library
+    # Track 1's drums stem really is 30 s long; tracks.duration_seconds says
+    # 60. Live's grid ends where the sample ends.
+    drums = tmp_path / "s1" / "drums.wav"
+    drums.parent.mkdir(parents=True, exist_ok=True)
+    soundfile.write(drums, np.zeros(30_000, dtype="float32"), 1000)
+    reply_port = _free_udp_port()
+    clips = {(0, 0): (str(drums), [0.0, 0.0, 60.0, 30.0])}  # drums_a, scene 1, 120 BPM
+    out = tmp_path / "live.json"
+    with FakeLive(reply_port, clips) as live:
+        rc = grid_diff.main(
+            [
+                "--db",
+                str(db_path),
+                "--live",
+                "--scene",
+                "1",
+                "--kind",
+                "drums",
+                "--osc-port",
+                str(live.port),
+                "--osc-reply-port",
+                str(reply_port),
+                "--wait",
+                "0.25",
+                "--json",
+                str(out),
+            ]
+        )
+    assert rc == 0
+    t1 = json.loads(out.read_text())["tracks"]["1"]
+    assert t1["reference"]["kind"] == "drums"
+    assert t1["reference"]["end_s"] == pytest.approx(30.0)
+    assert t1["reference"]["end_source"] == "sample_file"
+    assert t1["metrics"]["reference_beats_total"] == 61  # beats 0..60 over 0..30 s
+    assert "metadata" not in (t1.get("note") or "")
 
 
 # ---------------------------------------------------------------------------

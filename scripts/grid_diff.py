@@ -33,27 +33,50 @@ REFERENCES
                           first — it owns reply port 11001 — and wait ~20 s
                           after a load; a fresh clip reports a placeholder.
 
+    Where Live's grid ends (and so ``reference_coverage``) comes from the
+    sample's real length: the Set's SampleRef, else the audio file's header.
+    Only when neither is readable does it fall back to
+    ``tracks.duration_seconds`` (Spotify metadata) — the track's note and the
+    JSON's ``reference.end_source`` say so.
+
+    Two clips of the same kind for one track whose warps DISAGREE (a Set
+    holding a corrected and an uncorrected copy) make that track
+    ``ambiguous_reference``: it is not scored until ``--ref-source`` picks
+    one (a substring of ``<set>.als:<session|arrangement>:<track name>``, or
+    ``live:scene<N>``).
+
 THE GATE
     python scripts/grid_diff.py --als fixed.als --json base.json        # once
     ... change the beat-grid code, reprocess ...
     python scripts/grid_diff.py --als fixed.als --json new.json --baseline base.json
 
+    Every track the baseline measured is judged again — a baseline track
+    whose reference no longer matches (renamed file, re-import, a Set left
+    off the command line) is a ``grid_missing`` regression, not silently
+    skipped. ``--track`` narrows the run on purpose; then the baseline tracks
+    left out are listed as not judged.
+
     Exit 1 when any track regressed versus the baseline: a previously-passing
-    track now fails or worsened any gated metric past its tolerance; a track
-    that was already failing got a worse tempo error, drift or coverage (its
-    F1 / timing / bar-phase changes are printed as warnings — they swing with
-    the phase sawtooth of a grid that is already off, so a real tempo fix can
-    lower them); a gated metric that had a value became unknown; or a grid
-    that existed vanished. Ship a grid change only on exit 0.
+    track now fails; any metric worsened past its tolerance; a metric that
+    had a value became unknown; a grid that existed vanished; or the track
+    was measured against a different reference (warp markers, clip kind or
+    sample end changed — ``--allow-reference-change`` turns that into a
+    warning). Ship a grid change only on exit 0.
 
-    --strict holds failing tracks to every metric too (every worsened number
-    on every track fails the gate). Expect it to reject tempo fixes on
-    tracks that are still off by more than half a beat.
+    One waiver: a track that already FAILED and whose beats-table tempo got
+    better in the same run (grid-BPM error or drift improved past
+    tolerance). Its F1 / timing / bar-phase / downbeat changes are printed
+    as warnings — once a grid slips more than half a beat those swing with
+    where the phase sawtooth lands, so a real tempo fix can lower them. Its
+    tempo error, drift and coverage are still gated. With no tempo change
+    there is no waiver: a phase shift on a failing track fails the gate.
+    --strict drops the waiver (expect it to reject tempo fixes on tracks
+    that are still off by more than half a beat).
 
-The DB is opened read-only: ``--db`` takes a path (opened as
-``file:<path>?immutable=1``) or a full ``file:`` URI. Default:
-``~/.dance/dance.db`` via the immutable URI. Immutable reads ignore an
-un-checkpointed WAL, so stop the pipeline before measuring.
+The DB is opened read-only and never created: ``--db`` takes a path
+(opened as ``file:<path>?mode=ro&immutable=1``) or a ``file:`` URI (``mode``
+is forced to ``ro``). Default: ``~/.dance/dance.db``. Immutable reads
+ignore an un-checkpointed WAL, so stop the pipeline before measuring.
 
 Exit codes: 0 ok · 1 regression (or nothing to compare against the baseline)
 · 2 usage / input error.
@@ -68,11 +91,12 @@ import sqlite3
 import statistics
 import sys
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 from dance.als.reader import read_als_clips
 from dance.pipeline.utils.grid_metrics import (
@@ -80,10 +104,12 @@ from dance.pipeline.utils.grid_metrics import (
     PASS_THRESHOLDS,
     REGRESSION_TOLERANCES,
     STRICT_GATED,
+    TEMPO_FIX_METRICS,
     WarpMarker,
     beats_from_warp_markers,
     compare_grids,
     find_regressions,
+    reference_fingerprint,
 )
 
 SCHEMA = "dance.grid_diff/1"
@@ -96,12 +122,31 @@ KIND_PREFERENCE = ("mix", "drums", "bass", "other", "vocals")
 # ---------------------------------------------------------------------------
 
 
+class DbPathError(ValueError):
+    """``--db`` names a database that does not exist."""
+
+
 def db_uri(arg: str | None) -> str:
-    """Normalise ``--db`` to a read-only SQLite URI."""
+    """Normalise ``--db`` to a read-only SQLite URI for an EXISTING file.
+
+    A plain path becomes ``file:<abs path>?mode=ro&immutable=1``. A ``file:``
+    URI keeps its other parameters but always gets ``mode=ro``. Without
+    ``mode=ro`` SQLite opens URIs read-write-create, so a typo (or a missing
+    ``~/.dance/dance.db``) would leave an empty database behind that dance
+    would later initialise as a blank library. Raises :class:`DbPathError`
+    when the file is missing — nothing is created.
+    """
     if arg and arg.startswith("file:"):
-        return arg
-    path = Path(arg).expanduser() if arg else Path.home() / ".dance" / "dance.db"
-    return f"{path.resolve().as_uri()}?immutable=1"
+        base, _, query = arg.partition("?")
+        path = Path(unquote(urlsplit(base).path)).expanduser()
+        params = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k != "mode"]
+        uri = f"{base}?{urlencode([('mode', 'ro'), *params])}"
+    else:
+        path = Path(arg).expanduser() if arg else Path.home() / ".dance" / "dance.db"
+        uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+    if not path.is_file():
+        raise DbPathError(f"no such database: {path}")
+    return uri
 
 
 def _norm(path: str) -> str:
@@ -227,7 +272,40 @@ class Reference:
     source: str
     markers: list[WarpMarker]
     warped: bool = True
+    # The sample's real length, and where it came from ("als_sample_ref",
+    # "sample_file"); None -> evaluate_track falls back to metadata.
     duration_s: float | None = None
+    end_source: str | None = None
+
+
+def sample_file_duration(path: str | None) -> float | None:
+    """Length in seconds from the audio file's header, or None.
+
+    Reads only the header (frames / sample rate) — the same numbers Live's
+    ``Clip.sample_length`` is counted in. None when the file is missing or
+    unreadable (Live on another machine, a moved library, a codec libsndfile
+    lacks).
+    """
+    if not path:
+        return None
+    try:
+        import soundfile
+
+        info = soundfile.info(path)
+    except Exception:  # noqa: BLE001 — any failure means "unknown length"
+        return None
+    if info.frames > 0 and info.samplerate > 0:
+        return float(info.frames) / float(info.samplerate)
+    return None
+
+
+def _real_length(
+    set_duration: float | None, sample_path: str | None
+) -> tuple[float | None, str | None]:
+    if set_duration:
+        return set_duration, "als_sample_ref"
+    length = sample_file_duration(sample_path)
+    return (length, "sample_file") if length else (None, None)
 
 
 def references_from_als(paths: Sequence[Path], db: DbIndex) -> tuple[list[Reference], int]:
@@ -250,14 +328,16 @@ def references_from_als(paths: Sequence[Path], db: DbIndex) -> tuple[list[Refere
             if key in seen:
                 continue
             seen.add(key)
+            duration, end_source = _real_length(clip.sample_duration_s, clip.sample_path)
             refs.append(
                 Reference(
                     track_id=hit[0],
                     kind=hit[1],
-                    source=f"{p.name}:{clip.track_name or '?'}",
+                    source=f"{p.name}:{clip.location}:{clip.track_name or '?'}",
                     markers=clip.markers,
                     warped=clip.warped,
-                    duration_s=clip.sample_duration_s,
+                    duration_s=duration,
+                    end_source=end_source,
                 )
             )
     return refs, unmatched
@@ -301,12 +381,17 @@ def references_from_live(args: argparse.Namespace, db: DbIndex) -> list[Referenc
             if hit is None:
                 print(f"scene {scene}: clip {path!r} matches no DB track", file=sys.stderr)
                 continue
+            # Live's grid runs to the end of the sample it loaded: take that
+            # file's real length, not tracks.duration_seconds (metadata).
+            duration = sample_file_duration(path)
             refs.append(
                 Reference(
                     track_id=hit[0],
                     kind=hit[1],
                     source=f"live:scene{scene}:{args.kind}_{args.side}",
                     markers=markers,
+                    duration_s=duration,
+                    end_source="sample_file" if duration else None,
                 )
             )
     finally:
@@ -314,24 +399,41 @@ def references_from_live(args: argparse.Namespace, db: DbIndex) -> list[Referenc
     return refs
 
 
-def pick_reference(refs: list[Reference], ref_kind: str) -> tuple[Reference | None, int]:
-    """The reference clip for a track, and how many OTHER clips of that kind
-    disagree with it (different warp markers or warp switch) — a sign the
-    Set holds both a corrected and an uncorrected copy. The first in
-    document order wins; the caller reports the conflict and which was used.
+@dataclass
+class Pick:
+    """The reference chosen for one track, or why there is none."""
+
+    ref: Reference | None
+    # Sources of same-kind clips whose warps disagree; non-empty means the
+    # track is ambiguous and was NOT given a reference.
+    ambiguous: list[str] = field(default_factory=list)
+
+
+def pick_reference(refs: list[Reference], ref_kind: str, ref_source: str | None = None) -> Pick:
+    """The reference clip for a track.
+
+    ``ref_kind`` picks the clip kind (``auto``: the mix first, then stems).
+    ``ref_source`` keeps only clips whose source contains that substring
+    (case-insensitive). When two or more clips of the chosen kind remain and
+    their warps differ, nothing is picked — the Set holds a corrected and an
+    uncorrected copy and scoring against either one silently would be a
+    coin toss; the caller reports the candidates so the user can choose.
     """
+    if ref_source:
+        needle = ref_source.lower()
+        refs = [r for r in refs if needle in r.source.lower()]
     if not refs:
-        return None, 0
+        return Pick(None)
     order = KIND_PREFERENCE if ref_kind == "auto" else (ref_kind,)
     for kind in order:
         same = [r for r in refs if r.kind == kind]
-        if same:
-            first = same[0]
-            conflicting = sum(
-                1 for r in same[1:] if (r.markers, r.warped) != (first.markers, first.warped)
-            )
-            return first, conflicting
-    return None, 0
+        if not same:
+            continue
+        first = same[0]
+        if any((r.markers, r.warped) != (first.markers, first.warped) for r in same[1:]):
+            return Pick(None, ambiguous=[r.source for r in same])
+        return Pick(first)
+    return Pick(None)
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +441,9 @@ def pick_reference(refs: list[Reference], ref_kind: str) -> tuple[Reference | No
 # ---------------------------------------------------------------------------
 
 
-def evaluate_track(
-    db: DbIndex, track_id: int, ref: Reference | None, conflicting: int = 0
-) -> dict[str, Any]:
+def evaluate_track(db: DbIndex, track_id: int, pick: Pick | None = None) -> dict[str, Any]:
     t = db.tracks.get(track_id)
+    ref = pick.ref if pick else None
     out: dict[str, Any] = {
         "track_id": track_id,
         "title": t.title if t else None,
@@ -351,37 +452,51 @@ def evaluate_track(
     }
     if t is None:
         return {**out, "status": "no_such_track"}
+    if pick and pick.ambiguous:
+        return {**out, "status": "ambiguous_reference", "candidates": pick.ambiguous}
     if ref is None:
         return {**out, "status": "no_reference"}
     out["reference"] = {
         "source": ref.source,
         "kind": ref.kind,
         "warp_markers": len(ref.markers),
-        "conflicting_clips": conflicting,
     }
     if not ref.warped:
         return {**out, "status": "reference_unwarped"}
     est, est_down = db.beats(track_id)
     if not est:
         return {**out, "status": "no_db_beats"}
-    # Live's grid spans the whole sample. Prefer the sample's real length
-    # (from the Set) over tracks.duration_seconds, which is Spotify metadata.
-    # Never fall back to "the last marker": Live's own auto-warp markers span
-    # only the first 1/32 beat.
-    end = ref.duration_s or t.duration_s or est[-1]
+    # Live's grid spans the whole sample: take the sample's real length (the
+    # Set's SampleRef, else the file header). Only when neither is known,
+    # fall back to tracks.duration_seconds — Spotify metadata — and say so,
+    # because reference_coverage (gated) then depends on it. Never "the last
+    # marker": Live's own auto-warp markers span only the first 1/32 beat.
+    notes: list[str] = []
+    if ref.duration_s:
+        end, end_source = ref.duration_s, ref.end_source or "reference"
+    elif t.duration_s:
+        end, end_source = t.duration_s, "tracks.duration_seconds"
+        notes.append("reference end from tracks.duration_seconds (metadata; sample unreadable)")
+    else:
+        end, end_source = est[-1], "last_db_beat"
+        notes.append("reference end = last DB beat (no sample length or duration known)")
     try:
         grid = beats_from_warp_markers(ref.markers, start_sec=0.0, end_sec=end)
     except ValueError as exc:
         return {**out, "status": "bad_reference", "error": str(exc)}
     out["reference"]["bpm"] = grid.bpm
     out["reference"]["end_s"] = end
+    out["reference"]["end_source"] = end_source
+    out["reference"]["fingerprint"] = reference_fingerprint(ref.kind, ref.warped, ref.markers, end)
     # The BPM under test is the analysis of the same kind as the reference
     # clip (a drums clip is judged against the drums stem's BPM). No silent
     # fallback to the mix: a missing BPM is reported as missing and fails.
     out["estimate_bpm_kind"] = ref.kind
     estimate_bpm = t.bpm_by_kind.get(ref.kind)
     if estimate_bpm is None:
-        out["note"] = f"no audio_analysis.bpm for {ref.kind}"
+        notes.append(f"no audio_analysis.bpm for {ref.kind}")
+    if notes:
+        out["note"] = "; ".join(notes)
     cmp = compare_grids(
         grid.times,
         est,
@@ -442,12 +557,13 @@ def print_table(results: dict[str, dict[str, Any]]) -> None:
     for tid, r in results.items():
         if r.get("note"):
             print(f"  track {tid}: {r['note']}")
-        n = (r.get("reference") or {}).get("conflicting_clips")
-        if n:
+        if r.get("candidates"):
             print(
-                f"  track {tid}: {n} other {r['reference']['kind']} clip(s) in the Set(s) have "
-                f"different warp markers; used {r['reference']['source']}"
+                f"  track {tid}: {len(r['candidates'])} clips of the same kind have different "
+                "warps — not scored; pick one with --ref-source:"
             )
+            for src in r["candidates"]:
+                print(f"      {src}")
 
 
 def summarise(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -523,13 +639,31 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Which clip is the reference when a Set has several (auto: mix first).",
     )
+    ap.add_argument(
+        "--ref-source",
+        metavar="SUBSTR",
+        help="Only use reference clips whose source contains SUBSTR (case-insensitive), e.g. "
+        "'fixed.als', 'arrangement', 'scene2'. Resolves ambiguous_reference tracks.",
+    )
     ap.add_argument("--json", type=Path, help="Write per-track results + summary here.")
-    ap.add_argument("--baseline", type=Path, help="Previous --json output to gate against.")
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        help="Previous --json output to gate against. Every track it measured is judged "
+        "again unless --track narrows the run.",
+    )
     ap.add_argument(
         "--strict",
         action="store_true",
-        help="With --baseline: hold already-failing tracks to every metric, not just "
-        "tempo error / drift / coverage.",
+        help="With --baseline: no waiver — a failing track whose tempo improved is still "
+        "held to F1 / timing / bar phase.",
+    )
+    ap.add_argument(
+        "--allow-reference-change",
+        action="store_true",
+        help="With --baseline: a track measured against a different reference than in the "
+        "baseline is a warning, not a regression. Better: re-measure the baseline against "
+        "the new reference.",
     )
     live = ap.add_argument_group("--live options")
     live.add_argument("--scene", type=int, action="append", help="1-based scene (repeatable).")
@@ -542,26 +676,61 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def load_baseline(path: Path) -> dict[str, Any]:
+    """A previous ``--json`` output. Raises ``ValueError`` on a foreign file."""
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        raise ValueError(f"{path} is not a {SCHEMA} file")
+    if not isinstance(data.get("tracks"), dict):
+        raise ValueError(f"{path} has no 'tracks' object")
+    return data
+
+
+def baseline_measured(data: Mapping[str, Any]) -> list[int]:
+    """Track ids the baseline has metrics for (the ones the gate must judge)."""
+    out: list[int] = []
+    for tid, r in data["tracks"].items():
+        if isinstance(r, dict) and r.get("metrics"):
+            try:
+                out.append(int(tid))
+            except ValueError:
+                continue
+    return sorted(out)
+
+
+def gate_policy(strict: bool) -> str:
+    return "strict" if strict else "waive-phase-on-tempo-fix"
+
+
 def run_gate(
-    baseline_path: Path, results: dict[str, dict[str, Any]], *, strict: bool = False
+    baseline_path: Path,
+    results: dict[str, dict[str, Any]],
+    *,
+    strict: bool = False,
+    allow_reference_change: bool = False,
+    baseline: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Judge ``results`` against a previous run. ``passed`` is the verdict."""
-    data = json.loads(baseline_path.read_text())
-    if data.get("schema") != SCHEMA:
-        raise ValueError(f"{baseline_path} is not a {SCHEMA} file")
+    """Judge ``results`` against a previous run. ``passed`` is the verdict.
+
+    ``baseline`` is the already-loaded JSON of ``baseline_path`` (loaded
+    here when omitted).
+    """
+    data = baseline if baseline is not None else load_baseline(baseline_path)
     failing_gated = STRICT_GATED if strict else FAILING_TRACK_GATED
-    report = find_regressions(data["tracks"], results, failing_track_gated=failing_gated)
+    report = find_regressions(
+        data["tracks"],
+        results,
+        failing_track_gated=failing_gated,
+        allow_reference_change=allow_reference_change,
+    )
     regressions, not_compared = report.regressions, report.not_compared
     compared = [tid for tid, b in data["tracks"].items() if b.get("metrics") and tid in results]
-    policy = "strict" if strict else "failing-tracks-on-tempo"
+    policy = gate_policy(strict)
     print(f"\nGATE vs {baseline_path} ({policy}): {len(compared)} baseline track(s) re-measured")
     if not_compared:
-        print(f"  not selected this run (not judged): {', '.join(sorted(not_compared))}")
+        print(f"  left out by --track (not judged): {', '.join(sorted(not_compared))}")
     if report.warnings:
-        print(
-            f"  {len(report.warnings)} warning(s) on tracks that already failed (only their "
-            "tempo error, drift and coverage are gated; --strict gates everything):"
-        )
+        print(f"  {len(report.warnings)} warning(s), not gated:")
         for r in report.warnings:
             print(f"    track {r.track_id}: {r.detail}")
     if not compared:
@@ -570,12 +739,20 @@ def run_gate(
         print(f"  FAIL: {len(regressions)} regression(s)")
         for r in regressions:
             print(f"    track {r.track_id}: {r.detail}")
+        if any(r.metric == "reference_changed" for r in regressions):
+            print(
+                "  (a changed reference means the numbers are on different yardsticks: "
+                "re-measure the baseline against the new reference with the old code, or "
+                "pass --allow-reference-change)"
+            )
     else:
         print("  PASS: no regressions")
     return {
         "baseline": str(baseline_path),
         "policy": policy,
         "failing_track_gated": sorted(failing_gated),
+        "waiver_requires_improved": [] if strict else list(TEMPO_FIX_METRICS),
+        "allow_reference_change": allow_reference_change,
         "compared": len(compared),
         "not_compared": sorted(not_compared),
         "regressions": [r.to_dict() for r in regressions],
@@ -589,12 +766,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.live and not args.scene:
         print("--live needs at least one --scene", file=sys.stderr)
         return 2
-    uri = db_uri(args.db)
+    try:
+        uri = db_uri(args.db)
+    except DbPathError as exc:
+        print(f"cannot open DB: {exc}", file=sys.stderr)
+        return 2
     try:
         db = DbIndex.open(uri)
     except sqlite3.Error as exc:
         print(f"cannot open DB {uri}: {exc}", file=sys.stderr)
         return 2
+
+    baseline: dict[str, Any] | None = None
+    if args.baseline:
+        try:
+            baseline = load_baseline(args.baseline)
+        except (OSError, ValueError) as exc:
+            print(f"cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
+            return 2
 
     if args.als:
         missing = [p for p in args.als if not p.exists()]
@@ -616,16 +805,30 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.track:
         selected = list(dict.fromkeys(args.track))
-    elif args.all:
-        selected = sorted(set(db.canonical_track_ids(args.include_duplicates)) | set(by_track))
     else:
-        selected = sorted(by_track)
+        pool = set(by_track)
+        if args.all:
+            pool |= set(db.canonical_track_ids(args.include_duplicates))
+        if baseline is not None:
+            # The gate judges every track the baseline measured. One whose
+            # reference no longer matches comes back no_reference (or
+            # no_such_track) and is flagged grid_missing — never skipped.
+            dropped = set(baseline_measured(baseline)) - pool
+            if dropped:
+                print(
+                    f"({len(dropped)} baseline track(s) have no reference this run and will be "
+                    f"judged as missing: {', '.join(map(str, sorted(dropped)))})"
+                )
+            pool |= dropped
+        selected = sorted(pool)
     if not selected:
         print("no tracks selected (no reference clip matched a DB track)", file=sys.stderr)
         return 2
 
     results = {
-        str(tid): evaluate_track(db, tid, *pick_reference(by_track.get(tid, []), args.ref_kind))
+        str(tid): evaluate_track(
+            db, tid, pick_reference(by_track.get(tid, []), args.ref_kind, args.ref_source)
+        )
         for tid in selected
     }
     print_table(results)
@@ -633,12 +836,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print_summary(summary)
 
     gate: dict[str, Any] | None = None
-    if args.baseline:
-        try:
-            gate = run_gate(args.baseline, results, strict=args.strict)
-        except (OSError, ValueError, KeyError) as exc:
-            print(f"cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
-            return 2
+    if args.baseline and baseline is not None:
+        gate = run_gate(
+            args.baseline,
+            results,
+            strict=args.strict,
+            allow_reference_change=args.allow_reference_change,
+            baseline=baseline,
+        )
 
     if args.json:
         payload = {
@@ -647,8 +852,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "db": uri,
             "reference": [str(p) for p in args.als] if args.als else "live",
             "ref_kind": args.ref_kind,
+            "ref_source": args.ref_source,
             "pass_thresholds": PASS_THRESHOLDS,
             "regression_tolerances": REGRESSION_TOLERANCES,
+            "gate_policy": gate_policy(args.strict),
             "failing_track_gated": sorted(STRICT_GATED if args.strict else FAILING_TRACK_GATED),
             "summary": summary,
             "tracks": results,

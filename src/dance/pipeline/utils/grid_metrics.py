@@ -17,14 +17,18 @@ method follows djbooth's analyzer differential:
    are known on both sides — bar-phase accuracy.
 3. **Gate**: :func:`find_regressions` compares a run against a saved
    baseline. The discipline is djbooth's: a grid change ships only if no
-   previously-passing track regresses. A track that passed is held to every
-   gated metric. A track that already failed is held to the metrics that
-   move steadily as a bad grid improves — tempo error, unwrapped drift and
-   coverage (:data:`FAILING_TRACK_GATED`) — because its F1, timing error and
-   bar phase swing with where the phase sawtooth happens to land: a 0.5 %
-   -> 0.1 % tempo fix can lower F1. Those other changes are reported as
-   warnings. Pass ``failing_track_gated=frozenset(REGRESSION_TOLERANCES)``
-   (``grid_diff --strict``) to hold every track to every metric.
+   track regresses. Every worsened metric past its tolerance is a
+   regression, with ONE narrow waiver: on a track that already failed, when
+   the beats table's own tempo got measurably better in the same run
+   (:data:`TEMPO_FIX_METRICS` improved past tolerance), its F1, timing error
+   and bar phase are reported as warnings instead — once a grid slips more
+   than half a beat those numbers swing with where the phase sawtooth
+   lands, so a 0.5 % -> 0.1 % tempo fix can lower F1. Tempo error, drift
+   and coverage (:data:`FAILING_TRACK_GATED`) are never waived. Without a
+   tempo change there is no sawtooth argument, so a phase shift or a broken
+   downbeat detector on a failing track still fails the gate. Pass
+   ``failing_track_gated=STRICT_GATED`` (``grid_diff --strict``) to waive
+   nothing.
 
 Everything in this module is pure (numbers in, numbers out). Reading grids
 from the DB, from ``.als`` files or from Live over OSC lives elsewhere —
@@ -37,6 +41,8 @@ test (dance's ``beats`` table); "reference" is the grid it is judged against.
 from __future__ import annotations
 
 import bisect
+import hashlib
+import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -86,11 +92,12 @@ REGRESSION_TOLERANCES: dict[str, float] = {
     "bar_phase_accuracy": 0.01,
     "downbeat_f1_70": 0.01,
 }
-# The metrics a track that FAILED in the baseline is still gated on. Tempo
-# error, unwrapped drift (tempo error seen beat by beat) and coverage move
-# steadily with how good the grid is; F1, timing error and bar phase of a grid
-# that is already off do not (see the module docstring), so for a failing
-# track their changes are warnings, not regressions.
+# The metrics that are never waived, even on a track that FAILED in the
+# baseline. Tempo error, unwrapped drift (tempo error seen beat by beat) and
+# coverage move steadily with how good the grid is; F1, timing error and bar
+# phase of a grid that is already off do not when its tempo changes (see the
+# module docstring), so on a failing track whose grid tempo improved (see
+# TEMPO_FIX_METRICS) their changes are warnings, not regressions.
 FAILING_TRACK_GATED: frozenset[str] = frozenset(
     {
         "abs_bpm_error_pct",
@@ -99,7 +106,12 @@ FAILING_TRACK_GATED: frozenset[str] = frozenset(
         "reference_coverage",
     }
 )
-# Hold every track — failing or not — to every metric (``grid_diff --strict``).
+# The beats table's own tempo, seen two ways. The waiver above applies only
+# when one of these improved by more than its tolerance in the same run —
+# the only case in which the phase sawtooth moves. Both describe the BEATS
+# (not audio_analysis.bpm), because F1 / timing depend on the beats alone.
+TEMPO_FIX_METRICS: tuple[str, ...] = ("abs_grid_bpm_error_pct", "abs_drift_ms_per_100_beats")
+# Waive nothing: every track is held to every metric (``grid_diff --strict``).
 STRICT_GATED: frozenset[str] = frozenset(REGRESSION_TOLERANCES)
 # Metrics where a bigger number is better. Everything else: smaller is better.
 _HIGHER_IS_BETTER = frozenset(
@@ -670,12 +682,39 @@ def beats_from_warp_markers(
 # ---------------------------------------------------------------------------
 
 
+def reference_fingerprint(
+    kind: str,
+    warped: bool,
+    markers: Iterable[WarpMarker],
+    end_sec: float | None,
+) -> str:
+    """A short, stable digest of the yardstick a track was measured against.
+
+    Two runs are only comparable when they scored the estimate against the
+    same reference grid: the same clip kind (mix or which stem), the same
+    warp switch, the same warp markers and the same sample end (which sets
+    how far Live's grid extends, hence coverage). Re-correcting warps in
+    Live, re-exporting a dance ``.als`` after a BPM change, or switching
+    ``--ref-kind`` all change this digest. Floats are rounded (markers to
+    1 µs / 1e-6 beat, the end to 1 ms) so a re-read of the same Set — or the
+    same OSC float32 values — always gives the same digest.
+    """
+    payload = {
+        "kind": kind,
+        "warped": bool(warped),
+        "markers": [[round(m.sec, 6), round(m.beat, 6)] for m in markers],
+        "end_s": None if end_sec is None else round(float(end_sec), 3),
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class Regression:
     track_id: str
     metric: str
-    baseline: float | bool | None
-    current: float | bool | None
+    baseline: float | bool | str | None
+    current: float | bool | str | None
     detail: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -688,14 +727,34 @@ def _worse(metric: str, base: float, cur: float, tol: float) -> bool:
     return cur > base + tol
 
 
+def _tempo_fix(
+    base_m: Mapping[str, Any], cur_m: Mapping[str, Any], tolerances: Mapping[str, float]
+) -> str | None:
+    """Why the sawtooth waiver applies to this track, or None.
+
+    It applies when the beats table's own tempo got better by more than its
+    tolerance (:data:`TEMPO_FIX_METRICS`) — then F1 / timing / bar phase of a
+    grid that is already off move with the phase sawtooth, not with quality.
+    """
+    for metric in TEMPO_FIX_METRICS:
+        b, c = base_m.get(metric), cur_m.get(metric)
+        if b is None or c is None:
+            continue
+        tol = tolerances.get(metric, 0.0)
+        if _worse(metric, float(c), float(b), tol):  # base is worse than current
+            return f"{metric} improved {float(b):.4g} -> {float(c):.4g}"
+    return None
+
+
 @dataclass(frozen=True)
 class GateReport:
     """What :func:`find_regressions` found.
 
-    ``regressions`` fail the gate. ``warnings`` are worsened metrics on a
-    track that already failed in the baseline — reported, not gated (see
-    :data:`FAILING_TRACK_GATED`). ``not_compared`` are baseline tracks this
-    run did not select.
+    ``regressions`` fail the gate. ``warnings`` are reported, not gated:
+    worsened F1 / timing / bar-phase metrics on a track that already failed
+    and whose grid tempo improved in the same run (the sawtooth waiver), and
+    — with ``allow_reference_change`` — tracks whose reference changed.
+    ``not_compared`` are baseline tracks absent from this run.
     """
 
     regressions: list[Regression]
@@ -709,6 +768,7 @@ def find_regressions(
     *,
     tolerances: Mapping[str, float] = REGRESSION_TOLERANCES,
     failing_track_gated: frozenset[str] = FAILING_TRACK_GATED,
+    allow_reference_change: bool = False,
 ) -> GateReport:
     """Compare per-track metric dicts against a baseline run.
 
@@ -717,19 +777,29 @@ def find_regressions(
     ``result["metrics"]`` is present). Regressions:
 
     - a track that passed in the baseline and fails now → ``passes``;
-    - a tolerance-exceeding worsening of a gated metric → that metric. A
-      track that passed in the baseline is gated on every metric in
-      ``tolerances``; one that failed only on ``failing_track_gated`` (tempo
-      error, drift, coverage) — its other worsened metrics become
-      ``warnings``. ``failing_track_gated=STRICT_GATED`` gates them all;
-    - a gated metric that had a value in the baseline and is ``None`` now
-      (the analysis BPM went NULL, every downbeat flag vanished) →
-      ``<metric>_missing``. A metric that disappears cannot be "no worse";
+    - a tolerance-exceeding worsening of any metric in ``tolerances`` → that
+      metric. The one waiver: on a track that FAILED in the baseline and
+      whose beats-table tempo improved past tolerance in this run
+      (:data:`TEMPO_FIX_METRICS`), worsened metrics outside
+      ``failing_track_gated`` (F1, timing, bar phase, downbeats) become
+      ``warnings`` — they swing with the phase sawtooth when the tempo
+      moves. Without such a tempo change nothing is waived.
+      ``failing_track_gated=STRICT_GATED`` disables the waiver;
+    - a metric that had a value in the baseline and is ``None`` now (the
+      analysis BPM went NULL, every downbeat flag vanished) →
+      ``<metric>_missing``, under the same rules. A metric that disappears
+      cannot be "no worse";
     - a track that HAD metrics in the baseline but now has none (its grid
       vanished, its reference stopped matching) → ``grid_missing``;
+    - a track measured against a different reference than in the baseline
+      (``result["reference"]["fingerprint"]``, see
+      :func:`reference_fingerprint`) → ``reference_changed``: the numbers
+      are on different yardsticks. With ``allow_reference_change`` it is a
+      warning and the metrics are compared anyway;
     - baseline tracks absent from ``current`` entirely are not regressions
-      (the run simply didn't select them) — they come back in
-      ``not_compared`` so the caller can say so.
+      (the caller narrowed the run on purpose) — they come back in
+      ``not_compared`` so the caller can say so. ``grid_diff`` only narrows
+      when ``--track`` is given; otherwise every baseline track is judged.
     """
     regressions: list[Regression] = []
     warnings: list[Regression] = []
@@ -753,16 +823,35 @@ def find_regressions(
                 )
             )
             continue
+        b_fp = (base.get("reference") or {}).get("fingerprint")
+        c_fp = (current[track_id].get("reference") or {}).get("fingerprint")
+        if b_fp is not None and c_fp is not None and b_fp != c_fp:
+            b_ref = base.get("reference") or {}
+            c_ref = current[track_id].get("reference") or {}
+            (warnings if allow_reference_change else regressions).append(
+                Regression(
+                    track_id,
+                    "reference_changed",
+                    b_fp,
+                    c_fp,
+                    f"reference changed ({b_ref.get('kind')} from {b_ref.get('source')} -> "
+                    f"{c_ref.get('kind')} from {c_ref.get('source')}); the metrics are on "
+                    "different yardsticks",
+                )
+            )
         was_passing = bool(base_m.get("passes"))
         if was_passing and not cur_m.get("passes"):
             regressions.append(
                 Regression(track_id, "passes", True, False, "previously-passing track now fails")
             )
+        waiver = None if was_passing else _tempo_fix(base_m, cur_m, tolerances)
         for metric, tol in tolerances.items():
             b, c = base_m.get(metric), cur_m.get(metric)
             if b is None:
                 continue
-            sink = regressions if was_passing or metric in failing_track_gated else warnings
+            waived = waiver is not None and metric not in failing_track_gated
+            sink = warnings if waived else regressions
+            why = f" (waived: failing track, {waiver})" if waived else ""
             if c is None:
                 sink.append(
                     Regression(
@@ -770,7 +859,7 @@ def find_regressions(
                         f"{metric}_missing",
                         float(b),
                         None,
-                        f"{metric} was {float(b):.4g} in baseline; now unknown",
+                        f"{metric} was {float(b):.4g} in baseline; now unknown{why}",
                     )
                 )
             elif _worse(metric, float(b), float(c), tol):
@@ -781,7 +870,7 @@ def find_regressions(
                         metric,
                         float(b),
                         float(c),
-                        f"{metric} {direction} {float(b):.4g} -> {float(c):.4g} (tol {tol:g})",
+                        f"{metric} {direction} {float(b):.4g} -> {float(c):.4g} (tol {tol:g}){why}",
                     )
                 )
     return GateReport(regressions, warnings, not_compared)
@@ -800,6 +889,7 @@ __all__ = [
     "ReferenceGrid",
     "Regression",
     "STRICT_GATED",
+    "TEMPO_FIX_METRICS",
     "WarpMarker",
     "align_beats",
     "bar_positions",
@@ -812,5 +902,6 @@ __all__ = [
     "grid_bpm",
     "match_rate",
     "median_period",
+    "reference_fingerprint",
     "tempo_octave",
 ]
