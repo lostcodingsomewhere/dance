@@ -102,6 +102,44 @@ mutes.
 
 ## Part 1: What a pad is
 
+### What a pad stands for
+
+A pad could stand for three things. Options A, B and C below all sit in the first
+two rows. The third row is out of scope.
+
+| | What a press does | Closest to | In this proposal |
+|---|---|---|---|
+| **Part of a song** | starts one stem at a named place in its song, on the next bar, and the stem plays on from there | hot cues on a DJ deck | vocals and Song |
+| **Loop taken from a song** | starts a 4, 8 or 16 bar loop of one stem, which repeats until another pad in its column replaces it | a loop pack built from your own library | drums, bass and melody |
+| **Instrument** | sounds a hit or a chop at once, for as long as the pad is held, on top of whatever is playing | finger drumming | left out |
+
+With option B and "hold per role", every pad is found by its place in the song: its
+row is the intro, the drop and so on. The rhythm stems then loop where they land.
+Finding pads by song part is what lets an original and its remix line up, because
+"remix drums under the original's hook" needs both versions cut at the same named
+places.
+
+`vision.md` leans further towards loops. It says to "play stems as independent
+loops, not as pieces of songs", and it counts a set a success when "a passive
+listener could not identify the source tracks". Playing an original against its
+remix pulls the other way, because the listener is meant to recognise the song. If
+the loop reading should win outright, two rules below change. Each stem would get
+its own five best loops in place of its track's five sections, so rows would stop
+lining up across a deck. The case for grouping columns by deck would also get weaker.
+
+The instrument reading is left out for these reasons:
+
+- The APC40 mk2 pads do not sense velocity (MusicRadar and MusicTech reviews).
+- The stock script uses the grid for clip launch. I found no source for a note mode
+  on this model. Akai's APC64 and APC mini mk2 have one.
+- A hit played alone exposes separation artefacts that a full loop covers. This is
+  an expectation and has not been tested.
+
+A lighter form can be added later inside the clip model. Live clips have a Gate
+launch mode, which sounds the clip while the pad is held, and a launch quantization
+of their own. The installed AbletonOSC already writes `launch_mode`,
+`launch_quantization` and `legato` (`abletonosc/clip.py`, `properties_rw`).
+
 ### Options
 
 **A. A whole stem from the top (today).** A row is a song. Up to eight songs can
@@ -345,7 +383,12 @@ Each step lands on its own and is checked in Live before the next one starts.
 
 ## Decisions for you
 
-1. **What a pad is:** A, B or C. I recommend B.
+1. **What a pad is:** A, B or C. I recommend B. Under that sits what a pad stands
+   for: found by song part with the rhythm stems looping, as written here, or loops
+   chosen per stem, as `vision.md` reads. I recommend song part, because of the
+   original and remix pairing. A yes means the "could not identify the source
+   tracks" line in `vision.md` needs a matching edit, which this proposal leaves
+   alone.
 2. **Section end:** hold per role, everything plays on, or everything holds. I
    recommend hold per role, as a setting.
 3. **The five-cue rule**, including separate cues for vocals. I recommend yes to both.
@@ -425,6 +468,8 @@ fail on today's code.
 - Moving or renaming cues in the app. The `manual` source is reserved for it.
 - Hold and release, loop length, or loading from the controller. Each needs a MIDI
   listener beside the OSC bridge.
+- Pads played as an instrument, meaning hits and chops that sound while held. See
+  "What a pad stands for".
 - A grid check with a click and nudge keys, and reading warp fixes back from a Set
   you saved in Live (`als/reader.py` could do the second).
 - A filter or EQ on each deck track (`hardware-and-live-controls.md` section 2).
