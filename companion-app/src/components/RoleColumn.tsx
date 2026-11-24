@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useColumnRecs } from "../hooks/useColumnRecs";
 import { useLoadToDeck } from "../hooks/useLoadToDeck";
@@ -10,10 +10,29 @@ import { publishZone } from "../lib/gridShape";
 import { isFocused, type Zone } from "../lib/gridNav";
 import { ROLE_STYLES, roleLabel, type DeckSide, type StemRole } from "../lib/roles";
 import { store, useAppStore } from "../store";
-import type { ColumnRec, PlanItem, PlanRole } from "../types";
+import { PLAN_ROLES, type ColumnRec, type PlanItem, type PlanRole, type SetPlan } from "../types";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 
 type Mode = "plan" | "live";
+
+const UNDO_SECONDS = 8;
+
+interface RemovedPick {
+  item: PlanItem;
+  index: number;
+  planSince: string;
+}
+
+function picksOf(plan: SetPlan | null | undefined): string {
+  return JSON.stringify([
+    plan?.set_id,
+    ...PLAN_ROLES.map((role) => (plan?.queues?.[role] ?? []).map((item) => item.track_id)),
+  ]);
+}
+
+function titleOf(item: PlanItem): string {
+  return item.title ?? `Track #${item.track_id}`;
+}
 
 /**
  * Keep the keyboard cursor on screen as it walks a long column.
@@ -243,6 +262,30 @@ function keepActivationKeysFromGrid(e: React.KeyboardEvent) {
   if (e.key === "Enter" || e.key === " ") e.stopPropagation();
 }
 
+function MoveButton({
+  direction,
+  title,
+  onMove,
+}: {
+  direction: "up" | "down";
+  title: string;
+  onMove?: () => void;
+}) {
+  if (!onMove) return <span aria-hidden className="w-5 shrink-0" />;
+  return (
+    <button
+      type="button"
+      onClick={onMove}
+      onKeyDown={keepActivationKeysFromGrid}
+      aria-label={`Move ${title} ${direction}`}
+      title={`Move ${direction} in the plan`}
+      className="-my-px w-5 shrink-0 rounded border border-neutral-700/60 bg-neutral-800/70 font-sans text-[10px] leading-tight text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors"
+    >
+      {direction === "up" ? "↑" : "↓"}
+    </button>
+  );
+}
+
 /** A queued pick in the plan (top zone) — emerald-edged, × to remove. */
 function QueueCard({
   item,
@@ -252,6 +295,8 @@ function QueueCard({
   focused,
   onFocus,
   onRemove,
+  onMoveUp,
+  onMoveDown,
   onOpenPads,
   onFindVersions,
 }: {
@@ -262,6 +307,8 @@ function QueueCard({
   focused?: boolean;
   onFocus?: () => void;
   onRemove: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
   onOpenPads?: () => void;
   onFindVersions?: () => void;
 }) {
@@ -283,6 +330,12 @@ function QueueCard({
       leading={`${index + 1}`}
       metaAction={
         <>
+          {(onMoveUp || onMoveDown) && (
+            <>
+              <MoveButton direction="up" title={titleOf(item)} onMove={onMoveUp} />
+              <MoveButton direction="down" title={titleOf(item)} onMove={onMoveDown} />
+            </>
+          )}
           {onFindVersions && (
             <button
               type="button"
@@ -310,14 +363,36 @@ function QueueCard({
       action={
         <button
           type="button"
-          onClick={onRemove}
-          className="shrink-0 w-7 h-7 text-sm rounded bg-neutral-800/70 hover:bg-rose-500/30 text-neutral-400 hover:text-rose-100 border border-neutral-700/60 transition-colors inline-flex items-center justify-center"
+          onClick={(event) => {
+            // The second click of a double-click lands on the pick that moved up into this place.
+            if (event.detail > 1) return;
+            onRemove();
+          }}
+          className="ml-3 shrink-0 w-7 h-7 text-sm rounded bg-neutral-800/70 hover:bg-rose-500/30 text-neutral-400 hover:text-rose-100 border border-neutral-700/60 transition-colors inline-flex items-center justify-center"
           title="Remove from plan"
         >
           ×
         </button>
       }
     />
+  );
+}
+
+function RemovedPickLine({ title, onUndo }: { title: string; onUndo: () => void }) {
+  return (
+    <div className="flex min-h-[2rem] items-center gap-2 rounded-md border border-dashed border-neutral-700 pl-2 pr-10 text-xs text-neutral-300">
+      <span role="status" className="min-w-0 truncate">
+        Removed {title}
+      </span>
+      <button
+        type="button"
+        onClick={onUndo}
+        onKeyDown={keepActivationKeysFromGrid}
+        className="shrink-0 rounded border border-neutral-600 bg-neutral-800 px-2 py-0.5 text-xs text-neutral-100 hover:bg-neutral-700 transition-colors"
+      >
+        Undo
+      </button>
+    </div>
   );
 }
 
@@ -557,7 +632,6 @@ export function PlanBand({
         setId={setId}
         role={role}
         mode={mode}
-        queue={queue}
         onOpenPads={onOpenPads}
         onFindVersions={onFindVersions}
         className="flex-1"
@@ -596,7 +670,6 @@ function PlanZone({
   setId,
   role,
   mode,
-  queue,
   onOpenPads,
   onFindVersions,
   className,
@@ -604,41 +677,79 @@ function PlanZone({
   setId: number;
   role: PlanRole;
   mode: Mode;
-  queue: PlanItem[];
   onOpenPads?: (item: PlanItem) => void;
   onFindVersions?: (item: PlanItem) => void;
   /** Passed ``flex-1`` so the zone grows to fill a stretched plan band —
    * that's what makes the empty placeholder match the tallest queued column. */
   className?: string;
 }) {
-  const { removeFromRole } = usePlanMutations(setId);
+  const { removeFromRole, restoreToRole, moveInRole } = usePlanMutations(setId);
   const focus = useAppStore((s) => s.gridFocus);
+  const [removed, setRemoved] = useState<RemovedPick | null>(null);
+  // Read here, not passed down: a prop would still hold the plan from before the save.
+  const plan = useSetPlan(setId);
+  const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
+  const planNow = picksOf(plan.data);
   usePublishZone(role, "plan", queue.map((q) => q.track_id));
-  if (queue.length === 0) {
-    return (
-      <div
-        className={`flex min-h-[3rem] items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700 ${className ?? ""}`}
-      >
-        nothing queued
-      </div>
+
+  useEffect(() => {
+    if (removed == null) return;
+    const forget = () => setRemoved((current) => (current === removed ? null : current));
+    if (planNow !== removed.planSince) {
+      forget();
+      return;
+    }
+    const timer = window.setTimeout(forget, UNDO_SECONDS * 1000);
+    return () => window.clearTimeout(timer);
+  }, [removed, planNow]);
+
+  const remove = (item: PlanItem, index: number) =>
+    removeFromRole(role, index, item.track_id, (saved) =>
+      setRemoved({ item, index, planSince: picksOf(saved) }),
+    );
+  const move = (from: number, to: number) =>
+    moveInRole(role, from, to, () => {
+      if (isFocused(store.peekGridFocus(), role, "plan", from)) {
+        store.setGridFocus({ role, zone: "plan", index: to });
+      }
+    });
+  const canMove = mode === "plan";
+
+  const rows = queue.map((item, i) => (
+    <QueueCard
+      key={`${item.track_id}-${i}`}
+      item={item}
+      role={role}
+      mode={mode}
+      index={i}
+      focused={isFocused(focus, role, "plan", i)}
+      onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
+      onRemove={() => remove(item, i)}
+      onMoveUp={canMove && i > 0 ? () => move(i, i - 1) : undefined}
+      onMoveDown={canMove && i < queue.length - 1 ? () => move(i, i + 1) : undefined}
+      onOpenPads={onOpenPads && (() => onOpenPads(item))}
+      onFindVersions={onFindVersions && (() => onFindVersions(item))}
+    />
+  ));
+  if (removed != null && planNow === removed.planSince) {
+    rows.splice(
+      Math.min(removed.index, rows.length),
+      0,
+      <RemovedPickLine
+        key="removed"
+        title={titleOf(removed.item)}
+        onUndo={() => restoreToRole(role, removed.index, removed.item.track_id)}
+      />,
     );
   }
   return (
     <div className={`flex flex-col gap-1 ${className ?? ""}`}>
-      {queue.map((item, i) => (
-        <QueueCard
-          key={`${item.track_id}-${i}`}
-          item={item}
-          role={role}
-          mode={mode}
-          index={i}
-          focused={isFocused(focus, role, "plan", i)}
-          onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
-          onRemove={() => removeFromRole(role, i)}
-          onOpenPads={onOpenPads && (() => onOpenPads(item))}
-          onFindVersions={onFindVersions && (() => onFindVersions(item))}
-        />
-      ))}
+      {rows}
+      {queue.length === 0 && (
+        <div className="flex min-h-[3rem] flex-1 items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700">
+          nothing queued
+        </div>
+      )}
     </div>
   );
 }

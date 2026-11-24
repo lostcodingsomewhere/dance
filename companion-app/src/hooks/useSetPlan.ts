@@ -8,6 +8,9 @@ import * as api from "../api";
 import type { ColumnRecsResponse, SetPlan } from "../types";
 
 const KEY = (setId: number) => ["sets", setId, "plan"] as const;
+const SAVE_KEY = (setId: number | null) => ["sets", setId, "plan", "save"] as const;
+
+type OnSaved = (plan: SetPlan) => void;
 
 export function useSetPlan(setId: number | null | undefined) {
   return useQuery({
@@ -25,6 +28,7 @@ export function usePlanMutations(setId: number | null) {
 
   const append = useAppendToPlan();
   const put = useMutation({
+    mutationKey: SAVE_KEY(setId),
     mutationFn: (queues: Record<string, number[]>) => api.putPlan(setId as number, queues),
     onSuccess: (plan) => {
       if (setId == null) return;
@@ -73,16 +77,33 @@ export function usePlanMutations(setId: number | null) {
     append.mutate({ setId, role, trackId, afterTrackId: originalOfVersion(role, trackId) });
   };
 
-  const removeFromRole = (role: string, index: number) => {
+  // A save built from the cache while another is in flight would undo that one.
+  const save = (queues: Record<string, number[]>, onSaved?: OnSaved) => {
+    if (qc.isMutating({ mutationKey: SAVE_KEY(setId) }) > 0) return;
+    put.mutate(queues, { onSuccess: onSaved });
+  };
+
+  const removeFromRole = (role: string, index: number, trackId: number, onSaved?: OnSaved) => {
     const q = currentQueues();
     // No server-side remove endpoint exists, so this stays read-modify-PUT —
     // but refuse to run against an unloaded plan rather than wiping it.
     if (q == null) return;
-    q[role] = (q[role] ?? []).filter((_, i) => i !== index);
-    put.mutate(q);
+    const list = q[role] ?? [];
+    if (list[index] !== trackId) return;
+    q[role] = list.filter((_, i) => i !== index);
+    save(q, onSaved);
   };
 
-  const moveInRole = (role: string, from: number, to: number) => {
+  const restoreToRole = (role: string, index: number, trackId: number) => {
+    const q = currentQueues();
+    if (q == null) return;
+    const list = [...(q[role] ?? [])];
+    list.splice(Math.min(index, list.length), 0, trackId);
+    q[role] = list;
+    save(q);
+  };
+
+  const moveInRole = (role: string, from: number, to: number, onSaved?: OnSaved) => {
     const q = currentQueues();
     if (q == null) return;
     const list = [...(q[role] ?? [])];
@@ -90,10 +111,17 @@ export function usePlanMutations(setId: number | null) {
     const [it] = list.splice(from, 1);
     list.splice(to, 0, it);
     q[role] = list;
-    put.mutate(q);
+    save(q, onSaved);
   };
 
-  return { put, addToRole, removeFromRole, moveInRole, isPending: put.isPending };
+  return {
+    put,
+    addToRole,
+    removeFromRole,
+    restoreToRole,
+    moveInRole,
+    isPending: put.isPending,
+  };
 }
 
 /** Append a track to a role queue server-side — safe without the plan loaded
