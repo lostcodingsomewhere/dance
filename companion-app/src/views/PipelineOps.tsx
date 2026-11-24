@@ -169,7 +169,7 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
       setSelected(new Set(data.new_rows.map(rowKey)));
     },
     onError: (err: Error) => {
-      setPreviewErr(err.message);
+      setPreviewErr(api.serverMessage(err));
       setPreview(null);
     },
   });
@@ -184,7 +184,7 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
       qc.invalidateQueries({ queryKey: ["pipeline-status"] });
       onCommitted();
     },
-    onError: (err: Error) => setPreviewErr(err.message),
+    onError: (err: Error) => setPreviewErr(api.serverMessage(err)),
   });
 
   function toggle(key: string): void {
@@ -645,7 +645,7 @@ export function PipelineOps() {
       setTimeout(() => setScanToast(null), 5000);
     },
     onError: (err: Error) => {
-      setScanToast({ text: err.message, tone: "err" });
+      setScanToast({ text: api.serverMessage(err), tone: "err" });
       setTimeout(() => setScanToast(null), 5000);
     },
   });
@@ -671,7 +671,7 @@ export function PipelineOps() {
       setTimeout(() => setPlaylistToast(null), 8000);
     },
     onError: (err: Error) => {
-      setPlaylistToast({ text: err.message, tone: "err" });
+      setPlaylistToast({ text: api.serverMessage(err), tone: "err" });
       setTimeout(() => setPlaylistToast(null), 12000);
     },
   });

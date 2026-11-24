@@ -240,4 +240,62 @@ describe("starting work from the Pipeline view", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(NO_FFMPEG));
     expect(screen.getByRole("alert")).not.toHaveTextContent("Another run is in progress.");
   });
+
+  it("gives the server's reason in words when a scan or a playlist is refused", async () => {
+    backend = new BoothBackend(
+      aLibraryOf([FINISHED], {
+        [`POST ${API}/scan`]: () => refusal(403, ADDRESS_NOT_ALLOWED),
+        [`POST ${API}/ingest/playlist`]: () => refusal(401, NOT_YOUR_PLAYLIST),
+      }),
+    );
+    renderPipelineView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    expect(await screen.findByText(ADDRESS_NOT_ALLOWED)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "+ Spotify Playlist" }));
+    fireEvent.change(screen.getByPlaceholderText(/open\.spotify\.com\/playlist/), {
+      target: { value: "https://open.spotify.com/playlist/abc" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Queue downloads" }));
+    expect(await screen.findByText(NOT_YOUR_PLAYLIST)).toBeInTheDocument();
+
+    expect(screen.queryByText(/API 40/)).not.toBeInTheDocument();
+  });
+
+  it("gives the server's reason in words when a CSV download is refused", async () => {
+    const preview = {
+      total_rows: 1,
+      new_rows: [
+        {
+          artist: "Elderbrook",
+          title: "Shallow Water",
+          album: "",
+          duration_s: 200,
+          target_path: "/music/Elderbrook - Shallow Water.mp3",
+          target_exists: false,
+          duplicate_of: null,
+        },
+      ],
+      duplicates: [],
+      parse_errors: [],
+    };
+    backend = new BoothBackend(
+      aLibraryOf([FINISHED], {
+        [`POST ${API}/ingest/preview`]: () => preview,
+        [`POST ${API}/ingest/commit`]: () => refusal(400, NOTHING_TO_DOWNLOAD),
+      }),
+    );
+    renderPipelineView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ingest CSV…" }));
+    fireEvent.change(within(csvDialog()).getByPlaceholderText(CSV_FIELD), {
+      target: { value: CSV },
+    });
+    fireEvent.click(within(csvDialog()).getByRole("button", { name: "Preview" }));
+    fireEvent.click(await within(csvDialog()).findByRole("button", { name: "Download 1 track" }));
+
+    expect(await within(csvDialog()).findByText(NOTHING_TO_DOWNLOAD)).toBeInTheDocument();
+    expect(within(csvDialog()).queryByText(/API 400/)).not.toBeInTheDocument();
+  });
 });
