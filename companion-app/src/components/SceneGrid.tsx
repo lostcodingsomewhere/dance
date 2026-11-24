@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { pushTrackToLive } from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
@@ -440,20 +440,7 @@ function Cell({
           {badgeText}
         </span>
       )}
-      {onRemove && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          title={`Remove ${roleLabel(role).toLowerCase()} from this scene`}
-          aria-label={`Remove ${roleLabel(role)} clip from scene`}
-          className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none text-neutral-400 bg-neutral-950/80 border border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100 focus:outline-none"
-        >
-          ×
-        </button>
-      )}
+      {onRemove && <RemoveClipButton role={role} onRemove={onRemove} />}
       {onAnchorFill && (
         <button
           type="button"
@@ -470,5 +457,42 @@ function Cell({
         </button>
       )}
     </div>
+  );
+}
+
+const REMOVE_STAYS_ARMED_MS = 2500;
+
+function RemoveClipButton({ role, onRemove }: { role: StemRole; onRemove: () => void }) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const disarm = setTimeout(() => setArmed(false), REMOVE_STAYS_ARMED_MS);
+    return () => clearTimeout(disarm);
+  }, [armed]);
+
+  const clip = `${roleLabel(role)} clip`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        setArmed(!armed);
+        if (armed) onRemove();
+      }}
+      title={
+        armed
+          ? "Press again to remove this clip from Live"
+          : `Remove ${roleLabel(role).toLowerCase()} from this scene`
+      }
+      aria-label={armed ? `Press again to remove ${clip} from scene` : `Remove ${clip} from scene`}
+      className={`absolute top-0.5 right-0.5 h-4 rounded-full flex items-center justify-center leading-none border focus:outline-none ${
+        armed
+          ? "px-1.5 text-[9px] font-semibold text-white bg-rose-600 border-rose-400"
+          : "w-4 text-[10px] text-neutral-400 bg-neutral-950/80 border-neutral-800 opacity-0 group-hover:opacity-100 hover:text-rose-300 hover:border-rose-500/40 transition-opacity focus:opacity-100"
+      }`}
+    >
+      {armed ? "remove?" : "×"}
+    </button>
   );
 }
