@@ -812,7 +812,8 @@ export function PipelineOps() {
   const weighted = status.data?.weighted_progress ?? 0;
   const inProgress = !!status.data?.in_progress;
   // isError goes back to false on every new attempt while no status has loaded.
-  const serverIsNotAnswering = status.errorUpdatedAt > status.dataUpdatedAt;
+  const serverIsNotAnswering =
+    status.failureCount > 0 || status.errorUpdatedAt > status.dataUpdatedAt;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

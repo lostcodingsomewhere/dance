@@ -24,6 +24,8 @@ const NOTHING_TO_DOWNLOAD = "No rows to download. Every row was a duplicate.";
 const CSV = "Track Name,Artist Name(s)\nShallow Water,Elderbrook\n";
 const CSV_FIELD = /Paste Exportify CSV here/;
 const NOTHING_NEW_ON_DISK = { new: 0, updated: 0, unchanged: 1, errors: 0 };
+const RETRIES_THE_APP_ALLOWS = 1;
+const BEFORE_THE_RETRY_MS = 500;
 
 function track(
   fields: Partial<PipelineRecentTrack> & Pick<PipelineRecentTrack, "id" | "title">,
@@ -80,11 +82,9 @@ function refusal(status: number, detail: string): Response {
   });
 }
 
-function renderPipelineView() {
+function renderPipelineView(retry: number | false = false) {
   return render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry } } })}>
       <PipelineOps />
     </QueryClientProvider>,
   );
@@ -339,9 +339,11 @@ describe("the Pipeline view when the server is down", () => {
     backend = new BoothBackend(() => {
       throw new TypeError("Failed to fetch");
     });
-    renderPipelineView();
+    renderPipelineView(RETRIES_THE_APP_ALLOWS);
 
-    expect(await screen.findByText(/The server is not answering/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/The server is not answering/, {}, { timeout: BEFORE_THE_RETRY_MS }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Idle/)).not.toBeInTheDocument();
     expect(screen.queryByText(/0 tracks/)).not.toBeInTheDocument();
   });
