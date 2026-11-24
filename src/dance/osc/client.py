@@ -344,9 +344,9 @@ class AbletonOSCClient:
 
     # -- Warp markers -------------------------------------------------------
     #
-    # Handlers from vendor/abletonosc patch 0005, checked on Live 12.4.3
-    # (docs/live-compat.md, 2026-11-24). ``add_warp_marker`` refuses a dict
-    # there, so the patch builds a ``Live.Clip.WarpMarker``.
+    # Handlers from vendor/abletonosc patch 0005, checked on Live 12.4.5
+    # (docs/live-compat.md, 2026-11-24). Live 12.4.3 refused a dict for
+    # ``add_warp_marker``, so the patch builds a ``Live.Clip.WarpMarker``.
 
     def add_warp_marker(
         self, track: int, slot: int, beat_time: float, sample_time: float

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Live's own grid lands up to 9 s after a clip is made (12.4.3), so grids are read back for a while.
 GRID_GUARD_DELAYS: tuple[float, ...] = (*range(1, 13), 14.0, 16.0, 18.0, 20.0, 25.0, 30.0)
 GRID_TEMPO_TOLERANCE_BPM = 0.01
-# Live answers nothing while it makes a clip: about 0.6 s per file it has warped before (12.4.3).
+# Live answers nothing while it makes a clip: about 0.6 s per file it has warped before (12.4.5).
 SECONDS_TO_WAIT_FOR_NEW_CLIPS = 10.0
 SECONDS_TO_WAIT_FOR_LIVE_UNDER_A_LOAD = 2.0
 # AbletonOSC empties its socket once per tick, so a long run of messages is sent in batches.
