@@ -136,3 +136,20 @@ describe("the FX controls on the decks", () => {
     await waitFor(() => expect(backend.sent("POST", "/api/v1/ableton/fx/riser")).toHaveLength(1));
   });
 });
+
+describe("the decks with nothing loaded", () => {
+  it("say what to do next", async () => {
+    backend = new BoothBackend(({ path }) =>
+      path.endsWith("/ableton/decks") ? { columns: null, cells: [] } : undefined,
+    );
+    renderApp();
+
+    expect(
+      await screen.findByText(
+        "Nothing is loaded on the decks. Load a pick with ⤒A or ⤒B below, or open a set in Live.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/recs banner/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Deck A" })).not.toBeInTheDocument();
+  });
+});

@@ -129,7 +129,7 @@ export function TwoDeckStrip() {
   if (!columns) {
     return (
       <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-3 text-xs text-neutral-600">
-        Waiting for Ableton — load a track from the recs banner to begin a combo.
+        Nothing is loaded on the decks. Load a pick with ⤒A or ⤒B below, or open a set in Live.
       </div>
     );
   }
