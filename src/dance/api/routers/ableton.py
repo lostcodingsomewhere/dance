@@ -451,6 +451,14 @@ def state(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
     return bridge.state.to_dict()
 
 
+SECONDS_LIVE_HAS_TO_ANSWER = 1.0
+
+
+@router.get("/health")
+def health(bridge: AbletonBridge = Depends(get_bridge)) -> dict[str, bool]:
+    return {"live_reachable": bridge.live_answers(timeout=SECONDS_LIVE_HAS_TO_ANSWER)}
+
+
 @router.post("/load-track", response_model=LoadTrackResult)
 def load_track(
     body: LoadTrackRequest,
