@@ -8,7 +8,13 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from dance.api.deps import fullmix_analysis, get_session, get_settings
+from dance.api.deps import (
+    column_rec_out,
+    fullmix_analysis,
+    get_session,
+    get_settings,
+    versions_leading_a_column,
+)
 from dance.api.schemas import (
     ColumnRecOut,
     ColumnRecsRequest,
@@ -196,6 +202,13 @@ def recommend_by_column_route(
             detail=f"unknown column {body.column!r}; valid: {VALID_COLUMNS}",
         )
 
+    leading = versions_leading_a_column(
+        session,
+        body.column,
+        body.deck_track_ids,
+        skip=[*body.exclude_track_ids, *body.deck_track_ids],
+        k=body.k,
+    )
     results = recommend_by_column(
         session,
         column=body.column,
@@ -204,29 +217,10 @@ def recommend_by_column_route(
         k=body.k,
         exclude_track_ids=body.exclude_track_ids,
         trailing_track_ids=body.trailing_track_ids,
+        lead_track_ids=list(leading),
     )
-
-    recs_out: list[ColumnRecOut] = []
-    for r in results:
-        track = session.get(Track, r.track_id)
-        analysis = fullmix_analysis(session, r.track_id)
-        recs_out.append(
-            ColumnRecOut(
-                track_id=r.track_id,
-                stem_file_id=r.stem_file_id,
-                track_title=getattr(track, "title", None),
-                track_artist=getattr(track, "artist", None),
-                bpm=getattr(analysis, "bpm", None),
-                key_camelot=getattr(analysis, "key_camelot", None),
-                floor_energy=getattr(analysis, "floor_energy", None),
-                score=r.score,
-                score_breakdown=r.score_breakdown,
-                reasons=r.reasons,
-            )
-        )
-
     return ColumnRecsResponse(
         column=body.column,
         combo_size=len(body.combo_stem_ids),
-        recs=recs_out,
+        recs=[ColumnRecOut(**column_rec_out(session, r, leading)) for r in results],
     )

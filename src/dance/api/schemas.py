@@ -141,6 +141,20 @@ class TrackOut(_Base):
     state: str
     analysis: AnalysisOut | None = None
     tags: list[str] = Field(default_factory=list)
+    version_count: int = 0
+    # The same number on every version of one song; None for a song with no other version.
+    version_family: int | None = None
+
+
+class TrackVersionOut(_Base):
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    duration_seconds: float | None = None
+    bpm: float | None = None
+    key_camelot: str | None = None
+    floor_energy: int | None = None
+    label: str
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +198,16 @@ class ColumnRecOut(_Base):
     stem_file_id: int | None = None
     track_title: str | None = None
     track_artist: str | None = None
+    duration_seconds: float | None = None
     bpm: float | None = None
     key_camelot: str | None = None
     floor_energy: int | None = None
     score: float
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     reasons: list[str] = Field(default_factory=list)
+    version_of: int | None = None
+    version_of_title: str | None = None
+    version_label: str | None = None
 
 
 class ColumnRecsResponse(_Base):
@@ -212,6 +230,8 @@ class ColumnRecsRequest(BaseModel):
     # journey's trend-aware vibe + soft anti-repetition. Optional: when empty
     # the recommender scores against the combo only (proximity, no trend).
     trailing_track_ids: list[int] = Field(default_factory=list)
+    # The songs on the decks; their other versions lead the mix column.
+    deck_track_ids: list[int] = Field(default_factory=list)
 
 
 class PreviewRequest(BaseModel):
@@ -422,6 +442,9 @@ class SetPlanAppendRequest(BaseModel):
 
     role: str
     track_id: int
+    # Queue it right after this track when it is in the role's queue, so a version sits next
+    # to its original and they land on opposite decks.
+    after_track_id: int | None = None
 
 
 # ---------------------------------------------------------------------------

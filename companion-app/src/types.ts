@@ -67,6 +67,9 @@ export interface Track {
   state: string;
   analysis: Analysis | null;
   tags: string[];
+  version_count?: number;
+  /** The same number on every version of one song. */
+  version_family?: number | null;
 }
 
 export interface Recommendation {
@@ -96,12 +99,17 @@ export interface ColumnRec {
   stem_file_id: number | null;
   track_title: string | null;
   track_artist: string | null;
+  duration_seconds?: number | null;
   bpm: number | null;
   key_camelot: string | null;
   floor_energy: number | null;
   score: number;
   score_breakdown: Record<string, number>;
   reasons: string[];
+  /** Set when this candidate is another version of a planned or loaded song. */
+  version_of?: number | null;
+  version_of_title?: string | null;
+  version_label?: string | null;
 }
 
 export interface ColumnRecsResponse {
@@ -119,6 +127,8 @@ export interface ColumnRecsRequest {
   /** Recent live-set track ids (most-recent last). Gives the Booth recs
    *  trend-aware vibe + soft anti-repetition via the journey. */
   trailing_track_ids?: number[];
+  /** The songs on the decks; their other versions lead the Song column. */
+  deck_track_ids?: number[];
 }
 
 // ---------------------------------------------------------------------------

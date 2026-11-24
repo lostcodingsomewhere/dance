@@ -209,10 +209,11 @@ export function appendToPlan(
   setId: number,
   role: string,
   trackId: number,
+  afterTrackId: number | null = null,
 ): Promise<SetPlan> {
   return request<SetPlan>(`/sets/${setId}/plan/append`, {
     method: "POST",
-    body: JSON.stringify({ role, track_id: trackId }),
+    body: JSON.stringify({ role, track_id: trackId, after_track_id: afterTrackId }),
   });
 }
 

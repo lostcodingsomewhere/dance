@@ -19,7 +19,12 @@ from sqlalchemy.orm import Session
 
 from dance.als.generator import AlsExportError, AlsOutsideDirError
 from dance.als.prepared_set import export_set
-from dance.api.deps import fullmix_analysis, get_session, get_settings
+from dance.api.deps import (
+    column_rec_out,
+    get_session,
+    get_settings,
+    versions_leading_a_column,
+)
 from dance.api.schemas import (
     ColumnRecsResponse,
     SetAlsExportRequest,
@@ -631,7 +636,10 @@ def append_to_plan(
         session.refresh(s)
         queues = sq.parse_plan(s.plan)
         if body.track_id not in queues[role]:
-            queues[role].append(body.track_id)
+            queue = queues[role]
+            after = body.after_track_id
+            place = queue.index(after) + 1 if after in queue else len(queue)
+            queue.insert(place, body.track_id)
         s.plan = sq.encode_plan(queues)
         s.updated_at = now_utc()
         session.commit()
@@ -663,6 +671,9 @@ def get_plan_recs(
         combo = sq.role_own_stem_ids(session, queues, role)
     trailing = sq.plan_sequence(queues)
     exclude = list(set(queues.get(role, [])))  # don't re-recommend what's queued here
+    leading = versions_leading_a_column(
+        session, column, queues.get(role, []), skip=exclude, k=k
+    )
 
     results = recommend_by_column(
         session,
@@ -671,26 +682,13 @@ def get_plan_recs(
         k=k,
         exclude_track_ids=exclude,
         trailing_track_ids=trailing,
+        lead_track_ids=list(leading),
     )
-    recs_out: list[dict] = []
-    for r in results:
-        track = session.get(Track, r.track_id)
-        a = fullmix_analysis(session, r.track_id)
-        recs_out.append(
-            {
-                "track_id": r.track_id,
-                "stem_file_id": r.stem_file_id,
-                "track_title": track.title if track else None,
-                "track_artist": track.artist if track else None,
-                "bpm": float(a.bpm) if a and a.bpm is not None else None,
-                "key_camelot": a.key_camelot if a else None,
-                "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
-                "score": r.score,
-                "score_breakdown": r.score_breakdown,
-                "reasons": r.reasons,
-            }
-        )
-    return {"column": column, "combo_size": len(combo), "recs": recs_out}
+    return {
+        "column": column,
+        "combo_size": len(combo),
+        "recs": [column_rec_out(session, r, leading) for r in results],
+    }
 
 
 @router.post("/{set_id}/als", response_model=SetAlsExportResult)

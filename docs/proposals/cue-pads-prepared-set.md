@@ -222,6 +222,62 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   warp-marker block was replaced, with the handler text of patch `0005` (backup
   in `~/.dance/backups/abletonosc-20261124-100603`).
 
+**Step 5, version families (read side)**
+
+- Built on 2026-11-24. Live is not involved. Checked in a browser on a copy of the
+  library; nobody has used it in a set.
+- The rule is option A: worked out per request from the track table, nothing
+  stored (`recommender/versions.py`). Two tracks are versions of one song when
+  they have the same base title, share at least one credited artist, and are not
+  the same recording. Looking at the real titles changed two details of the
+  wording in Part 3:
+  - Only bracketed or ` - ` tail text that names a version is dropped from the
+    base title. Other brackets stay part of the title ("Jamaican (Bam Bam)",
+    "Need U (100%)").
+  - "A different title" became "different version text". Two rows of the same
+    length whose titles differ only by a featuring credit or an accent are one
+    recording ("Alive" and "Alive (feat. The Moth & The Flame)", "Marianela
+    (Qué Pasa)" and "(Que Pasa)"), so they are not versions of each other.
+- On the library copy (244 complete tracks that are not marked as duplicates):
+  28 families holding 58 distinct recordings, worked out in 15 ms. In 6 of the
+  28 the version text differs (Shallow Water and its Club Mix, SOMEWHERE ELSE
+  and the salute Remix, Surrender and the TH;EN Remix, Manifesto and Losing
+  Control each with an Extended Mix, Amal's Dream under two ViP names). The
+  other 22 are one title at two lengths.
+- Where it shows:
+  - `GET /tracks/{id}/versions`, with a label for each version seen from the
+    track asked about: its own version text ("Club Mix"), "original" for the
+    plain title, or "longer cut" / "shorter cut" when the titles say the same.
+    Every track payload carries `version_count` and `version_family`.
+  - Set view: versions of the songs in the Song queue lead that column's
+    suggestions, at most half the list, with a "version" chip that says what it
+    is and how long ("TH;EN Remix of Surrender · 6:15"). ＋ on such a card, or
+    Enter on it, queues it right after its original (`after_track_id` on
+    `POST /plan/append`). Consecutive songs go to opposite decks, so the pair
+    can always be layered; they share a page when the original is on deck A.
+  - Booth: versions of the songs on the page in front of you, or playing, lead
+    the Song column (`deck_track_ids` on `/recommend/by-column`), and the ⤒ for
+    the deck beside the original is ringed.
+  - ⌘K: versions the search finds sit together, the first with an "N versions"
+    chip and the rest tucked under it.
+- Tests: four end-to-end tests on a library of tagged FLAC files run through the
+  real pipeline (an original, its club mix, an extended cut with a second
+  artist, the same title by another band, one recording under two spellings,
+  one title at two lengths, and a second copy of the original), and three app
+  flow tests (Set view, Booth, ⌘K).
+- Checked in a browser on the library copy: with Surrender in the plan its three
+  other versions led the Song column; ＋ on the 6:15 TH;EN Remix queued it after
+  Surrender; ⌘K "surrender" showed four rows as one group; with Surrender loaded
+  on deck A in Live, two versions led the Booth's Song column with ⤒B ringed.
+- Found on the way: the library copy has second copies that are not marked as
+  duplicates (ids 79 and 206 are both "Surrender" at 6:15, 176 and 207 both the
+  TH;EN Remix). The first browser run offered 206 as "the original" of the remix
+  just queued beside 79. A second copy of a planned or loaded song is no longer
+  offered; the copies themselves are for `dance dedupe`, not this step.
+- Not done: step 6. With 6 families of real interest, the read side has little
+  to show until "find versions" brings more in.
+
+
 ---
 
 ## What this is for
@@ -570,7 +626,8 @@ the copy handler was missing. See the step 4 notes under Progress.)
 and featuring credits removed), at least one shared credited artist, and a different
 title or a length more than 5 s apart. No schema change. It is fast at this library's
 size and finds the 26 groups above. The shared-artist test is what keeps Duke
-Dumont's *Losing Control* apart from Odd Mob's.
+Dumont's *Losing Control* apart from Odd Mob's. (Built in step 5 with two details
+changed, which is why the count there is 28; see Progress.)
 
 **B. Store a family key on `tracks`.** An Alembic revision, and a value that goes
 stale whenever a title is corrected. Worth it only if the library grows past what a

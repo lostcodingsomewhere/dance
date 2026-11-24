@@ -56,12 +56,15 @@ export interface SeenRequest {
 
 export type Answer = (request: SeenRequest) => unknown;
 
+// The app keeps one socket per module, so a later test must reach the one an earlier test opened.
+const socketsTheAppOpened: RecordingSocket[] = [];
+
 class RecordingSocket {
   public onmessage: ((event: MessageEvent) => void) | null = null;
   public onclose: (() => void) | null = null;
   public onerror: (() => void) | null = null;
-  constructor(public url: string, sockets: RecordingSocket[]) {
-    sockets.push(this);
+  constructor(public url: string) {
+    socketsTheAppOpened.push(this);
   }
   close() {}
 }
@@ -82,18 +85,12 @@ function whenNothingElseAnswers({ path }: SeenRequest): Response {
 
 export class BoothBackend {
   public requests: SeenRequest[] = [];
-  private sockets: RecordingSocket[] = [];
   private readonly originalFetch = globalThis.fetch;
   private readonly originalWebSocket = globalThis.WebSocket;
 
   constructor(answer: Answer) {
-    const sockets = this.sockets;
     window.localStorage.clear();
-    globalThis.WebSocket = class extends RecordingSocket {
-      constructor(url: string) {
-        super(url, sockets);
-      }
-    } as unknown as typeof WebSocket;
+    globalThis.WebSocket = RecordingSocket as unknown as typeof WebSocket;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const [path, query = ""] = (typeof input === "string" ? input : input.toString()).split("?");
       const seen: SeenRequest = {
@@ -126,7 +123,7 @@ export class BoothBackend {
       deck_map_revision: 1,
     };
     act(() => {
-      for (const socket of this.sockets) {
+      for (const socket of socketsTheAppOpened) {
         if (socket.url.endsWith("/ws")) {
           socket.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent);
         }

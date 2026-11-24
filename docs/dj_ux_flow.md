@@ -54,7 +54,8 @@ This is the highest-frequency decision in the loop. In song-mode DJing the picke
 | Per-role rec stream | The role column in the plan grid (RoleColumnsGrid, `mode="live"`): recs hang below your queued plan picks, live-rescored against the playing combo + trailing-journey trend |
 | Your planned next pick for the role | The plan zone on top of the same column — queued picks (emerald edge), if a set is active |
 | Compat with current combo | Per-card ScoreBreakdown chip row: embedding / key / BPM / energy / timbre / transition-fit |
-| Search escape hatch | ⌘K hybrid search (fuzzy + CLAP vibe); a chosen result appends to the Song column's plan queue |
+| Search escape hatch | ⌘K hybrid search (fuzzy + CLAP vibe); a chosen result appends to the Song column's plan queue. Versions of one song sit together, the first with an "N versions" chip |
+| An original's remix (or the other way round) | Versions of the songs in the plan (Set view) or on the decks (Booth) lead the Song column with a **version** chip saying what it is and how long ("Club Mix of Shallow Water · 3:10"). In the Set view ＋ queues it right after its original; in the Booth the ⤒ for the deck beside the original is ringed |
 | Cue before firing | Per-card ▶ preview button → cue bus (Scarlett 4i4 outs 3/4 → headphones, master unaffected) |
 | Load it onto a deck | ⤒A / ⤒B on the card picks the deck at load time. The pick lands as five cue pads per column on the page in front of you, or on the next page where that deck is free, and the Booth follows it there. Nothing already in Live is replaced |
 | Fire it | Tap cell in SceneGrid OR launch from APC40 |

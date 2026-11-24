@@ -1,9 +1,14 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "../api";
+import { pageOfScene } from "../lib/pages";
+import { sideOf, type DeckSide } from "../lib/roles";
+import { useAppStore } from "../store";
 import { useAbletonState } from "./useAbletonState";
 import { useDeckMap } from "./useDeckMap";
 import { useCurrentSession } from "./useSession";
+
+const SONG_COLUMN = "mix";
 
 /** How many recent plays to pass as journey context (trend + anti-repeat). */
 const TRAILING_WINDOW = 8;
@@ -75,6 +80,23 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
     return { stemIds, excludeTracks };
   }, [deckMap.data, ableton.playing_clips]);
 
+  const boothPage = useAppStore((s) => s.boothPage);
+  const deckOfSong = useMemo(() => {
+    const decks = new Map<number, DeckSide>();
+    const cells = deckMap.data?.cells ?? [];
+    const playing = new Set(combo.excludeTracks);
+    const inFront = (trackId: number, scene: number) =>
+      playing.has(trackId) || pageOfScene(scene) === boothPage;
+    for (const cell of cells) {
+      const side = sideOf(cell.kind);
+      if (side && inFront(cell.track_id, cell.scene_index) && !decks.has(cell.track_id)) {
+        decks.set(cell.track_id, side);
+      }
+    }
+    return decks;
+  }, [deckMap.data, combo.excludeTracks, boothPage]);
+  const songsOnDecks = column === SONG_COLUMN ? [...deckOfSong.keys()] : [];
+
   // Is there ANY context to score against? With nothing playing, no trailing
   // plays and no master tempo, every feature the scorer needs is absent —
   // `combine` renormalizes over zero computable features and returns 0.0 for
@@ -98,6 +120,7 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
       Math.round(ableton.tempo ?? 0),
       opts.k ?? 5,
       trailingTrackIds,
+      songsOnDecks,
     ],
     queryFn: () =>
       api.recommendByColumn({
@@ -107,6 +130,7 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
         k: opts.k ?? 5,
         exclude_track_ids: combo.excludeTracks,
         trailing_track_ids: trailingTrackIds.length > 0 ? trailingTrackIds : undefined,
+        deck_track_ids: songsOnDecks,
       }),
     // Refetch on combo change; otherwise stale-cache for 30s.
     staleTime: 30_000,
@@ -116,5 +140,5 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
     enabled: hasContext,
   });
 
-  return { ...query, hasContext };
+  return { ...query, hasContext, deckOfSong };
 }
