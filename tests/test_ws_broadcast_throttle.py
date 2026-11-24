@@ -229,6 +229,9 @@ class _BurstBridge:
     def subscribe(self, listener: Callable[[AbletonState], None]) -> None:
         self._subscribers.append(listener)
 
+    def on_set_opened(self, callback: Callable[[], None]) -> None:
+        pass
+
     def start(self) -> None:  # pragma: no cover - lifespan only calls it for own bridges
         pass
 

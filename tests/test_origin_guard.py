@@ -53,6 +53,9 @@ class _FakeBridge:
     def subscribe(self, _listener: Callable[[AbletonState], None]) -> None:
         pass
 
+    def on_set_opened(self, _callback: Callable[[], None]) -> None:
+        pass
+
 
 def _settings(tmp_path, **overrides: Any) -> Settings:
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)

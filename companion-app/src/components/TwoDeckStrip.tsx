@@ -8,6 +8,8 @@ import { useRegions } from "../hooks/useRegions";
 import { useSeekClip } from "../hooks/useTransport";
 import { useStemWaveform, useTrackWaveform } from "../hooks/useWaveform";
 import { formatDuration, formatRemaining } from "../lib/format";
+import { pageOfScene, scenesOnPage } from "../lib/pages";
+import { sectionTone } from "../lib/sectionTones";
 import { ratioToBeats } from "../lib/seek";
 import { store, useAppStore } from "../store";
 import type { DeckCell } from "../types";
@@ -65,8 +67,8 @@ export function TwoDeckStrip() {
       api.abletonFireClip(vars.trackIdx, vars.sceneIdx),
   });
   const fireDeck = useMutation({
-    mutationFn: (vars: { side: "a" | "b"; sceneIdx: number }) =>
-      api.abletonFireDeck(vars.side, vars.sceneIdx),
+    mutationFn: (vars: { side: "a" | "b"; sceneIdx: number; loadedOnly?: boolean }) =>
+      api.abletonFireDeck(vars.side, vars.sceneIdx, vars.loadedOnly),
   });
   const stopDeck = useMutation({
     mutationFn: (side: "a" | "b") => api.abletonStopDeck(side),
@@ -175,6 +177,7 @@ export function TwoDeckStrip() {
         onTogglePfl={() => togglePfl("a")}
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "a", sceneIdx })}
+        onFireCue={(sceneIdx) => fireDeck.mutate({ side: "a", sceneIdx, loadedOnly: true })}
         onStopDeck={() => stopDeck.mutate("a")}
         onUnmuteMix={(sceneIdx) => {
           const t = columns["mix_a"];
@@ -210,6 +213,7 @@ export function TwoDeckStrip() {
         onTogglePfl={() => togglePfl("b")}
         onSyncTempo={(bpm) => setTempo.mutate(bpm)}
         onFireDeck={(sceneIdx) => fireDeck.mutate({ side: "b", sceneIdx })}
+        onFireCue={(sceneIdx) => fireDeck.mutate({ side: "b", sceneIdx, loadedOnly: true })}
         onStopDeck={() => stopDeck.mutate("b")}
         onUnmuteMix={(sceneIdx) => {
           const t = columns["mix_b"];
@@ -253,6 +257,7 @@ function DeckPanel({
   onTogglePfl,
   onSyncTempo,
   onFireDeck,
+  onFireCue,
   onStopDeck,
   onUnmuteMix,
   filterActive,
@@ -278,6 +283,7 @@ function DeckPanel({
   onTogglePfl: () => void;
   onSyncTempo: (bpm: number) => void;
   onFireDeck: (sceneIdx: number) => void;
+  onFireCue: (sceneIdx: number) => void;
   onStopDeck: () => void;
   onUnmuteMix: (sceneIdx: number) => void;
   filterActive: boolean;
@@ -293,13 +299,14 @@ function DeckPanel({
   onSeek: (track: number, slot: number, beats: number) => void;
 }) {
   const SOURCE_ROLES = ["drums", "bass", "vocals", "other"] as const;
+  const boothPage = useAppStore((s) => s.boothPage);
   // Pick the scene that's anchoring this side. Priority:
   //   1. A scene where ANY stem on this side is currently firing — use
   //      that scene's anchor track if 4-of-4 match, else the firing
   //      cell's track as the dominant.
-  //   2. The lowest scene where all 4 stems share a track (prepared
-  //      anchor that hasn't fired yet).
-  //   3. Whichever scene has the most populated stems on this side.
+  //   2. On the page the grid shows, the lowest scene where all 4 stems
+  //      share a track (prepared anchor that hasn't fired yet).
+  //   3. On that page, the lowest scene with any stems on this side.
   const anchor = useMemo(() => {
     // (a) firing scene
     let firingScene: number | null = null;
@@ -331,7 +338,7 @@ function DeckPanel({
       };
     }
     // (b) any scene where 4-of-4 match
-    for (let s = 0; s < 16; s++) {
+    for (const s of scenesOnPage(boothPage)) {
       const tids = SOURCE_ROLES.map(
         (r) => cellAt.get(`${s}|${r}_${side}`)?.track_id,
       );
@@ -347,7 +354,7 @@ function DeckPanel({
     // (c) any cell at all — sweep the lowest scene that has stuff,
     // pick the most common track id (if it's a single-track row,
     // that's our anchor; if it's a real mashup, we surface "mixed").
-    for (let s = 0; s < 16; s++) {
+    for (const s of scenesOnPage(boothPage)) {
       const tids = SOURCE_ROLES
         .map((r) => cellAt.get(`${s}|${r}_${side}`)?.track_id)
         .filter((t): t is number => t != null);
@@ -366,7 +373,27 @@ function DeckPanel({
       };
     }
     return null;
-  }, [columns, cellAt, playing, side]);
+  }, [boothPage, columns, cellAt, playing, side]);
+
+  const cues = useMemo(() => {
+    if (!anchor) return [];
+    const sceneOfCue = new Map<number, DeckCue>();
+    for (const sceneIdx of scenesOnPage(pageOfScene(anchor.sceneIdx))) {
+      for (const r of [...SOURCE_ROLES, "mix"]) {
+        const c = cellAt.get(`${sceneIdx}|${r}_${side}`);
+        if (c && c.track_id === anchor.trackId && c.cue != null && !sceneOfCue.has(c.cue)) {
+          sceneOfCue.set(c.cue, { cue: c.cue, label: c.cue_label, sceneIdx });
+        }
+      }
+    }
+    return [...sceneOfCue.values()].sort((x, y) => x.cue - y.cue);
+  }, [anchor, cellAt, side]);
+
+  const playingScenes = new Set(
+    SOURCE_ROLES.map((r) => columns[`${r}_${side}`])
+      .filter((tIdx) => tIdx != null && playing[tIdx] != null)
+      .map((tIdx) => playing[tIdx]),
+  );
 
   // The scene ▶ should actually fire. The `anchor` heuristic above answers
   // "what is this deck currently ABOUT?" — useful for the header's title and
@@ -454,6 +481,14 @@ function DeckPanel({
         delayAvailable={delayAvailable}
         onToggleDelay={onToggleDelay}
       />
+      {cues.length > 0 && (
+        <DeckCues
+          sideLabel={sideLabel}
+          cues={cues}
+          playingScenes={playingScenes}
+          onFireCue={onFireCue}
+        />
+      )}
       <DeckWaveform
         side={side}
         sceneIdx={anchor?.sceneIdx}
@@ -468,6 +503,47 @@ function DeckPanel({
         onSeek={onSeek}
       />
     </section>
+  );
+}
+
+interface DeckCue {
+  cue: number;
+  label: string | null;
+  sceneIdx: number;
+}
+
+function DeckCues({
+  sideLabel,
+  cues,
+  playingScenes,
+  onFireCue,
+}: {
+  sideLabel: string;
+  cues: DeckCue[];
+  playingScenes: Set<number>;
+  onFireCue: (sceneIdx: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      {cues.map(({ cue, label, sceneIdx }) => {
+        const isPlaying = playingScenes.has(sceneIdx);
+        return (
+          <button
+            key={cue}
+            type="button"
+            onClick={() => onFireCue(sceneIdx)}
+            aria-pressed={isPlaying}
+            aria-label={`Deck ${sideLabel} cue ${cue}${label ? `, ${label}` : ""}`}
+            title={`Play Deck ${sideLabel} from cue ${cue}${label ? ` (${label})` : ""}`}
+            className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[10px] font-semibold uppercase leading-none tracking-wide transition-opacity ${sectionTone(label).head} ${
+              isPlaying ? "ring-2 ring-emerald-300" : "opacity-70 hover:opacity-100"
+            }`}
+          >
+            {label ? `${cue} ${label}` : cue}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

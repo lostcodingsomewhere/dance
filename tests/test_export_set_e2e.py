@@ -32,8 +32,7 @@ BEATS_PER_BAR = 4
 WARP_BEATS, WARP_COMPLEX, WARP_COMPLEX_PRO = 0, 4, 6
 
 
-@pytest.fixture
-def three_song_library(monkeypatch):
+def three_songs_through_the_pipeline(monkeypatch) -> dict[str, int]:
     monkeypatch.setattr(dispatcher_mod, "_IDLE_GRACE_S", 0.3)
     monkeypatch.setattr(dispatcher_mod, "_POLL_INTERVAL_S", 0.02)
     monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/ffmpeg")
@@ -60,7 +59,13 @@ def three_song_library(monkeypatch):
         assert track.state == TrackState.COMPLETE.value, track.error_message
         track_ids[Path(track.file_path).stem] = track.id
     session.close()
+    return track_ids
 
+
+@pytest.fixture
+def three_song_library(monkeypatch):
+    track_ids = three_songs_through_the_pipeline(monkeypatch)
+    settings = get_settings()
     app = create_app(
         settings=settings,
         bridge=FakeAbletonBridge(),

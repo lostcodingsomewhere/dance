@@ -1438,6 +1438,9 @@ def _bridge_with_deck_columns(live: _FakeLive) -> AbletonBridge:
     return bridge
 
 
+UNREAD = {"start_beats": None, "file_path": None}
+
+
 def test_scan_live_for_cells_uses_one_bulk_query_per_column():
     """Resync asks each deck column ONCE, not once per clip slot.
 
@@ -1457,8 +1460,8 @@ def test_scan_live_for_cells_uses_one_bulk_query_per_column():
     # The whole point: no per-slot queries at all.
     assert live.count("/live/clip/get/name") == 0
     assert found == [
-        {"scene_index": 2, "kind": "drums_a", "clip_name": "Bad Memories (drums a)"},
-        {"scene_index": 5, "kind": "bass_b", "clip_name": "Nightdrive (bass b)"},
+        {"scene_index": 2, "kind": "drums_a", "clip_name": "Bad Memories (drums a)", **UNREAD},
+        {"scene_index": 5, "kind": "bass_b", "clip_name": "Nightdrive (bass b)", **UNREAD},
     ]
 
 
@@ -1481,7 +1484,7 @@ def test_scan_live_for_cells_falls_back_when_bulk_unanswered():
     assert live.count("/live/track/get/clips/name") == 10  # tried first
     assert live.count("/live/clip/get/name") == 30  # then fell back
     assert found == [
-        {"scene_index": 1, "kind": "drums_a", "clip_name": "Bad Memories (drums a)"}
+        {"scene_index": 1, "kind": "drums_a", "clip_name": "Bad Memories (drums a)", **UNREAD}
     ]
 
 
@@ -1506,7 +1509,7 @@ def test_scan_live_for_cells_keeps_partial_batch():
 
     assert live.count("/live/clip/get/name") == 0  # no slow fallback
     assert found == [
-        {"scene_index": 0, "kind": "drums_a", "clip_name": "Kept (drums a)"}
+        {"scene_index": 0, "kind": "drums_a", "clip_name": "Kept (drums a)", **UNREAD}
     ]
 
 

@@ -21,7 +21,7 @@ import { useAutoSession } from "../hooks/useAutoSession";
  *   │ Crossfader (A | B — mirrors APC40 hardware fader)                 │
  *   │ BoothColumnHeaders (8 chips: DRUMS A · BASS A · VOCALS A · … in   │
  *   │   APC40 fader order, with Solo "S" buttons)                       │
- *   │ SceneGrid (8-column APC40 mirror — tap cells, tap rows; ▾ expand) │
+ *   │ SceneGrid (8-column APC40 mirror — one page of five rows, cues)   │
  *   │ CueStrip (prelisten — headphones out)                             │
  *   │ RoleColumnsGrid (the spine: 5 role columns — drums · bass ·       │
  *   │   vocals · other · song — each with your queued plan picks on top │

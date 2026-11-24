@@ -144,6 +144,8 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | POST   | `/api/v1/ableton/volume`                        | `VolumeRequest`     | `{"ok": true}`        |     |
 | GET    | `/api/v1/ableton/state`                         | -                   | `AbletonStateOut`     |     |
 | POST   | `/api/v1/ableton/transport/fire-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
+| POST   | `/api/v1/ableton/transport/fire-deck/{side}/{idx}` | query: `loaded_only` (bool) | `{ok, side, scene_index, fired}` | 400 |
+| POST   | `/api/v1/ableton/transport/stop-deck/{side}`    | -                   | `{ok, side, stopped}` | 400 |
 | POST   | `/api/v1/ableton/transport/fire-clip/{t}/{s}`   | -                   | `{"ok": true, ...}`   |     |
 | POST   | `/api/v1/ableton/transport/stop-cell/{t}/{s}`   | -                   | `{"ok": true, ...}`   |     |
 | POST   | `/api/v1/ableton/transport/stop-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
@@ -175,9 +177,11 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 
 `/load-track` populates clip slots in Live's deck-column session view. `kinds=None` loads all 4 stems into a fresh row (anchor mode); `kinds=["drums"]` loads just one stem into the next free drums slot (live-remixing mode). 503 on OSC errors.
 
-`/decks` is the canonical view of "which (scene, kind) cells have which source-track loaded". Returns `cells` with stem_file_id populated. Polled by the FE every 2 s.
+`/transport/fire-deck/{side}/{idx}` fires the five tracks of one deck (four stems and the mix) at one scene. With `loaded_only=true` it fires only the cells the deck map holds at that scene: firing an empty slot presses that track's stop button in Live, so the Booth's cue buttons send it.
 
-`/decks/resync` is non-destructive: walks each deck-column's first 16 scenes via `/live/clip/get/name` queries, parses each clip name (`"{title} ({kind})"`), matches to a `Track` by title, rebuilds `_deck_cells`. Returns counts + any unmatched clips so the UI can surface them. Use after a backend restart drifted state from Live's actual session.
+`/decks` is the canonical view of "which (scene, kind) cells have which source-track loaded". Returns `cells` with stem_file_id populated. Each cell also has `cue`, `cue_label` and `cue_silent`. A cell is a cue when Live's start marker for that clip sits on the pad that belongs to its row: five rows make a page, and row *n* of a page is pad *n* of the song (`GET /tracks/{id}/pads`). A clip that starts anywhere else has `cue: null`, including a pad moved in the app after the Set was written. The FE refetches when `deck_map_revision` changes and every 10 s as a fallback.
+
+`/decks/resync` is non-destructive. It finds the ten deck tracks by name, asks each for all its clip names in one query, then reads every clip's `start_marker` and `file_path`. Each clip name (`"{title} ({kind} {side})"`) is matched to a `Track` by title; when more than one track has that title, the clip's audio file decides. It rebuilds `_deck_cells` and returns counts plus any unmatched clips. The backend runs the same adoption by itself whenever Live opens a Set (AbletonOSC sends `/live/startup`), so the route is for a session that drifted, such as clips moved by hand in Live.
 
 `/preview` auditions a track or stem through a dedicated **Cue** track in Live whose output is routed to Scarlett 4i4 outs 3/4 (headphones, not master). The Cue track is created lazily on first preview. `column="mix"` previews the full-track audio; stem columns preview just that stem. 404 when no audio file resolves.
 

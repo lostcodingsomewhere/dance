@@ -6,6 +6,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { GridFocus } from "./lib/gridNav";
+import { pageOfScene } from "./lib/pages";
 import type { LoadedDeck, ViewName } from "./types";
 
 interface AppState {
@@ -59,6 +60,7 @@ interface AppState {
    * I just loaded".
    */
   armed: { a: number | null; b: number | null };
+  boothPage: number;
   /**
    * The keyboard cursor on the plan grid — which card ↑↓←→ is standing on.
    *
@@ -139,6 +141,7 @@ const initial: AppState = {
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
   loadWarnings: null,
   armed: { a: null, b: null },
+  boothPage: 0,
   gridFocus: null,
   ...readPersisted(),
 };
@@ -269,7 +272,16 @@ export const store = {
   armDeck(side: "a" | "b" | null | undefined, sceneIndex: number): void {
     if (side !== "a" && side !== "b") return;
     if (state.armed[side] === sceneIndex) return;
-    state = { ...state, armed: { ...state.armed, [side]: sceneIndex } };
+    state = {
+      ...state,
+      armed: { ...state.armed, [side]: sceneIndex },
+      boothPage: pageOfScene(sceneIndex),
+    };
+    emit();
+  },
+  setBoothPage(page: number): void {
+    if (state.boothPage === page) return;
+    state = { ...state, boothPage: page };
     emit();
   },
   /** Clear the arm — called once Live confirms that scene is firing, so the

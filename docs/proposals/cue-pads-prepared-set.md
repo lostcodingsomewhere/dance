@@ -85,6 +85,39 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   screen, listened, or touched the APC40. The palette indices for pad colours are a
   guess. The live-load path still uses Beats for every stem.
 
+**Step 3, the Booth reads pages**
+
+- Done in code on 2026-11-23. The Booth grid shows one page of five rows with a page
+  strip, and marks every page that has something playing. A pad carries a cue chip
+  (number and section, dimmed where the stem is silent). Each deck has a row of cue
+  buttons that start the loaded stems of its song from that cue. With nothing
+  playing, a deck panel shows the song on the page in front of you.
+- The backend adopts a Set when Live opens it. AbletonOSC sends `/live/startup` each
+  time Live loads a Set, and the bridge listens for it, subscribes again to tempo,
+  beat and transport, finds the deck tracks and reads the clips. No resync press
+  after **Open in Live**.
+- A cue comes from Live. The scan reads every clip's `start_marker`, and a cell is
+  cue *n* only when that marker sits on pad *n* of the song and the cell is on row
+  *n* of its page. A clip nudged in Live, a whole stem dropped on a row, or a pad
+  moved in the app after the export has no cue. This is the rule "the cue is the row
+  within the page" from the contract table, checked against what Live plays.
+- Two songs with one title are told apart by the clip's audio file, read from Live.
+  Before, the lower track id won.
+- Cue buttons fire only the cells the Booth knows at that scene
+  (`fire-deck?loaded_only=true`). On a page of spare stems a whole-deck fire would
+  press the stop button of every empty slot on that deck.
+- Three end-to-end tests against a UDP stand-in that answers from the exported file,
+  and one app flow test.
+- Checked with Live 12.4.3 on a copy of the library: one click on **Open in Live**
+  and the Booth held 55 of 55 clips on 2 pages with their cues. Details in
+  `docs/live-compat.md`.
+- Not done: firing a cue from the app in Live, a Set larger than 55 clips, the
+  APC40. `load-track` does not take a page yet, so a live load still puts one whole
+  stem on the next free row, which shows without a cue unless pad 1 starts at 0:00.
+  That is step 4.
+- Left as it was: the deck ▶ button still fires all five tracks of the deck at the
+  scene, empty slots included.
+
 ---
 
 ## What this is for
