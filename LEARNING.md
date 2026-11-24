@@ -158,7 +158,7 @@ against real Live with real stems, instead of against fixtures.
   `POST /ableton/warp-check/{scene}`; an 18 s-delayed audit from the companion
   into a sticky amber banner naming the cell and the fix (`*2` / `:2`).
 - 2026-11-24, step 4 of `docs/proposals/cue-pads-prepared-set.md` (checked against
-  Live 12.4.3 over OSC, not listened to): a load sends each stem's own warp mode
+  Live 12.4.5 over OSC, not listened to): a load sends each stem's own warp mode
   and writes the song's tempo grid onto its clips, and the audit checks that grid
   in place of the length comparison.
 - Two timing facts that shaped the design, both measured: a fresh clip reports a

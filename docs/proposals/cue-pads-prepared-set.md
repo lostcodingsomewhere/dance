@@ -120,8 +120,10 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
 
 **Step 4, live loads build the same clips**
 
-- Built on 2026-11-24 and checked against Live 12.4.3 over OSC the same day. Nobody
-  has listened to it or used the APC40 on it. Merged to `main` on 2026-11-24.
+- Built on 2026-11-24 and checked against Live over OSC the same day. Live updated
+  itself from 12.4.3 to 12.4.5 when it was restarted at 11:15 that day, so the
+  loads below ran on 12.4.5. Nobody has listened to it or used the APC40 on it.
+  Merged to `main` on 2026-11-24.
 - A song loaded from the app during a set lands on a page as five cue pads per
   column, as a prepared Set would hold it: the same start and loop markers, warp
   mode per stem, section colours, and the song's own tempo grid. One difference
@@ -162,22 +164,25 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   unlooped start that only moves through `loop_start`, a clip that is
   deactivated while Live analyses its file, and the time Live takes to make a
   clip.
-- What Live 12.4.3 did (2026-11-24, on a copy of the library, read over OSC):
-  - Left alone, Live warps a new clip three ways, none of them usable. A stem it
+- What Live did (2026-11-24, on a copy of the library, read over OSC; 12.4.3
+  before the restart, 12.4.5 after it):
+  - Left alone, Live warps a new clip three ways, none of them usable (12.4.3;
+    the first two seen again on 12.4.5). A stem it
     has never analysed gets a placeholder grid at the Set's tempo and then Live's
     own grid within 9 s (2 of 2 stems; it read a 138 BPM drum stem at 105 BPM
     with beat 1 at 1.63 s). A stem it auto-warped on an earlier day gets that
     guess back as the clip is made (2 of 2 stems, each seen twice; one was half
     tempo, 64.17 for 128.0). A stem it first met inside an exported Set keeps
     the placeholder (2 of 2).
-  - `add_warp_marker` refuses a dict ("No registered converter was able to
-    produce a C++ rvalue of type NApiHelpers::TWarpMarker") and takes a
-    `Live.Clip.WarpMarker`, which is what patch `0005` builds. The hand-written
+  - `add_warp_marker` refused a dict on 12.4.3 ("No registered converter was
+    able to produce a C++ rvalue of type NApiHelpers::TWarpMarker") and takes a
+    `Live.Clip.WarpMarker` on 12.4.5, which is what patch `0005` builds. The
+    object was not tried on 12.4.3, nor the dict on 12.4.5. The hand-written
     handler that was installed on this Mac passed a dict. Removing markers
     works; Live keeps one marker of its own after the last and will not remove
     it.
-  - A grid written straight after a clip is made survives Live's analysis of a
-    never-analysed file (11 files: one watched directly for 26 s, ten through
+  - Everything from here to the reload is 12.4.5. A grid written straight after
+    a clip is made survives Live's analysis of a never-analysed file (11 files: one watched directly for 26 s, ten through
     the bridge's 30-second check, which found nothing to rewrite). A copied clip
     keeps the grid.
   - Switching `looping` on gives a clip that never looped a loop of beats 0 to 4,
@@ -202,12 +207,15 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
     because those loads predate the fix above. Live's script logged no error
     from any of the loads.
   - `/live/api/reload`, sent earlier that day to pick up the new handler, broke
-    AbletonOSC in the running Live until Live was restarted: the reload cleared
+    AbletonOSC in the running Live (12.4.3) until Live was restarted: the reload cleared
     every handler and then stopped on the installed crossfader listener, which
     is not tracked the way the reload expects.
 - Not done: listening to a live-loaded pad, the APC40, firing a cue from the app
   in Live, a load while something is playing (whether Live's pause while it
   makes clips is audible is unknown), and `move_warp_marker`.
+- Live 12.4.5 opened the prepared Set exported on 2026-11-23 for the 12.4
+  template: ten deck tracks, ten scenes and the clips where they were written.
+  `dance doctor` now warns that the installed Live is newer than the template.
 - Found on the way: the AbletonOSC installed on this Mac is an older hand-edited
   copy. `scripts/abletonosc_patch.py --check` reports two patches in conflict and
   two pending, so the script cannot bring it in line with the repo. Only its
