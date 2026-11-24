@@ -21,6 +21,7 @@ const NEXT_PICK = { track_id: 10, title: "Low Tide" };
 const SONG_COLUMN = "mix";
 const SLOWER_THAN_LIVE_BPM = 124;
 const BOTH_DECKS_ON_CUE_ONE = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0 };
+const SIDES = ["A", "B"] as const;
 
 let backend: BoothBackend;
 let inLive: Cell[];
@@ -159,5 +160,28 @@ describe("a deck panel in the middle of a set", () => {
       expect(bpmKeyAndEnergy).toHaveTextContent("· E6");
       for (const chip of [artist, bpmKeyAndEnergy, originalChip]) expectToGiveWay(chip);
     }
+  });
+
+  it("gives every control in the deck header and the cue row a target tall enough to hit", () => {
+    for (const side of SIDES) {
+      const panel = within(deck(side));
+      const inHeader = [
+        `Play Deck ${side}`,
+        `Stop Deck ${side}`,
+        `PFL Deck ${side}`,
+        `HPF Deck ${side}`,
+        `Reverb throw Deck ${side}`,
+        `Delay throw Deck ${side}`,
+        "SYNC",
+        `Play original mix on Deck ${side}`,
+      ].map((name) => panel.getByRole("button", { name }));
+      const cues = panel.getAllByRole("button", { name: /^Deck [AB] cue \d/ });
+
+      expect(cues).toHaveLength(PADS_PER_PAGE);
+      expect(panel.getAllByRole("button")).toHaveLength(inHeader.length + cues.length);
+      for (const headerControl of inHeader) expect(headerControl).toHaveClass("h-6");
+      for (const cue of cues) expect(cue).toHaveClass("h-7");
+    }
+    expect(screen.getByRole("button", { name: "Fire riser" })).toHaveClass("h-6");
   });
 });
