@@ -2,10 +2,12 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "../api";
 import { useAbletonState } from "../hooks/useAbletonState";
-import { useBridgeHeartbeat } from "../hooks/useBridgeHeartbeat";
+import { useBridgeHeartbeat, type BridgeHealth } from "../hooks/useBridgeHeartbeat";
 import { useDeckMap, useResyncDecks } from "../hooks/useDeckMap";
+import { useCurrentSession } from "../hooks/useSession";
+import { pageCount, pageOfScene } from "../lib/pages";
 import { store, useAppStore } from "../store";
-import type { ViewName } from "../types";
+import type { DeckMap, ViewName } from "../types";
 import { BpmSlider } from "./BpmSlider";
 import { DepsChip } from "./DepsChip";
 import { EnergySparkline } from "./EnergySparkline";
@@ -24,10 +26,28 @@ const VIEWS: { id: ViewName; label: string; hint: string }[] = [
  * a command-bar trigger.
  */
 export function MasterStrip() {
+  const health = useBridgeHeartbeat();
+  return (
+    <>
+      <StripRow health={health} />
+      {health === "server_down" && (
+        <div
+          role="alert"
+          className="shrink-0 border-b border-rose-500/40 bg-rose-950/60 px-4 py-1.5 text-xs text-rose-100"
+        >
+          The Dance server is not answering. This screen shows the last known state.
+        </div>
+      )}
+    </>
+  );
+}
+
+function StripRow({ health }: { health: BridgeHealth }) {
   const state = useAbletonState();
   const view = useAppStore((s) => s.currentView);
   const deckMap = useDeckMap();
-  const heartbeat = useBridgeHeartbeat();
+  const noSession = useCurrentSession().data === null;
+  const boothPage = useAppStore((s) => s.boothPage);
   const resync = useResyncDecks();
 
   // Camelot key of the dominant playing cell — the harmonic anchor for compat
@@ -62,28 +82,13 @@ export function MasterStrip() {
     return null;
   }, [deckMap.data, state.playing_clips]);
 
-  // Per-deck BPM read off the anchored track on each side. We look at
-  // the lowest scene where at least one stem on that side has a bpm
-  // attached and use that as the deck's "currently anchored BPM". When
-  // both decks have anchors with non-trivial BPM delta, we surface it
-  // in the header as `Δ` so the DJ can sync before transitioning.
   const deckBpms = useMemo<{ a: number | null; b: number | null }>(() => {
-    const cells = deckMap.data?.cells ?? [];
-    const find = (side: "a" | "b"): number | null => {
-      let bestScene = Infinity;
-      let bpm: number | null = null;
-      for (const c of cells) {
-        if (!c.kind.endsWith(`_${side}`)) continue;
-        if (c.bpm == null) continue;
-        if (c.scene_index < bestScene) {
-          bestScene = c.scene_index;
-          bpm = c.bpm;
-        }
-      }
-      return bpm;
+    const playing = state.playing_clips ?? {};
+    return {
+      a: deckBpm("a", deckMap.data, playing, boothPage),
+      b: deckBpm("b", deckMap.data, playing, boothPage),
     };
-    return { a: find("a"), b: find("b") };
-  }, [deckMap.data]);
+  }, [deckMap.data, state.playing_clips, boothPage]);
   const bpmDelta = deckBpms.a != null && deckBpms.b != null
     ? deckBpms.b - deckBpms.a
     : null;
@@ -100,15 +105,11 @@ export function MasterStrip() {
     setTempo.mutate(Number(clamped.toFixed(2)));
   }
 
-  function halve() {
+  const canHalve = state.tempo != null && state.tempo / 2 >= 40;
+  const canDouble = state.tempo != null && state.tempo * 2 <= 240;
+  function scaleTempo(factor: number) {
     if (state.tempo == null) return;
-    const t = Math.max(40, state.tempo / 2);
-    setTempo.mutate(Number(t.toFixed(2)));
-  }
-  function double() {
-    if (state.tempo == null) return;
-    const t = Math.min(240, state.tempo * 2);
-    setTempo.mutate(Number(t.toFixed(2)));
+    setTempo.mutate(Number((state.tempo * factor).toFixed(2)));
   }
 
   return (
@@ -133,16 +134,18 @@ export function MasterStrip() {
         </span>
         {bpmDelta != null && Math.abs(bpmDelta) > 0.5 && (
           <span
-            className={`ml-1 text-[10px] font-mono tabular-nums rounded px-1.5 py-0.5 ${
+            className={`ml-1 whitespace-nowrap text-[10px] font-mono tabular-nums rounded px-1.5 py-0.5 ${
               Math.abs(bpmDelta) > 4
                 ? "bg-rose-500/20 text-rose-200 border border-rose-400/30"
                 : "bg-amber-500/15 text-amber-200 border border-amber-400/25"
             }`}
-            title={`Deck A: ${deckBpms.a?.toFixed(1)} · Deck B: ${deckBpms.b?.toFixed(1)} — ${
-              Math.abs(bpmDelta) > 4 ? "wide gap, transition may sound stretched" : "close enough to ride"
+            title={`The tempo of the song on each deck. ${
+              Math.abs(bpmDelta) > 4
+                ? "A gap this wide can sound stretched when you mix them."
+                : "Close enough to mix."
             }`}
           >
-            Δ {bpmDelta > 0 ? "+" : ""}{bpmDelta.toFixed(1)}
+            A {bpmText(deckBpms.a)} · B {bpmText(deckBpms.b)}
           </span>
         )}
         {editingBpm && state.tempo != null && (
@@ -152,28 +155,38 @@ export function MasterStrip() {
             onClose={() => setEditingBpm(false)}
           />
         )}
-        <div className="flex flex-col ml-1">
+        <div className="flex items-center gap-1 ml-1">
           <button
             type="button"
-            onClick={double}
-            className="text-[10px] leading-tight px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400"
-            title="Double tempo (×2)"
+            onClick={() => scaleTempo(0.5)}
+            disabled={!canHalve}
+            className={TEMPO_STEP_CLASS}
+            title={
+              canHalve || state.tempo == null
+                ? "Halve tempo (÷2)"
+                : "Halving would go below 40 BPM"
+            }
           >
-            ×2
+            ÷2
           </button>
           <button
             type="button"
-            onClick={halve}
-            className="text-[10px] leading-tight px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400"
-            title="Halve tempo (÷2)"
+            onClick={() => scaleTempo(2)}
+            disabled={!canDouble}
+            className={TEMPO_STEP_CLASS}
+            title={
+              canDouble || state.tempo == null
+                ? "Double tempo (×2)"
+                : "Doubling would go above 240 BPM"
+            }
           >
-            ÷2
+            ×2
           </button>
         </div>
       </div>
 
       {/* Transport — icons only. Three distinct actions:
-            ▶/⏸  toggle play / pause Live's transport (clock)
+            ▶    start Live's transport (clock); lit while it runs
             ■    stop transport (same OSC, but the visual "halt" state)
             🛑   panic — stop every firing clip but leave transport
                  running so the next fire syncs cleanly
@@ -187,10 +200,10 @@ export function MasterStrip() {
               ? "bg-emerald-500 text-neutral-950"
               : "bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
           }`}
-          aria-label={state.is_playing ? "Pause" : "Play"}
-          title={state.is_playing ? "Pause transport" : "Play transport"}
+          aria-label="Play"
+          title={state.is_playing ? "Transport is running" : "Play transport"}
         >
-          {state.is_playing ? <IconPause /> : <IconPlay />}
+          <IconPlay />
         </button>
         <button
           type="button"
@@ -214,8 +227,7 @@ export function MasterStrip() {
       {/* Set-arc energy sparkline — ambient view of the trajectory so far. */}
       <EnergySparkline />
 
-      {/* Live bridge heartbeat — red when AbletonOSC has gone stale. */}
-      <HeartbeatDot alive={heartbeat.alive} />
+      <HealthLight health={health} />
 
       {/* Resync — non-destructive: scans Live's deck-column clips and
           adopts whatever's there into bridge state. Use when the
@@ -242,6 +254,9 @@ export function MasterStrip() {
       <div className="ml-auto flex items-center gap-2">
         <DepsChip />
         <SessionChip />
+        {noSession && (
+          <span className="-ml-1 whitespace-nowrap text-[10px] text-neutral-500">No session</span>
+        )}
       </div>
 
       {/* Command bar trigger */}
@@ -287,24 +302,69 @@ function KeyDisplay({ camelot }: { camelot: string | null }) {
   );
 }
 
-function HeartbeatDot({ alive }: { alive: boolean }) {
+const TEMPO_STEP_CLASS =
+  "min-h-6 min-w-6 px-1.5 rounded text-[11px] leading-none bg-neutral-900 hover:bg-neutral-800 text-neutral-400 disabled:opacity-40 disabled:hover:bg-neutral-900 disabled:cursor-not-allowed";
+
+function deckBpm(
+  side: "a" | "b",
+  deckMap: DeckMap | undefined,
+  playing: Record<string, number>,
+  boothPage: number,
+): number | null {
+  const columns = deckMap?.columns ?? {};
+  const cells = deckMap?.cells ?? [];
+  const pageInFront = Math.min(boothPage, pageCount(cells) - 1);
+  const onDeck = cells.filter((cell) => cell.kind.endsWith(`_${side}`) && cell.bpm != null);
+  const playingNow = onDeck.find((cell) => playing[columns[cell.kind]] === cell.scene_index);
+  const inFront = onDeck
+    .filter((cell) => pageOfScene(cell.scene_index) === pageInFront)
+    .sort((one, other) => one.scene_index - other.scene_index)[0];
+  return (playingNow ?? inFront)?.bpm ?? null;
+}
+
+function bpmText(bpm: number | null): string {
+  return bpm == null ? "" : String(Number(bpm.toFixed(1)));
+}
+
+const HEALTH_WORDS: Record<BridgeHealth, { label: string; tooltip: string }> = {
+  checking: {
+    label: "Checking…",
+    tooltip: "Checking the Dance server and Ableton Live.",
+  },
+  live: {
+    label: "Live",
+    tooltip: "The Dance server and Ableton Live are both answering.",
+  },
+  live_not_answering: {
+    label: "Live not answering",
+    tooltip:
+      "The Dance server is running, but Ableton Live did not answer it. Check that Live is open with AbletonOSC on as a Control Surface.",
+  },
+  server_down: {
+    label: "Server down",
+    tooltip:
+      "The Dance server is not answering, so this screen cannot reach Ableton Live. Start the server again.",
+  },
+};
+
+function HealthLight({ health }: { health: BridgeHealth }) {
+  const { label, tooltip } = HEALTH_WORDS[health];
+  const dot =
+    health === "live"
+      ? "bg-emerald-400"
+      : health === "checking"
+      ? "bg-neutral-600"
+      : "bg-rose-500 animate-pulse";
+  const words =
+    health === "live"
+      ? "text-neutral-400"
+      : health === "checking"
+      ? "text-neutral-500"
+      : "text-rose-300";
   return (
-    <div
-      className="flex items-center gap-1.5 text-[11px]"
-      title={
-        alive
-          ? "Ableton Live + AbletonOSC bridge responding"
-          : "Ableton Live unreachable — check that Live is open with AbletonOSC enabled as a Control Surface"
-      }
-    >
-      <span
-        className={`w-2 h-2 rounded-full ${
-          alive ? "bg-emerald-400" : "bg-rose-500 animate-pulse"
-        }`}
-      />
-      <span className={alive ? "text-neutral-400" : "text-rose-300"}>
-        {alive ? "Live" : "Live offline"}
-      </span>
+    <div className="flex items-center gap-1.5 whitespace-nowrap text-[11px]" title={tooltip}>
+      <span className={`w-2 h-2 rounded-full ${dot}`} />
+      <span className={words}>{label}</span>
     </div>
   );
 }
@@ -373,26 +433,42 @@ function RecordButton() {
   }, [recording, startedAt]);
   const mm = Math.floor(elapsed / 60_000).toString().padStart(2, "0");
   const ss = Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0");
+  const warnings = warningsIn(toggle.data);
   return (
-    <button
-      type="button"
-      onClick={() => toggle.mutate(!recording)}
-      disabled={toggle.isPending}
-      className={`min-h-[40px] rounded-md flex items-center justify-center gap-1.5 font-mono tabular-nums text-[11px] transition-colors disabled:opacity-50 ${
-        recording
-          ? "w-[72px] px-2 bg-rose-600 text-white"
-          : "w-10 bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40"
-      }`}
-      aria-label={recording ? `Stop recording (${mm}:${ss})` : "Start recording"}
-      title={
-        recording
-          ? `Recording — ${mm}:${ss}. Click to stop.`
-          : "Start session record (Live captures into armed tracks)"
-      }
-    >
-      {recording ? <IconRecordStop /> : <IconRecordDot />}
-      {recording && <span>{mm}:{ss}</span>}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => toggle.mutate(!recording)}
+        disabled={toggle.isPending}
+        className={`min-h-[40px] rounded-md flex items-center justify-center gap-1.5 font-mono tabular-nums text-[11px] transition-colors disabled:opacity-50 ${
+          recording
+            ? "w-[72px] px-2 bg-rose-600 text-white"
+            : "w-10 bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40"
+        }`}
+        aria-label={recording ? `Stop recording (${mm}:${ss})` : "Start recording"}
+        title={
+          recording
+            ? `Recording — ${mm}:${ss}. Click to stop.`
+            : "Start session record (Live captures into armed tracks)"
+        }
+      >
+        {recording ? <IconRecordStop /> : <IconRecordDot />}
+        {recording && <span>{mm}:{ss}</span>}
+      </button>
+      {warnings.length > 0 && (
+        <span role="alert" className="max-w-56 text-[10px] leading-tight text-amber-300">
+          {warnings.join(" ")}
+        </span>
+      )}
+    </>
+  );
+}
+
+function warningsIn(answer: unknown): string[] {
+  if (answer == null || typeof answer !== "object") return [];
+  const { warning, warnings } = answer as { warning?: unknown; warnings?: unknown };
+  return [...(Array.isArray(warnings) ? warnings : []), warning].filter(
+    (text): text is string => typeof text === "string" && text !== "",
   );
 }
 
@@ -400,15 +476,6 @@ function IconPlay() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
       <polygon points="3,2 12,7 3,12" />
-    </svg>
-  );
-}
-
-function IconPause() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-      <rect x="3" y="2" width="3" height="10" rx="0.5" />
-      <rect x="8" y="2" width="3" height="10" rx="0.5" />
     </svg>
   );
 }
@@ -491,118 +558,54 @@ function IconCourse({ className }: { className?: string }) {
   );
 }
 
-// In Booth view the nav collapses: only the active Booth tab stays visible,
-// and Set / Pipeline / Course move into a ⋯ dropdown so they don't clutter
-// the live performance surface.
 function ViewNav({ view }: { view: ViewName }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const isBooth = view === "booth";
-
   const tabCls = (active: boolean) =>
     `min-h-[40px] px-3 rounded-md font-semibold text-sm flex items-center gap-1.5 ${
       active ? "bg-neutral-100 text-neutral-950" : "text-neutral-300 hover:bg-neutral-800"
     }`;
 
   return (
-    <nav className="relative flex items-center gap-1" role="tablist">
-      {/* Booth tab — always visible */}
+    <nav className="flex items-center gap-1" role="tablist">
       <button
         role="tab"
-        aria-selected={isBooth}
+        aria-selected={view === "booth"}
         onClick={() => store.setView("booth")}
         title="Live performance — SceneGrid + recs"
-        className={tabCls(isBooth)}
+        className={tabCls(view === "booth")}
       >
         <IconBooth />
         Booth
       </button>
-
-      {/* Set + Pipeline tabs: visible when not in Booth */}
-      {!isBooth && (
-        <>
-          <button
-            role="tab"
-            aria-selected={view === "set"}
-            onClick={() => store.setView("set")}
-            title="Edit the active set"
-            className={tabCls(view === "set")}
-          >
-            <IconSet />
-            Set
-          </button>
-          <button
-            role="tab"
-            aria-selected={view === "pipeline"}
-            onClick={() => store.setView("pipeline")}
-            title="Ingest & processing status"
-            className={tabCls(view === "pipeline")}
-          >
-            <IconPipeline />
-            Pipeline
-          </button>
-          <a
-            href="/course/index.html"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open DJ course (progress saves automatically)"
-            className={tabCls(false)}
-          >
-            <IconCourse className="text-emerald-400" />
-            Course
-          </a>
-        </>
-      )}
-
-      {/* In Booth: ⋯ overflow menu with Set / Pipeline / Course */}
-      {isBooth && (
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setMenuOpen((o) => !o)}
-            onBlur={(e) => {
-              if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
-                setMenuOpen(false);
-              }
-            }}
-            title="Set, Pipeline, Course"
-            className={`min-h-[40px] w-10 rounded-md font-semibold text-lg flex items-center justify-center transition-colors ${
-              menuOpen
-                ? "bg-neutral-800 text-neutral-100"
-                : "text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300"
-            }`}
-          >
-            ···
-          </button>
-
-          {menuOpen && (
-            <div className="absolute right-0 top-[calc(100%+4px)] z-50 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden min-w-[148px]">
-              <button
-                type="button"
-                onClick={() => { store.setView("set"); setMenuOpen(false); }}
-                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
-              >
-                <IconSet className="text-neutral-500" /> Set
-              </button>
-              <button
-                type="button"
-                onClick={() => { store.setView("pipeline"); setMenuOpen(false); }}
-                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
-              >
-                <IconPipeline className="text-neutral-500" /> Pipeline
-              </button>
-              <a
-                href="/course/index.html"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setMenuOpen(false)}
-                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-neutral-300 hover:bg-neutral-800 hover:text-white flex items-center gap-2.5"
-              >
-                <IconCourse className="text-emerald-500" /> Course
-              </a>
-            </div>
-          )}
-        </div>
-      )}
+      <button
+        role="tab"
+        aria-selected={view === "set"}
+        onClick={() => store.setView("set")}
+        title="Edit the active set"
+        className={tabCls(view === "set")}
+      >
+        <IconSet />
+        Set
+      </button>
+      <button
+        role="tab"
+        aria-selected={view === "pipeline"}
+        onClick={() => store.setView("pipeline")}
+        title="Ingest & processing status"
+        className={tabCls(view === "pipeline")}
+      >
+        <IconPipeline />
+        Pipeline
+      </button>
+      <a
+        href="/course/index.html"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open DJ course (progress saves automatically)"
+        className={tabCls(false)}
+      >
+        <IconCourse className="text-emerald-400" />
+        Course
+      </a>
     </nav>
   );
 }

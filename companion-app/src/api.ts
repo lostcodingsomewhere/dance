@@ -692,6 +692,10 @@ export function abletonGetState(): Promise<AbletonState> {
   return request<AbletonState>("/ableton/state");
 }
 
+export function abletonHealth(signal?: AbortSignal): Promise<{ live_reachable: boolean }> {
+  return request<{ live_reachable: boolean }>("/ableton/health", { signal });
+}
+
 export function abletonDeckMap(): Promise<DeckMap> {
   return request<DeckMap>("/ableton/decks");
 }
