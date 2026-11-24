@@ -19,13 +19,20 @@ against a repeat.
 from __future__ import annotations
 
 import shutil
+import subprocess
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import pytest
+from click.testing import CliRunner
+from fastapi.testclient import TestClient
 
-from dance.config import Settings
+from dance import cli
+from dance.api import create_app
+from dance.api.app import API_PREFIX
+from dance.config import Settings, get_settings
 from dance.core.database import (
     AudioAnalysis,
     Beat,
@@ -38,12 +45,22 @@ from dance.core.database import (
     Track,
     TrackEmbedding,
     TrackState,
+    _reset_engine_for_tests,
+    get_session,
+    get_session_factory,
     init_db,
     now_utc,
 )
+from dance.pipeline import dispatcher as dispatcher_mod
+from dance.pipeline import preflight
 from dance.pipeline.dispatcher import Dispatcher
+from dance.pipeline.heal_ledger import HealLedger
 from dance.recommender import GraphBuilder
+from dance.spotify import csv_importer, download_pool
 from tests.audio_fixtures import TrackSpec, write_track
+from tests.test_acquisition import _FAKE_YT_DLP, FakeYtDlp, _encode, _entry, needs_ffmpeg
+from tests.test_api import FakeAbletonBridge
+from tests.test_dispatcher_lock import _HOLDER, _Child, _child_env, _release
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +243,140 @@ def test_full_pipeline_on_synthetic_audio(e2e_settings, e2e_session, two_synth_t
     for stage_name, counts in second_run.items():
         assert counts["processed"] == 0, f"{stage_name} unexpectedly processed tracks on second run"
         assert counts["errors"] == 0
+
+
+MOST_PASSES_ONE_SHORT_SONG_NEEDS = 6
+OUT_OF_MEMORY = "MPS backend out of memory"
+NOTHING_TO_RETRY = "This track has not failed, so there is nothing to retry."
+UPLOAD = "RIGHTupload"
+SONG_ON_SPOTIFY = {
+    "spotify_id": "shallow-water",
+    "title": "Shallow Water",
+    "artist": "Elderbrook",
+    "duration_ms": 60_000,
+}
+
+
+def _separate_fails_without_a_message(self, session, track, settings) -> bool:
+    raise RuntimeError
+
+
+def _separate_runs_out_of_memory(self, session, track, settings) -> bool:
+    raise RuntimeError(OUT_OF_MEMORY)
+
+
+def _heavy_models(separate):
+    return (
+        patch("dance.pipeline.stages.separate.StemSeparationStage.process", new=separate),
+        patch("dance.pipeline.stages.embed.EmbeddingStage._ensure_model", new=_fake_ensure_model),
+        patch("dance.pipeline.stages.embed.EmbeddingStage._encode", new=_fake_embed_encode),
+    )
+
+
+class PipelineView:
+    def __init__(self, client: TestClient, settings: Settings) -> None:
+        self.client = client
+        self.settings = settings
+
+    def rows(self, state: str | None = None) -> list[dict]:
+        listed = self.client.get(
+            f"{API_PREFIX}/pipeline/recent", params={"state": state} if state else {}
+        )
+        assert listed.status_code == 200, listed.text
+        return listed.json()
+
+    def retry(self, track_id: int):
+        return self.client.post(f"{API_PREFIX}/pipeline/tracks/{track_id}/retry")
+
+    def settled(self) -> bool:
+        status = self.client.get(f"{API_PREFIX}/pipeline/status").json()
+        return status["total"] == status["complete"] + status["errors"]
+
+    def dance_process(self, separate) -> None:
+        stand_in, ensure_model, encode = _heavy_models(separate)
+        with stand_in, ensure_model, encode:
+            for _ in range(MOST_PASSES_ONE_SHORT_SONG_NEEDS):
+                ran = CliRunner().invoke(cli.main, ["process"])
+                assert ran.exit_code == 0, ran.output
+                if self.settled():
+                    return
+        raise AssertionError(f"the pipeline never settled: {self.rows()}")
+
+    def one_track_at_a_time(self, separate) -> None:
+        session = get_session(self.settings.db_url)
+        stand_in, ensure_model, encode = _heavy_models(separate)
+        with stand_in, ensure_model, encode:
+            dispatcher = Dispatcher(self.settings, session)
+            dispatcher.ingest()
+            dispatcher.run()
+        session.close()
+
+    def left_mid_stage_by_a_hard_crash(self, track_id: int, stage_state: TrackState) -> None:
+        with get_session_factory(self.settings.db_url)() as session:
+            session.get(Track, track_id).state = stage_state.value
+            session.commit()
+
+    def newest_job_finished(self) -> dict:
+        for _ in range(400):
+            job = self.client.get(f"{API_PREFIX}/pipeline/jobs").json()[0]
+            if job["status"] in ("done", "error"):
+                return job
+            time.sleep(0.05)
+        raise AssertionError("the newest download job never finished")
+
+    def stored(self, track_id: int) -> tuple[str, str]:
+        with get_session_factory(self.settings.db_url)() as session:
+            track = session.get(Track, track_id)
+            return str(track.file_hash), str(track.file_path)
+
+
+@pytest.fixture
+def pipeline(monkeypatch):
+    monkeypatch.setattr(dispatcher_mod, "_IDLE_GRACE_S", 0.3)
+    monkeypatch.setattr(dispatcher_mod, "_POLL_INTERVAL_S", 0.02)
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    settings = get_settings()
+    settings.ensure_directories()
+    init_db(settings.db_url)
+    download_pool._reset_download_pool_for_tests()
+    app = create_app(
+        settings=settings,
+        bridge=FakeAbletonBridge(),
+        session_factory=get_session_factory(settings.db_url),
+    )
+    with TestClient(app) as client:
+        yield PipelineView(client, settings)
+    download_pool._reset_download_pool_for_tests()
+    _reset_engine_for_tests()
+
+
+@pytest.fixture
+def a_song_in_the_library(pipeline) -> Path:
+    return write_track(
+        Path(pipeline.settings.library_dir) / "night_drive.wav",
+        TrackSpec(bpm=128.0, bars=4, seed=1),
+    )
+
+
+@pytest.fixture
+def another_run(tmp_path):
+    started: list[_Child] = []
+
+    def hold_the_lock(data_dir: Path) -> _Child:
+        holder = _Child(_HOLDER, [str(data_dir)], _child_env(tmp_path))
+        started.append(holder)
+        holder.expect("LOCKED")
+        return holder
+
+    yield hold_the_lock
+    for holder in started:
+        holder.kill()
+
+
+@pytest.mark.parametrize("run", ["dance_process", "one_track_at_a_time"])
+def test_a_stage_that_fails_without_a_message_still_leaves_a_reason(
+    pipeline, a_song_in_the_library, run
+):
+    getattr(pipeline, run)(separate=_separate_fails_without_a_message)
+
+    assert [row["error_message"] for row in pipeline.rows("error")] == ["separate: RuntimeError"]

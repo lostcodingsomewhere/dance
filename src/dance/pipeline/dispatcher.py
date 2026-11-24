@@ -81,6 +81,11 @@ def _scope_clause(scope: int | Collection[int]) -> ColumnElement[bool]:
     return Track.id.in_(sorted({int(t) for t in scope}))
 
 
+def _failure_reason(stage: Stage, exc: Exception) -> str:
+    said = str(exc)
+    return f"{stage.name}: {said if said.strip() else type(exc).__name__}"[:500]
+
+
 class Dispatcher:
     """Discovers and runs registered stages until no track is ready."""
 
@@ -314,7 +319,7 @@ class Dispatcher:
                 self.session.rollback()
                 track = self.session.get(Track, track.id) or track
                 track.state = stage.error_state.value
-                track.error_message = f"{stage.name}: {exc}"[:500]
+                track.error_message = _failure_reason(stage, exc)
                 self.session.commit()
                 self.events.emit("failed", stage.name, track, error=str(exc))
                 errors += 1
@@ -482,7 +487,7 @@ class Dispatcher:
                 fresh = session.get(Track, track.id)
                 if fresh is not None:
                     fresh.state = stage.error_state.value
-                    fresh.error_message = f"{stage.name}: {exc}"[:500]
+                    fresh.error_message = _failure_reason(stage, exc)
                     session.commit()
                 self.events.emit(
                     "failed", stage.name, track, error=str(exc)
