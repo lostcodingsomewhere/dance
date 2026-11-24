@@ -117,9 +117,10 @@ Now unmute the 4 stem tracks and mute the Mix tracks — the reverse of Part 3.
       If it's flagged with neither (a generic "will drift"), just don't use that
       stem this session — mute it and carry on with three.
 - [ ] Fire Deck A (▶ on its panel). All four stems play. Sounds like the song.
-- [ ] **Ride the faders.** The 8 faders are role-major, not side-major:
-      **Deck A is faders 1, 3, 5, 7** (drums, bass, vocals, other) and Deck B
-      is 2, 4, 6, 8. Adjacent pairs are the same role on opposite decks.
+- [ ] **Ride the faders.** The 8 faders are grouped by deck:
+      **Deck A is faders 1 to 4** (drums, bass, vocals, other) and Deck B
+      is 5 to 8 in the same order. The number on each column header in the
+      app is the fader that controls it.
       Pull the vocal
       out. Bring it back. Pull the bass. This is the whole thing — you're
       playing the song's parts, live.

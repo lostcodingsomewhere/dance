@@ -33,24 +33,26 @@ export function roleLabel(kind: string): string {
   return LABELS[kind] ?? kind;
 }
 
-/** Two-deck UI column order. Exactly 8 columns in APC40 mk2 fader order
- * (strip 1 → drums A, strip 2 → drums B, … strip 8 → other B), interleaved
- * by role so A/B for the same role sit adjacent. The mix/anchor reference
- * is NOT a grid column — it lives as a per-deck header chip in each
- * TwoDeckStrip panel. See docs/proposals/two-deck-ui-rethink.md. */
+/** Two-deck UI column order. Exactly 8 columns in APC40 mk2 fader order,
+ * grouped by deck: strips 1–4 are deck A (drums, bass, vocals, other) and
+ * strips 5–8 are deck B in the same role order, so one deck's four cue
+ * pads sit side by side in a row. The mix/anchor reference is NOT a grid
+ * column — it lives as a per-deck header chip in each TwoDeckStrip panel.
+ * See docs/proposals/cue-pads-prepared-set.md ("Column order"). */
 export const TWO_DECK_COLUMN_ORDER: readonly string[] = [
   "drums_a",
-  "drums_b",
   "bass_a",
-  "bass_b",
   "vocals_a",
-  "vocals_b",
   "other_a",
+  "drums_b",
+  "bass_b",
+  "vocals_b",
   "other_b",
 ];
 
 /** Backend deck-kind → user-facing column header label. Includes the
- * A/B side suffix so the eye groups same-role pairs visually. */
+ * A/B side suffix so the same role on deck A and deck B can be told
+ * apart. */
 const DECK_LABELS: Record<string, string> = {
   drums_a: "Drums A",
   drums_b: "Drums B",

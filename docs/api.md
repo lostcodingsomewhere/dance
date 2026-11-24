@@ -110,6 +110,7 @@ A **Set is its plan**. The plan is per-role queues of source tracks the DJ inten
 | GET    | `/api/v1/sets/{id}/plan`                          | -                                         | `SetPlanOut`            | 404 |
 | PUT    | `/api/v1/sets/{id}/plan`                          | `SetPlanUpdateRequest`                    | `SetPlanOut`            | 400, 404 |
 | POST   | `/api/v1/sets/{id}/plan/append`                   | `SetPlanAppendRequest`                    | `SetPlanOut`            | 400, 404 |
+| POST   | `/api/v1/sets/{id}/als` | `AlsExportRequest` (`out_path?`) | `SetAlsExportResult` (`out_path`, `page_count`, `scene_count`, `clip_count`, `skipped`): the whole plan as one Live Set, see `als-export.md` | 400 (empty plan, or nothing exportable), 403 (outside `als_output_dir`), 404 |
 | GET    | `/api/v1/sets/{id}/plan-recs`                     | `role` (req), `k`                         | `ColumnRecsResponse`    | 400, 404 |
 | POST   | `/api/v1/sets/{id}/tracks`                        | `SetTrackAddRequest`                      | `SetOut`                | 400, 404 |
 | PATCH  | `/api/v1/sets/{id}/tracks/{track_id}`             | `SetTrackUpdateRequest`                   | `SetOut`                | 400, 404 |

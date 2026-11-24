@@ -272,20 +272,18 @@ def test_writer_track_color_palette(tmp_path: Path):
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # The writer orders tracks per DECK_ORDER: 8 stem decks (A/B per
-    # role) then per-deck mix references (Mix A + Mix B).
+    # The writer orders tracks per DECK_ORDER: 8 stem decks (deck A's
+    # four roles, then deck B's) then per-deck mix references (Mix A + Mix B).
     names = [t.find("./Name/EffectiveName").get("Value") for t in audio_tracks]
     assert names == [
-        "Drums A", "Drums B",
-        "Bass A", "Bass B",
-        "Vocals A", "Vocals B",
-        "Other A", "Other B",
+        "Drums A", "Bass A", "Vocals A", "Other A",
+        "Drums B", "Bass B", "Vocals B", "Other B",
         "Mix A", "Mix B",
     ]
 
     expected_kinds = (
-        "drums", "drums", "bass", "bass", "vocals", "vocals",
-        "other", "other", "mix", "mix",
+        "drums", "bass", "vocals", "other", "drums", "bass",
+        "vocals", "other", "mix", "mix",
     )
     for t, src in zip(audio_tracks, expected_kinds):
         color_idx = int(t.find("./Color").get("Value"))
@@ -301,8 +299,8 @@ def test_writer_crossfader_assignment_per_side(tmp_path: Path):
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    #          drums_a drums_b bass_a bass_b voc_a voc_b oth_a oth_b mix_a mix_b
-    expected = ["0",    "2",    "0",   "2",   "0",  "2",  "0",  "2",  "0",  "2"]
+    #          drums_a bass_a voc_a oth_a drums_b bass_b voc_b oth_b mix_a mix_b
+    expected = ["0",    "0",   "0",  "0",  "2",    "2",   "2",  "2",  "0",  "2"]
     for t, want in zip(audio_tracks, expected):
         manual = t.find("./DeviceChain/Mixer/CrossFadeState/Manual")
         assert manual is not None, f"track {t.find('./Name/EffectiveName').get('Value')} missing crossfade"
@@ -321,16 +319,16 @@ def test_writer_b_side_decks_have_empty_clip_slots(tmp_path: Path):
     xml = build_live_set_xml(_build_minimal_spec(tmp_path))
     root = etree.fromstring(xml)
     audio_tracks = root.findall("./LiveSet/Tracks/AudioTrack")
-    # B-side decks are odd indices (1, 3, 5, 7) for stems + 9 for mix_b.
-    for i in (1, 3, 5, 7, 9):
+    # B-side decks are indices 4-7 for stems + 9 for mix_b.
+    for i in (4, 5, 6, 7, 9):
         t = audio_tracks[i]
         clip = t.find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
         )
         name = t.find("./Name/EffectiveName").get("Value")
         assert clip is None, f"B-side deck {name} unexpectedly has a clip"
-    # A-side decks (0, 2, 4, 6) + mix_a (8) DO have a clip in slot 0.
-    for i in (0, 2, 4, 6, 8):
+    # A-side decks (0, 1, 2, 3) + mix_a (8) DO have a clip in slot 0.
+    for i in (0, 1, 2, 3, 8):
         t = audio_tracks[i]
         clip = t.find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip"
@@ -403,8 +401,8 @@ def test_writer_mix_clip_is_muted_by_default(tmp_path: Path):
     assert disabled is not None
     assert disabled.get("Value") == "true"
 
-    # A-side stem decks (0, 2, 4, 6) should NOT be disabled.
-    for i in (0, 2, 4, 6):
+    # A-side stem decks (0, 1, 2, 3) should NOT be disabled.
+    for i in (0, 1, 2, 3):
         d = audio_tracks[i].find(
             "./DeviceChain/MainSequencer/ClipSlotList/ClipSlot/ClipSlot/Value/AudioClip/Disabled"
         )

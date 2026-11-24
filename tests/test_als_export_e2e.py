@@ -34,6 +34,19 @@ NAMES_LIVE_DOES_NOT_READ = {"Warp", "Gain", "GranularityResolution", "ColorIndex
 RELATIVE_TO_THE_SET_FILE = "1"
 EXTERNAL_FILE = "2"
 WARP_GRID_BEATS = 1 / 32
+BEATS, COMPLEX, COMPLEX_PRO = 0, 4, 6
+LIVE_WARP_MODE_FOR = {
+    "drums": BEATS,
+    "bass": BEATS,
+    "vocals": COMPLEX_PRO,
+    "other": COMPLEX,
+    "mix": COMPLEX,
+}
+DECK_TRACKS_GROUPED_BY_DECK = [
+    "Drums A", "Bass A", "Vocals A", "Other A",
+    "Drums B", "Bass B", "Vocals B", "Other B",
+    "Mix A", "Mix B",
+]  # fmt: skip
 
 
 def _exported_set(client: TestClient, track_id: int) -> tuple[etree._Element, Path]:
@@ -51,6 +64,17 @@ def _tracks_with_a_clip(live_set: etree._Element) -> list[tuple[etree._Element, 
 def _in_order_within(names: list[str], order: list[str]) -> bool:
     remaining = iter(order)
     return all(name in remaining for name in names)
+
+
+def test_exported_set_puts_deck_a_on_tracks_one_to_four_and_deck_b_on_five_to_eight(
+    library_with_one_song,  # noqa: F811
+):
+    client, track_id = library_with_one_song
+    live_set, _ = _exported_set(client, track_id)
+    track_names = [
+        track.find("Name/EffectiveName").get("Value") for track in live_set.iter("AudioTrack")
+    ]
+    assert track_names == DECK_TRACKS_GROUPED_BY_DECK
 
 
 def test_exported_clips_use_the_names_and_order_live_writes(library_with_one_song):  # noqa: F811
@@ -80,7 +104,7 @@ def test_exported_clips_follow_the_song_tempo_and_carry_their_stem_colour(
         assert clip.find("Color").get("Value") == track.find("Color").get("Value")
 
         assert clip.find("IsWarped").get("Value") == "true"
-        assert int(clip.find("WarpMode").get("Value")) == AbletonBridge._WARP_MODE_BEATS
+        assert int(clip.find("WarpMode").get("Value")) == LIVE_WARP_MODE_FOR[stem_kind]
         assert (
             int(clip.find("LaunchQuantisation").get("Value")) == AbletonBridge._LAUNCH_QUANT_GLOBAL
         )

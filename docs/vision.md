@@ -81,7 +81,7 @@ These decisions fall out of the vision and are locked:
 
 5. **Curation lives in the recs, not in tagging.** No "this track is drums-only" metadata. The system surfaces what works given current context; the user doesn't have to pre-classify.
 
-6. **The 8×5 grid mirrors the APC40.** Same shape, same orientation (bottom row = scene 1), same row-is-scene semantics. The 8 columns map 1:1 to the APC40's 8 faders in role-major order, so Deck A is faders 1, 3, 5, 7 and Deck B is 2, 4, 6, 8; the hardware A/B crossfader blends the two decks. Muscle memory wins.
+6. **The 8×5 grid mirrors the APC40.** Same shape, same orientation (bottom row = scene 1), same row-is-scene semantics. The 8 columns map 1:1 to the APC40's 8 faders, grouped by deck: Deck A is faders 1 to 4 (drums, bass, vocals, other) and Deck B is faders 5 to 8 in the same role order. The hardware A/B crossfader blends the two decks. Grouping by deck was decided on 2026-11-23 so that one deck's four cue pads sit side by side in a row ([`proposals/cue-pads-prepared-set.md`](proposals/cue-pads-prepared-set.md), "Column order"). Muscle memory wins.
 
 7. **Compat is per-stem, not per-track.** Key/BPM/energy compatibility is computed against the active combo of stems, not against a "now playing song". When you only have drums playing, only the drums are part of the compat math for other columns.
 

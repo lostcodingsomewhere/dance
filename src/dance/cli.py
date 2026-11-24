@@ -924,6 +924,55 @@ def tag(
         session.close()
 
 
+@main.command("export-set")
+@click.argument("set_id", type=int, required=False)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (must be inside als_output_dir).",
+)
+@click.pass_context
+def export_set_command(ctx: click.Context, set_id: Optional[int], out_path: Optional[Path]) -> None:
+    """Write a set's whole plan as one Live Set, laid out in pages of five pads.
+
+    Without SET_ID the active set is exported.
+    """
+    settings: Settings = ctx.obj["settings"]
+
+    from dance.als.generator import AlsExportError
+    from dance.als.prepared_set import export_set
+    from dance.core.database import Set
+
+    session = get_session(settings.db_url)
+    settings.ensure_directories()
+    try:
+        if set_id is None:
+            set_row = session.query(Set).filter(Set.is_active.is_(True)).first()
+        else:
+            set_row = session.get(Set, set_id)
+        if set_row is None:
+            console.print("[red]No such set (and no active set)[/red]")
+            sys.exit(1)
+        try:
+            exported = export_set(session, settings, set_row, out_path)
+        except AlsExportError as exc:
+            console.print(f"[red]✗ {exc}[/red]")
+            sys.exit(1)
+        console.print(
+            f"[green]✓ Wrote[/green] {exported.path}\n"
+            f"  {exported.page_count} page(s), {exported.scene_count} scenes, "
+            f"{exported.clip_count} clips"
+        )
+        for pick in exported.skipped:
+            console.print(
+                f"  [yellow]skipped[/yellow] track {pick.track_id} ({pick.role}): {pick.reason}"
+            )
+    finally:
+        session.close()
+
+
 @main.command("export-als")
 @click.argument("track_id", type=int, required=False)
 @click.option("--all", "all_tracks", is_flag=True, help="Export every COMPLETE track")

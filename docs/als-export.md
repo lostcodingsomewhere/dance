@@ -32,12 +32,11 @@ The React UI's `LoadActions` component (`companion-app/src/components/LoadAction
 
 `src/dance/als/writer.py` (`build_live_set_xml`):
 
-- **10 audio tracks** — the 2-deck column layout (8 stems + 2 mix references), in fader order:
-  - `drums_a`, `drums_b` — Deck A / Deck B drums column
-  - `bass_a`, `bass_b`
-  - `vocals_a`, `vocals_b`
-  - `other_a`, `other_b`
+- **10 audio tracks** — the 2-deck column layout (8 stems + 2 mix references), in fader order, grouped by deck:
+  - `drums_a`, `bass_a`, `vocals_a`, `other_a` — Deck A, faders 1 to 4
+  - `drums_b`, `bass_b`, `vocals_b`, `other_b` — Deck B, faders 5 to 8
   - `mix_a`, `mix_b` — per-deck full-mix references, muted by default
+  - Sets exported before 2026-11-23 have the stem tracks role by role (`drums_a`, `drums_b`, `bass_a`, …). The app finds deck tracks by name, so those Sets still load; export again to get the grouped order.
   - The A-side tracks point at the exported track's `<stems_dir>/<hash>/<role>.wav`; the B-side tracks are layout placeholders for the *next* song you live-load through the app. These shipped clips are scaffold decoys — don't perform them.
 - **2 Return tracks** preserved from the template (A Reverb, B Delay) so sends are wired up.
 - **Master tempo** — set to the track's detected BPM (`audio_analysis.bpm`). Written to both `MainTrack/.../Tempo/Manual` *and* the master-tempo `AutomationEnvelope` anchor (the latter overrides Manual if you forget it).
@@ -128,6 +127,39 @@ open -a "Ableton Live 12 Standard" ~/Music/Dance/Sets/...
      Leave Live open on the layout and live-load stems from the
      companion app (Cmd-K / rec-promote -> OSC).
 ```
+
+## A whole set in one file: `dance export-set`
+
+```
+dance export-set            # the active set
+dance export-set 3 --out ~/Music/Dance/Sets/friday.als
+```
+
+`POST /api/v1/sets/{id}/als` does the same. The file holds the set's whole plan,
+laid out in pages of five scene rows (what the APC40 shows at once):
+
+- **Songs fill pages in plan order.** The first song goes on deck A of page 1, the
+  second on deck B, the third on deck A of page 2. Queue an original and then its
+  remix and they share a page.
+- **A column holds one stem of one song, cut at its five pads.** Row 1 of the page is
+  pad 1. Every clip of a song carries the same warp grid, written into the file, so
+  Live does not analyse anything on load.
+- **Drums, bass and melody pads loop** their section, cut to 4, 8 or 16 bars.
+  **Vocals and the mix play on** to the end of the song.
+- **Stretch mode per stem:** Beats for drums and bass, Complex Pro for vocals,
+  Complex for melody and the mix. This also applies to `dance export-als`.
+- **Clip colour is the section type** (intro and outro, build-up, drop, breakdown),
+  and a darker shade where that stem is silent for the pad's first eight bars.
+- **Single-stem picks** from the plan's Drums, Bass, Vocals and Other queues go on
+  spare pages after the songs, two per role per page.
+- **Mix A and Mix B** hold each song's full mix at the same five pads, deactivated,
+  as in the per-track export.
+- The first row of each page is named with the songs on it. The Set's tempo is the
+  first song's.
+
+A pick that cannot be exported (not processed yet, or no pads) is left out and
+listed in the command's output and in the route's `skipped` field. Unlike the
+per-track export, these clips are meant to be played.
 
 ## Limitations
 

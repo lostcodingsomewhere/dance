@@ -78,16 +78,15 @@ STEM_COLOR_INDEX: dict[str, int] = {
 }
 
 
-# Canonical track order — 8 stem decks (A/B per role) then per-deck
-# mix references. Stems come first so APC40's default 8-strip view maps
-# 1:1 to them; mix_a and mix_b live at indices 8-9, off the default
+# Canonical track order — 8 stem decks grouped by deck (deck A's four
+# roles, then deck B's) then per-deck mix references. Stems come first so
+# APC40's default 8-strip view maps 1:1 to them, deck A on faders 1-4 and
+# deck B on 5-8; mix_a and mix_b live at indices 8-9, off the default
 # view. Mirror of dance.osc.bridge.AbletonBridge._DECK_KINDS — kept in
 # sync by hand; the bridge tests catch drift on the runtime side.
 DECK_ORDER: tuple[str, ...] = (
-    "drums_a", "drums_b",
-    "bass_a", "bass_b",
-    "vocals_a", "vocals_b",
-    "other_a", "other_b",
+    "drums_a", "bass_a", "vocals_a", "other_a",
+    "drums_b", "bass_b", "vocals_b", "other_b",
     "mix_a", "mix_b",
 )
 
@@ -206,6 +205,28 @@ class LiveSetSpec:
     set_dir: Path | None = None
 
 
+@dataclass(frozen=True)
+class PlacedClip:
+    deck_kind: str
+    scene: int
+    entry: StemEntry
+    bpm: float
+    name: str
+    start_beats: float
+    loop_beats: float | None
+    color_index: int
+    muted: bool = False
+
+
+@dataclass(frozen=True)
+class PreparedSetSpec:
+    name: str
+    bpm: float
+    scene_names: Sequence[str]
+    clips: Sequence[PlacedClip]
+    set_dir: Path | None = None
+
+
 # ---------------------------------------------------------------------------
 # Template loading
 # ---------------------------------------------------------------------------
@@ -246,6 +267,99 @@ def build_live_set_xml(spec: LiveSetSpec) -> bytes:
         encoding="UTF-8",
         standalone=False,
     )
+
+
+def build_prepared_set_xml(spec: PreparedSetSpec) -> bytes:
+    if spec.bpm <= 0:
+        raise ValueError(f"bpm must be positive, got {spec.bpm}")
+    if not spec.clips:
+        raise ValueError("at least one clip required")
+    for placed in spec.clips:
+        if placed.deck_kind not in DECK_ORDER:
+            raise ValueError(f"unknown deck {placed.deck_kind!r}")
+        if not 0 <= placed.scene < len(spec.scene_names):
+            raise ValueError(f"clip scene {placed.scene} is outside the set's scenes")
+        if placed.bpm <= 0:
+            raise ValueError(f"clip bpm must be positive, got {placed.bpm}")
+
+    tree = _load_template()
+    root = tree.getroot()
+    liveset = root.find("LiveSet")
+    if liveset is None:
+        raise RuntimeError("template missing <LiveSet>")
+
+    _set_tempo(liveset, spec.bpm)
+    _set_scenes(liveset, spec.scene_names)
+    deck_tracks = dict(_insert_deck_tracks(liveset))
+    _resize_clip_slot_lists(liveset, len(spec.scene_names))
+    for clip_id, placed in enumerate(spec.clips):
+        _build_audio_clip(
+            _clip_slot_value(deck_tracks[placed.deck_kind], placed.scene),
+            clip_id=clip_id,
+            entry=placed.entry,
+            bpm=placed.bpm,
+            muted=placed.muted,
+            set_dir=spec.set_dir,
+            name=placed.name,
+            color_index=placed.color_index,
+            start_beats=placed.start_beats,
+            loop_beats=placed.loop_beats,
+            loops=placed.loop_beats is not None,
+        )
+    _set_locators(liveset, [])
+
+    return etree.tostring(
+        root,
+        xml_declaration=True,
+        encoding="UTF-8",
+        standalone=False,
+    )
+
+
+def _set_scenes(liveset: etree._Element, names: Sequence[str]) -> None:
+    scenes = liveset.find("Scenes")
+    if scenes is None or len(scenes) == 0:
+        raise RuntimeError("template missing <Scenes>")
+    blank = deepcopy(scenes[0])
+    for scene in list(scenes):
+        scenes.remove(scene)
+    for index, name in enumerate(names):
+        scene = deepcopy(blank)
+        scene.set("Id", str(index))
+        scene_name = scene.find("Name")
+        if scene_name is not None:
+            scene_name.set("Value", name)
+        scenes.append(scene)
+
+
+def _resize_clip_slot_lists(liveset: etree._Element, scene_count: int) -> None:
+    for slot_list in list(liveset.iter("ClipSlotList")):
+        if len(slot_list) == 0:
+            continue
+        blank = deepcopy(slot_list[0])
+        value = blank.find("ClipSlot/Value")
+        if value is not None:
+            for child in list(value):
+                value.remove(child)
+        for slot in list(slot_list):
+            slot_list.remove(slot)
+        for index in range(scene_count):
+            slot = deepcopy(blank)
+            slot.set("Id", str(index))
+            slot_list.append(slot)
+
+
+def _clip_slot_value(deck_track: etree._Element, scene: int) -> etree._Element:
+    slot_list = deck_track.find("DeviceChain/MainSequencer/ClipSlotList")
+    if slot_list is None or len(slot_list) <= scene:
+        raise RuntimeError("deck track has no clip slot for this scene")
+    inner = slot_list[scene].find("ClipSlot")
+    if inner is None:
+        raise RuntimeError("template ClipSlot missing inner <ClipSlot>")
+    value = inner.find("Value")
+    if value is None:
+        value = etree.SubElement(inner, "Value")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -311,14 +425,32 @@ def _replace_tracks(
     bpm: float,
     set_dir: Path | None = None,
 ) -> None:
-    """Remove default Midi/Audio tracks, insert 9 deck-pair AudioTracks
-    (drums_a/b, bass_a/b, vocals_a/b, other_a/b, mix).
+    """Swap the template's tracks for the deck tracks and put one song's
+    stems on deck A.
 
-    Always emits all 9 deck tracks for consistent layout. The offline
-    path is a single-song snapshot so only A-side + mix get audio; B-side
-    tracks ship with empty clip slots ready to accept an incoming track's
-    stems for transitions.
+    The offline per-track path is a single-song snapshot, so only the A
+    side and its mix get audio. The B side ships with empty clip slots,
+    ready for an incoming track's stems.
     """
+    by_source = {s.kind: s for s in stems}
+    for deck_kind, deck_track in _insert_deck_tracks(liveset):
+        entry = by_source.get(_source_kind_of(deck_kind)) if _side_of(deck_kind) != "b" else None
+        value = _clip_slot_value(deck_track, 0)
+        for child in list(value):
+            value.remove(child)
+        if entry is None:
+            continue
+        _build_audio_clip(
+            value,
+            clip_id=int(deck_track.get("Id")),
+            entry=entry,
+            bpm=bpm,
+            muted=deck_kind in ("mix_a", "mix_b"),
+            set_dir=set_dir,
+        )
+
+
+def _insert_deck_tracks(liveset: etree._Element) -> list[tuple[str, etree._Element]]:
     tracks_el = liveset.find("Tracks")
     if tracks_el is None:
         raise RuntimeError("template missing <Tracks>")
@@ -335,37 +467,23 @@ def _replace_tracks(
         if child.tag in ("MidiTrack", "AudioTrack"):
             tracks_el.remove(child)
 
-    # Where to insert: before the first ReturnTrack (Live convention is
-    # regular tracks first, returns last). If no ReturnTracks, append.
+    # Live keeps regular tracks before the return tracks.
     insert_idx = len(tracks_el)
     for i, child in enumerate(tracks_el):
         if child.tag == "ReturnTrack":
             insert_idx = i
             break
 
-    by_source = {s.kind: s for s in stems}
-
+    deck_tracks: list[tuple[str, etree._Element]] = []
     next_pointee_id = _POINTEE_ID_START
     for i, deck_kind in enumerate(DECK_ORDER):
         clone = deepcopy(template_at)
         next_pointee_id = _renumber_pointees(clone, next_pointee_id)
-        # Audio routing: A-side decks + mix get the source file. B-side
-        # decks stay empty (ready for an incoming track's stems).
-        side = _side_of(deck_kind)
-        source = _source_kind_of(deck_kind)
-        stem_for_clip = by_source.get(source) if side != "b" else None
-        _populate_audio_track(
-            clone,
-            track_id=_FIRST_TRACK_ID + i,
-            deck_kind=deck_kind,
-            entry=stem_for_clip,
-            bpm=bpm,
-            set_dir=set_dir,
-        )
+        _style_deck_track(clone, track_id=_FIRST_TRACK_ID + i, deck_kind=deck_kind)
         tracks_el.insert(insert_idx + i, clone)
+        deck_tracks.append((deck_kind, clone))
 
-    # Tell Live our highest Pointee Id so its allocator picks a value
-    # above ours when the user edits the Set.
+    # Live's own allocator has to start above the highest Pointee Id we used.
     npi = liveset.find("NextPointeeId")
     if npi is not None:
         try:
@@ -373,6 +491,7 @@ def _replace_tracks(
         except ValueError:
             existing = 0
         npi.set("Value", str(max(existing, next_pointee_id + 100)))
+    return deck_tracks
 
 
 def _renumber_pointees(subtree: etree._Element, start_id: int) -> int:
@@ -388,19 +507,7 @@ def _renumber_pointees(subtree: etree._Element, start_id: int) -> int:
     return cur
 
 
-def _populate_audio_track(
-    at: etree._Element,
-    *,
-    track_id: int,
-    deck_kind: str,
-    entry: StemEntry | None,
-    bpm: float,
-    set_dir: Path | None = None,
-) -> None:
-    """Fill in a cloned AudioTrack: name + color from ``deck_kind`` (so
-    every deck slot gets the right identity even when empty), crossfader
-    assignment per side, and a clip in slot 0 iff ``entry`` is set.
-    """
+def _style_deck_track(at: etree._Element, *, track_id: int, deck_kind: str) -> None:
     at.set("Id", str(track_id))
 
     display = _display_for(deck_kind)
@@ -413,43 +520,17 @@ def _populate_audio_track(
         if usr is not None:
             usr.set("Value", display)
 
-    source = _source_kind_of(deck_kind)
-    color_idx = STEM_COLOR_INDEX.get(source, 0)
     color = at.find("Color")
     if color is not None:
-        color.set("Value", str(color_idx))
+        color.set("Value", str(STEM_COLOR_INDEX.get(_source_kind_of(deck_kind), 0)))
 
-    # Crossfader assignment: A → 0, B → 2, mix → 1 (no binding). Modifies
-    # the template's existing CrossFadeState/Manual leaf, doesn't create.
+    # Crossfader assignment lives in the template's CrossFadeState/Manual leaf.
     cf_manual = at.find("DeviceChain/Mixer/CrossFadeState/Manual")
     if cf_manual is not None:
         cf_manual.set("Value", _crossfade_value_for(deck_kind))
 
-    csl = at.find("DeviceChain/MainSequencer/ClipSlotList")
-    if csl is None or len(csl) == 0:
+    if at.find("DeviceChain/MainSequencer/ClipSlotList") is None:
         raise RuntimeError("template AudioTrack missing ClipSlotList")
-    first_slot = csl[0]
-    inner = first_slot.find("ClipSlot")
-    if inner is None:
-        raise RuntimeError("template ClipSlot missing inner <ClipSlot>")
-    value = inner.find("Value")
-    if value is None:
-        value = etree.SubElement(inner, "Value")
-    for child in list(value):
-        value.remove(child)
-    # No entry → empty slot (B-side decks, or A-side decks for a song
-    # that's missing this stem). The slot is still a real ClipSlot
-    # element, just with no AudioClip inside — ready to receive a drop.
-    if entry is None:
-        return
-    _build_audio_clip(
-        value,
-        clip_id=track_id,
-        entry=entry,
-        bpm=bpm,
-        muted=deck_kind in ("mix_a", "mix_b"),
-        set_dir=set_dir,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +539,16 @@ def _populate_audio_track(
 
 
 _WARP_GRID_BEATS = 1 / 32
+WARP_MODE_BEATS = 0
+WARP_MODE_COMPLEX = 4
+WARP_MODE_COMPLEX_PRO = 6
+WARP_MODE_BY_KIND: dict[str, int] = {
+    "drums": WARP_MODE_BEATS,
+    "bass": WARP_MODE_BEATS,
+    "vocals": WARP_MODE_COMPLEX_PRO,
+    "other": WARP_MODE_COMPLEX,
+    "mix": WARP_MODE_COMPLEX,
+}
 _RELATIVE_PATH_NONE = "0"
 _RELATIVE_PATH_FROM_SET = "1"
 _FILE_REF_EXTERNAL = "2"
@@ -484,9 +575,15 @@ def _build_audio_clip(
     bpm: float,
     muted: bool,
     set_dir: Path | None = None,
+    name: str | None = None,
+    color_index: int | None = None,
+    start_beats: float = 0.0,
+    loop_beats: float | None = None,
+    loops: bool = True,
 ) -> None:
     duration = entry.duration_seconds or 0.0
-    end_beats = (duration * bpm / 60.0) if duration > 0 else 16.0
+    file_end_beats = (duration * bpm / 60.0) if duration > 0 else 16.0
+    end_beats = start_beats + loop_beats if loop_beats else file_end_beats
 
     clip = etree.SubElement(parent, "AudioClip")
     clip.set("Id", str(clip_id))
@@ -494,12 +591,16 @@ def _build_audio_clip(
 
     _val(clip, "LomId", "0")
     _val(clip, "LomIdView", "0")
-    _val(clip, "CurrentStart", "0")
-    _val(clip, "CurrentEnd", f"{end_beats:.6f}")
-    _build_loop_block(clip, end_beats)
-    _val(clip, "Name", entry.display_name())
+    _val(clip, "CurrentStart", _beats(start_beats))
+    _val(clip, "CurrentEnd", _beats(end_beats))
+    _build_loop_block(clip, start_beats, end_beats, loops)
+    _val(clip, "Name", name or entry.display_name())
     _val(clip, "Annotation", "")
-    _val(clip, "Color", STEM_COLOR_INDEX.get(entry.kind, 0))
+    _val(
+        clip,
+        "Color",
+        STEM_COLOR_INDEX.get(entry.kind, 0) if color_index is None else color_index,
+    )
     _val(clip, "LaunchMode", "0")
     # 0 is Global in the clip enum, as on live-loaded clips (bridge._LAUNCH_QUANT_GLOBAL).
     _val(clip, "LaunchQuantisation", "0")
@@ -518,7 +619,7 @@ def _build_audio_clip(
     _val(sample_ref, "DefaultSampleRate", "44100")
     _val(sample_ref, "SamplesToAutoWarp", "0")
 
-    _val(clip, "WarpMode", "0")
+    _val(clip, "WarpMode", WARP_MODE_BY_KIND.get(entry.kind, WARP_MODE_BEATS))
     _val(clip, "PitchCoarse", "0")
     _val(clip, "PitchFine", "0")
     _val(clip, "SampleVolume", "1")
@@ -536,18 +637,19 @@ def _build_audio_clip(
     _val(clip, "MarkersGenerated", "true")
 
 
-def _build_loop_block(clip: etree._Element, end_beats: float) -> None:
-    # LoopOn=true so stems keep grooving until the user swaps them. This is
-    # core to the live-remixing model — see docs/vision.md. Override per-clip
-    # from the UI when a stem is meant to play through (e.g. vocal arc).
+def _beats(value: float) -> str:
+    return "0" if value == 0 else f"{value:.6f}"
+
+
+def _build_loop_block(clip: etree._Element, start_beats: float, end_beats: float, loops: bool) -> None:
     loop = etree.SubElement(clip, "Loop")
-    _val(loop, "LoopStart", "0")
-    _val(loop, "LoopEnd", f"{end_beats:.6f}")
+    _val(loop, "LoopStart", _beats(start_beats))
+    _val(loop, "LoopEnd", _beats(end_beats))
     _val(loop, "StartRelative", "0")
-    _val(loop, "LoopOn", "true")
-    _val(loop, "OutMarker", f"{end_beats:.6f}")
-    _val(loop, "HiddenLoopStart", "0")
-    _val(loop, "HiddenLoopEnd", f"{end_beats:.6f}")
+    _val(loop, "LoopOn", "true" if loops else "false")
+    _val(loop, "OutMarker", _beats(end_beats))
+    _val(loop, "HiddenLoopStart", _beats(start_beats))
+    _val(loop, "HiddenLoopEnd", _beats(end_beats))
 
 
 def _add_file_ref(parent: etree._Element, path: Path, set_dir: Path | None = None) -> None:
