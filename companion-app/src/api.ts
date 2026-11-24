@@ -436,6 +436,10 @@ export function triggerPipelineProcess(): Promise<Job> {
   return request<Job>("/pipeline/process", { method: "POST" });
 }
 
+export function retryPipelineTrack(id: number): Promise<PipelineRecentTrack> {
+  return request<PipelineRecentTrack>(`/pipeline/tracks/${id}/retry`, { method: "POST" });
+}
+
 export interface ScanResult {
   new: number;
   updated: number;

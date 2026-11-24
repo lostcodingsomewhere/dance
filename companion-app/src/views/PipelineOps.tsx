@@ -26,9 +26,15 @@ interface PlaylistToast {
   tone: "ok" | "err";
 }
 
+interface Refusal {
+  whatDidNotHappen: string;
+  reason: string;
+}
+
 const POLL_MS = 3000;
 const RECENT_LIMIT = 30;
 const FILTERED_LIMIT = 200;
+const REFUSAL_STAYS_MS = 12000;
 
 const STAGE_COLOR: Record<string, string> = {
   pending: "bg-neutral-800 text-neutral-400",
@@ -549,6 +555,7 @@ export function PipelineOps() {
   const [filterState, setFilterState] = useState<string | null>(null);
   const [scanToast, setScanToast] = useState<ScanToast | null>(null);
   const [playlistToast, setPlaylistToast] = useState<PlaylistToast | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [playlistUrl, setPlaylistUrl] = useState("");
   // Spotify user OAuth token. Spotify lists a playlist's songs only for the
@@ -564,6 +571,12 @@ export function PipelineOps() {
   useEffect(() => {
     window.localStorage.setItem("dance.ops.viewMode", viewMode);
   }, [viewMode]);
+
+  useEffect(() => {
+    if (!refusal) return;
+    const timer = setTimeout(() => setRefusal(null), REFUSAL_STAYS_MS);
+    return () => clearTimeout(timer);
+  }, [refusal]);
 
   const status = useQuery({
     queryKey: ["pipeline-status"],
@@ -672,6 +685,22 @@ export function PipelineOps() {
   const processMutation = useMutation({
     mutationFn: api.triggerPipelineProcess,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-status"] }),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: api.retryPipelineTrack,
+    onMutate: () => setRefusal(null),
+    onSuccess: async (waiting) => {
+      const listShown = ["pipeline-recent", filterState];
+      await qc.cancelQueries({ queryKey: listShown });
+      qc.setQueryData<PipelineRecentTrack[]>(listShown, (rows) =>
+        rows?.map((row) => (row.id === waiting.id ? waiting : row)),
+      );
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      qc.invalidateQueries({ queryKey: ["board-state"] });
+    },
+    onError: (err: Error) =>
+      setRefusal({ whatDidNotHappen: "Not retried.", reason: api.serverMessage(err) }),
   });
 
   // While a pipeline run is in flight, refresh faster.
@@ -794,6 +823,12 @@ export function PipelineOps() {
           </div>
         </div>
       </div>
+
+      {refusal && (
+        <div role="alert" className="px-6 py-2 text-sm bg-rose-500/10 text-rose-200">
+          <span className="font-semibold">{refusal.whatDidNotHappen}</span> {refusal.reason}
+        </div>
+      )}
 
       {scanToast && (
         <div
@@ -1054,7 +1089,20 @@ export function PipelineOps() {
                         <td className="px-3 py-2 text-right text-neutral-500 text-xs tabular-nums">
                           {formatRelative(t.updated_at)}
                         </td>
-                        <td className="pr-3">
+                        <td className="pr-3 whitespace-nowrap text-right">
+                          {t.state === "error" && (
+                            <button
+                              type="button"
+                              onClick={() => retryMutation.mutate(t.id)}
+                              disabled={
+                                retryMutation.isPending && retryMutation.variables === t.id
+                              }
+                              className="mr-2 px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-xs font-semibold disabled:opacity-40"
+                              title="Try this track again"
+                            >
+                              Retry
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => confirmDelete(t)}
