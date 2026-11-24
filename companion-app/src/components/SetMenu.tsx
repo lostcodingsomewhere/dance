@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { addTrackToSet, createSet } from "../api";
+import { createSet, deleteSet, getPlan, putPlan } from "../api";
 import {
   useActivateSet,
   useCreateSet,
@@ -21,8 +21,34 @@ import {
   useSets,
   useUpdateSet,
 } from "../hooks/useSets";
-import { useQueryClient } from "@tanstack/react-query";
-import type { DanceSet } from "../types";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { DanceSet, SetPlan } from "../types";
+
+function trackIdsByRole(plan: SetPlan): Record<string, number[]> {
+  return Object.fromEntries(
+    Object.entries(plan.queues).map(([role, picks]) => [role, picks.map((pick) => pick.track_id)]),
+  );
+}
+
+async function copyWithItsPlan(source: DanceSet, name: string): Promise<DanceSet> {
+  const plan = await getPlan(source.id);
+  const copy = await createSet(name);
+  try {
+    await putPlan(copy.id, trackIdsByRole(plan));
+  } catch (error) {
+    await deleteSet(copy.id).catch(() => undefined);
+    throw error;
+  }
+  return copy;
+}
+
+class CopyNotOpened extends Error {}
+
+function duplicateFailureWords(error: Error): string {
+  return error instanceof CopyNotOpened
+    ? "The copy was made but could not be opened. Pick it under Switch to."
+    : "Could not duplicate this set. Try again.";
+}
 
 interface Props {
   set: DanceSet;
@@ -117,25 +143,27 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
     );
   }
 
-  async function duplicateCurrent() {
-    const name = newName.trim() || `${set.name} (copy)`;
-    try {
-      const copy = await createSet(name);
-      for (const t of set.tracks) {
-        try {
-          await addTrackToSet(copy.id, t.track_id, { note: t.note ?? undefined });
-        } catch {
-          // skip tracks that have since been deleted
-        }
+  const duplicate = useMutation({
+    mutationFn: async (name: string) => {
+      const copy = await copyWithItsPlan(set, name);
+      try {
+        await activate.mutateAsync(copy.id);
+      } catch {
+        qc.invalidateQueries({ queryKey: ["sets"] });
+        throw new CopyNotOpened();
       }
-      await activate.mutateAsync(copy.id);
-      qc.invalidateQueries({ queryKey: ["sets"] });
+    },
+    onSuccess: () => {
       setNewName("");
       setCreating(null);
       onClose();
-    } catch (e) {
-      console.error("duplicate failed", e);
-    }
+    },
+  });
+  const busy = createMut.isPending || activate.isPending || duplicate.isPending;
+
+  function duplicateCurrent() {
+    if (busy) return;
+    duplicate.mutate(newName.trim() || `${set.name} (copy)`);
   }
 
   function confirmDelete() {
@@ -250,6 +278,11 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
               }
             }}
           />
+          {creating === "duplicate" && duplicate.isError && (
+            <p role="alert" className="text-xs leading-snug text-rose-300">
+              {duplicateFailureWords(duplicate.error)}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -266,10 +299,10 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
               onClick={() =>
                 creating === "duplicate" ? duplicateCurrent() : createBlank()
               }
-              disabled={createMut.isPending || activate.isPending}
+              disabled={busy}
               className="text-xs px-3 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-50"
             >
-              {createMut.isPending || activate.isPending ? "…" : "Create"}
+              {busy ? "…" : "Create"}
             </button>
           </div>
         </div>
@@ -289,7 +322,10 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
           <ActionRow
             icon="⎘"
             label="Duplicate as new"
-            onClick={() => setCreating("duplicate")}
+            onClick={() => {
+              duplicate.reset();
+              setCreating("duplicate");
+            }}
           />
           <ActionRow
             icon="+"

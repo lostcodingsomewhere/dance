@@ -547,7 +547,11 @@ export function PlanBand({
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
   return (
-    <div className="flex h-full flex-col gap-1 min-w-0">
+    <div
+      role="group"
+      aria-label={`${roleLabel(visRole(role))} plan`}
+      className="flex h-full flex-col gap-1 min-w-0"
+    >
       <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
       <PlanZone
         setId={setId}
@@ -573,7 +577,11 @@ export function RecsBand({
   mode: Mode;
 }) {
   return (
-    <div className="flex flex-col gap-1 min-w-0">
+    <div
+      role="group"
+      aria-label={`${roleLabel(visRole(role))} recs`}
+      className="flex flex-col gap-1 min-w-0"
+    >
       <ZoneLabel>Recs</ZoneLabel>
       {mode === "live" ? (
         <LiveRecsZone setId={setId} role={role} />
