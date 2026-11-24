@@ -154,9 +154,20 @@ function RowList({
   );
 }
 
-function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
+function IngestPanel({
+  csvText,
+  setCsvText,
+  keptOpenForItsText,
+  onCancel,
+  onCommitted,
+}: {
+  csvText: string;
+  setCsvText: (text: string) => void;
+  keptOpenForItsText: boolean;
+  onCancel: () => void;
+  onCommitted: () => void;
+}) {
   const qc = useQueryClient();
-  const [csvText, setCsvText] = useState("");
   const [preview, setPreview] = useState<IngestPreviewResponse | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -272,7 +283,19 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
           />
         </label>
         {previewErr && <span className="text-rose-400 text-xs">{previewErr}</span>}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="ml-auto text-xs text-neutral-500 hover:text-neutral-200"
+        >
+          Cancel
+        </button>
       </div>
+      {keptOpenForItsText && (
+        <p role="status" className="text-xs text-amber-300 mt-2">
+          Your CSV is still here. Press Cancel to discard it.
+        </p>
+      )}
 
       {preview && (
         <div className="mt-4 space-y-3">
@@ -386,6 +409,40 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+function IngestDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [csvText, setCsvText] = useState("");
+  const [askedToCloseWithText, setAskedToCloseWithText] = useState(false);
+  const holdsText = csvText.trim() !== "";
+
+  function close(): void {
+    setCsvText("");
+    setAskedToCloseWithText(false);
+    onClose();
+  }
+
+  function closeUnlessItHoldsText(): void {
+    if (holdsText) setAskedToCloseWithText(true);
+    else close();
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={closeUnlessItHoldsText}
+      title="Ingest from CSV"
+      widthClass="max-w-2xl"
+    >
+      <IngestPanel
+        csvText={csvText}
+        setCsvText={setCsvText}
+        keptOpenForItsText={askedToCloseWithText && holdsText}
+        onCancel={close}
+        onCommitted={close}
+      />
+    </Modal>
   );
 }
 
@@ -1168,14 +1225,7 @@ export function PipelineOps() {
         </div>
       </div>
 
-      <Modal
-        open={ingestOpen}
-        onClose={() => setIngestOpen(false)}
-        title="Ingest from CSV"
-        widthClass="max-w-2xl"
-      >
-        <IngestPanel onCommitted={() => setIngestOpen(false)} />
-      </Modal>
+      <IngestDialog open={ingestOpen} onClose={() => setIngestOpen(false)} />
     </div>
   );
 }

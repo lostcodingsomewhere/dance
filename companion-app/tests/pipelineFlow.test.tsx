@@ -298,4 +298,32 @@ describe("starting work from the Pipeline view", () => {
     expect(await within(csvDialog()).findByText(NOTHING_TO_DOWNLOAD)).toBeInTheDocument();
     expect(within(csvDialog()).queryByText(/API 400/)).not.toBeInTheDocument();
   });
+
+  it("keeps a pasted CSV when Escape or a click outside would close the dialog", async () => {
+    backend = new BoothBackend(aLibraryOf([FINISHED]));
+    renderPipelineView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ingest CSV…" }));
+    const field = within(csvDialog()).getByPlaceholderText(CSV_FIELD);
+    fireEvent.change(field, { target: { value: CSV } });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(csvDialog()).toBeInTheDocument();
+    expect(within(csvDialog()).getByPlaceholderText(CSV_FIELD)).toHaveValue(CSV);
+    expect(within(csvDialog()).getByRole("status")).toHaveTextContent(
+      "Your CSV is still here. Press Cancel to discard it.",
+    );
+
+    clickOutside(csvDialog());
+    expect(within(csvDialog()).getByPlaceholderText(CSV_FIELD)).toHaveValue(CSV);
+
+    fireEvent.click(within(csvDialog()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ingest CSV…" }));
+    expect(within(csvDialog()).getByPlaceholderText(CSV_FIELD)).toHaveValue("");
+    expect(within(csvDialog()).queryByRole("status")).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });
