@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from dance.als import AlsGenerator
 from dance.als.generator import AlsExportError, AlsOutsideDirError
-from dance.api.deps import get_session, get_settings, track_to_out
+from dance.api.deps import fullmix_analysis, get_session, get_settings, track_to_out
 from dance.api.schemas import (
     AlsExportRequest,
     AlsExportResult,
@@ -21,6 +21,7 @@ from dance.api.schemas import (
     RegionOut,
     StemFileOut,
     TrackOut,
+    TrackVersionOut,
     WaveformOut,
 )
 from dance.audio import get_or_compute_peaks
@@ -52,6 +53,7 @@ from dance.pipeline.utils.pads import (
     track_bpm,
 )
 from dance.recommender.dedup import dedupe_track_rows
+from dance.recommender.versions import version_index
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +136,23 @@ def search_tracks(
     # same recording three times — three of the palette's eight slots on one
     # song. Over-fetching keeps the list `limit` deep after the collapse.
     rows = query.limit(limit * _DEDUPE_OVERFETCH).all()
-    tracks = dedupe_track_rows(rows)[:limit]
+    tracks = _versions_together(session, dedupe_track_rows(rows)[:limit])
     return [track_to_out(session, t) for t in tracks]
+
+
+def _versions_together(session: Session, tracks: list[Track]) -> list[Track]:
+    versions = version_index(session)
+    family_of = {int(track.id): versions.family_id(int(track.id)) for track in tracks}
+    first_place: dict[int, int] = {}
+    for place, track in enumerate(tracks):
+        family = family_of[int(track.id)]
+        first_place.setdefault(family if family is not None else -int(track.id), place)
+
+    def place_of(track: Track) -> int:
+        family = family_of[int(track.id)]
+        return first_place[family if family is not None else -int(track.id)]
+
+    return sorted(tracks, key=place_of)
 
 
 @router.get("", response_model=list[TrackOut])
@@ -182,6 +199,34 @@ def get_track(
     if track is None:
         raise HTTPException(status_code=404, detail="track not found")
     return track_to_out(session, track)
+
+
+@router.get("/{track_id}/versions", response_model=list[TrackVersionOut])
+def list_versions(
+    track_id: int,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+    stands_for = int(track.duplicate_of) if track.duplicate_of is not None else track_id
+    out: list[dict] = []
+    for version in version_index(session).versions_of(stands_for):
+        other = session.get(Track, version.track_id)
+        analysis = fullmix_analysis(session, version.track_id)
+        out.append(
+            {
+                "track_id": version.track_id,
+                "title": other.title if other else None,
+                "artist": other.artist if other else None,
+                "duration_seconds": other.duration_seconds if other else None,
+                "bpm": analysis.bpm if analysis else None,
+                "key_camelot": analysis.key_camelot if analysis else None,
+                "floor_energy": analysis.floor_energy if analysis else None,
+                "label": version.label,
+            }
+        )
+    return out
 
 
 @router.get("/{track_id}/regions", response_model=list[RegionOut])

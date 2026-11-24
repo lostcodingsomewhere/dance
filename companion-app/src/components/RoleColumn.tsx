@@ -5,9 +5,10 @@ import { useColumnRecs } from "../hooks/useColumnRecs";
 import { useLoadToDeck } from "../hooks/useLoadToDeck";
 import { useSetPlan, usePlanMutations, usePlanRecs } from "../hooks/useSetPlan";
 import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePreview";
+import { formatDuration } from "../lib/format";
 import { publishZone } from "../lib/gridShape";
 import { isFocused, type Zone } from "../lib/gridNav";
-import { ROLE_STYLES, roleLabel, type StemRole } from "../lib/roles";
+import { ROLE_STYLES, roleLabel, type DeckSide, type StemRole } from "../lib/roles";
 import { store, useAppStore } from "../store";
 import type { ColumnRec, PlanItem, PlanRole } from "../types";
 import { ScoreBreakdown } from "./ScoreBreakdown";
@@ -72,6 +73,18 @@ function loadKinds(role: PlanRole): string[] | undefined {
   return role === "song" ? undefined : [role];
 }
 
+function versionNote(rec: ColumnRec): string | undefined {
+  if (rec.version_of == null) return undefined;
+  const original = rec.version_of_title ?? "a song you picked";
+  const length = rec.duration_seconds != null ? ` · ${formatDuration(rec.duration_seconds)}` : "";
+  return `${rec.version_label ?? "another cut"} of ${original}${length}`;
+}
+
+const LOAD_BUTTON_TONE: Record<DeckSide, string> = {
+  a: "bg-violet-700/70 hover:bg-violet-600",
+  b: "bg-violet-900/70 hover:bg-violet-800",
+};
+
 /**
  * One stem card — used for BOTH a queued plan pick and a rec. Always shows
  * ▶ preview. The deck-load buttons (⤒A/⤒B) only appear in **live** (Booth)
@@ -93,6 +106,8 @@ function StemRow({
   metaAction,
   tooltip,
   accent,
+  versionNote,
+  besideOriginalOn,
   focused,
   onFocus,
 }: {
@@ -110,6 +125,8 @@ function StemRow({
   metaAction?: React.ReactNode;
   tooltip?: string;
   accent?: boolean;
+  versionNote?: string;
+  besideOriginalOn?: DeckSide;
   /** Under the keyboard cursor — draws the focus ring and scrolls into view. */
   focused?: boolean;
   /** Clicking a card moves the keyboard cursor here, so mouse and keyboard
@@ -132,6 +149,8 @@ function StemRow({
   return (
     <div
       ref={cardRef}
+      role="group"
+      aria-label={title ?? `Track #${trackId}`}
       onMouseDown={onFocus}
       className={`rounded-md border px-2 py-1.5 text-xs ${
         accent ? "border-l-2 border-l-emerald-500/70 " : ""
@@ -174,6 +193,14 @@ function StemRow({
       <div className="text-[11px] text-neutral-400 truncate leading-tight">
         {artist ?? "—"}
       </div>
+      {versionNote && (
+        <div className="flex items-center gap-1 text-[10px] leading-tight text-fuchsia-200/90">
+          <span className="shrink-0 rounded bg-fuchsia-500/25 px-1 font-semibold uppercase tracking-wide">
+            version
+          </span>
+          <span className="truncate">{versionNote}</span>
+        </div>
+      )}
       <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 font-mono leading-tight">
         <span className="truncate flex-1 min-w-0">
           {bpm != null && <span>{bpm.toFixed(0)}</span>}
@@ -187,24 +214,24 @@ function StemRow({
       )}
       {mode === "live" && (
         <div className="mt-1 grid grid-cols-2 gap-1">
-          <button
-            type="button"
-            disabled={load.isPending}
-            onClick={() => load.mutate({ trackId, role, title, side: "a" })}
-            className="h-7 text-xs font-bold rounded bg-violet-700/70 hover:bg-violet-600 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
-            title="Load → Deck A"
-          >
-            {load.isPending ? "…" : <><span>⤒</span><span>A</span></>}
-          </button>
-          <button
-            type="button"
-            disabled={load.isPending}
-            onClick={() => load.mutate({ trackId, role, title, side: "b" })}
-            className="h-7 text-xs font-bold rounded bg-violet-900/70 hover:bg-violet-800 text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1"
-            title="Load → Deck B"
-          >
-            {load.isPending ? "…" : <><span>⤒</span><span>B</span></>}
-          </button>
+          {(["a", "b"] as const).map((side) => (
+            <button
+              key={side}
+              type="button"
+              disabled={load.isPending}
+              onClick={() => load.mutate({ trackId, role, title, side })}
+              className={`h-7 text-xs font-bold rounded text-white transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-1 ${
+                LOAD_BUTTON_TONE[side]
+              } ${side === besideOriginalOn ? "ring-2 ring-fuchsia-300/80" : ""}`}
+              title={
+                side === besideOriginalOn
+                  ? `Load → Deck ${side.toUpperCase()}, the deck beside its original`
+                  : `Load → Deck ${side.toUpperCase()}`
+              }
+            >
+              {load.isPending ? "…" : <><span>⤒</span><span>{side.toUpperCase()}</span></>}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -285,6 +312,7 @@ function PlanRecCard({
   focused,
   onFocus,
   onAdd,
+  besideOriginalOn,
 }: {
   rec: ColumnRec;
   role: PlanRole;
@@ -292,6 +320,7 @@ function PlanRecCard({
   focused?: boolean;
   onFocus?: () => void;
   onAdd?: () => void;
+  besideOriginalOn?: DeckSide;
 }) {
   return (
     <StemRow
@@ -303,6 +332,8 @@ function PlanRecCard({
       energy={rec.floor_energy}
       role={role}
       mode={mode}
+      versionNote={versionNote(rec)}
+      besideOriginalOn={besideOriginalOn}
       focused={focused}
       onFocus={onFocus}
       leading={`${Math.round(rec.score * 100)}`}
@@ -395,6 +426,11 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
       </div>
     );
   }
+  const deckBesideTheOriginal = (rec: ColumnRec): DeckSide | undefined => {
+    const original = rec.version_of == null ? undefined : recs.deckOfSong.get(rec.version_of);
+    if (original == null) return undefined;
+    return original === "a" ? "b" : "a";
+  };
   return (
     <RecsList
       loading={recs.isLoading}
@@ -402,6 +438,7 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
       role={role}
       mode="live"
       onAdd={setId != null ? (tid) => addToRole(role, tid) : undefined}
+      deckBesideTheOriginal={deckBesideTheOriginal}
     />
   );
 }
@@ -413,12 +450,14 @@ function RecsList({
   mode,
   onAdd,
   note,
+  deckBesideTheOriginal,
 }: {
   loading: boolean;
   recs: ColumnRec[];
   role: PlanRole;
   mode: Mode;
   onAdd?: (trackId: number) => void;
+  deckBesideTheOriginal?: (rec: ColumnRec) => DeckSide | undefined;
   /** Where these came from, when it isn't the obvious one. Keeps the DJ from
    *  wondering why the Booth is showing plan-scored picks. */
   note?: string;
@@ -445,6 +484,7 @@ function RecsList({
           focused={isFocused(focus, role, "recs", i)}
           onFocus={() => store.setGridFocus({ role, zone: "recs", index: i })}
           onAdd={onAdd ? () => onAdd(rec.track_id) : undefined}
+          besideOriginalOn={deckBesideTheOriginal?.(rec)}
         />
       ))}
     </div>

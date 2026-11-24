@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api";
-import type { SetPlan } from "../types";
+import type { ColumnRecsResponse, SetPlan } from "../types";
 
 const KEY = (setId: number) => ["sets", setId, "plan"] as const;
 
@@ -57,9 +57,20 @@ export function usePlanMutations(setId: number | null) {
   // first — the earlier pick vanishes with no error. The append endpoint
   // merges server-side against the row itself, which has neither problem,
   // and it validates the track id.
+  const originalOfVersion = (role: string, trackId: number): number | null => {
+    const recLists = qc.getQueriesData<ColumnRecsResponse>({
+      queryKey: ["sets", setId, "plan-recs", role],
+    });
+    for (const [, list] of recLists) {
+      const rec = list?.recs.find((r) => r.track_id === trackId);
+      if (rec?.version_of != null) return rec.version_of;
+    }
+    return null;
+  };
+
   const addToRole = (role: string, trackId: number) => {
     if (setId == null) return;
-    append.mutate({ setId, role, trackId });
+    append.mutate({ setId, role, trackId, afterTrackId: originalOfVersion(role, trackId) });
   };
 
   const removeFromRole = (role: string, index: number) => {
@@ -90,8 +101,12 @@ export function usePlanMutations(setId: number | null) {
 export function useAppendToPlan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { setId: number; role: string; trackId: number }) =>
-      api.appendToPlan(v.setId, v.role, v.trackId),
+    mutationFn: (v: {
+      setId: number;
+      role: string;
+      trackId: number;
+      afterTrackId?: number | null;
+    }) => api.appendToPlan(v.setId, v.role, v.trackId, v.afterTrackId ?? null),
     onSuccess: (plan, v) => {
       qc.setQueryData(KEY(v.setId), plan);
       qc.invalidateQueries({ queryKey: ["sets", v.setId] });

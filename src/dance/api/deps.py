@@ -20,6 +20,9 @@ from dance.core.database import (
     TrackTag,
 )
 from dance.osc.bridge import AbletonBridge
+from dance.pipeline.utils.pads import MIX_ROLE
+from dance.recommender.recommender import ColumnRecResult
+from dance.recommender.versions import LeadingVersion, leading_versions, version_index
 
 
 # These functions are placeholders — ``create_app`` overrides them via
@@ -77,6 +80,7 @@ def track_to_out(session: Session, track: Track) -> dict:
     Returns a plain dict so callers can let pydantic v2 validate the response.
     """
     analysis = fullmix_analysis(session, int(track.id))
+    versions = version_index(session)
     return {
         "id": int(track.id),
         "file_path": track.file_path,
@@ -86,15 +90,58 @@ def track_to_out(session: Session, track: Track) -> dict:
         "state": track.state,
         "analysis": analysis,
         "tags": track_tag_values(session, int(track.id)),
+        "version_count": len(versions.versions_of(int(track.id))),
+        "version_family": versions.family_id(int(track.id)),
     }
 
 
+def column_rec_out(
+    session: Session, rec: ColumnRecResult, leading: dict[int, LeadingVersion]
+) -> dict:
+    track = session.get(Track, rec.track_id)
+    analysis = fullmix_analysis(session, rec.track_id)
+    version = leading.get(rec.track_id)
+    original = session.get(Track, version.of_track_id) if version else None
+    return {
+        "track_id": rec.track_id,
+        "stem_file_id": rec.stem_file_id,
+        "track_title": track.title if track else None,
+        "track_artist": track.artist if track else None,
+        "duration_seconds": track.duration_seconds if track else None,
+        "bpm": float(analysis.bpm) if analysis and analysis.bpm is not None else None,
+        "key_camelot": analysis.key_camelot if analysis else None,
+        "floor_energy": (
+            int(analysis.floor_energy)
+            if analysis and analysis.floor_energy is not None
+            else None
+        ),
+        "score": rec.score,
+        "score_breakdown": rec.score_breakdown,
+        "reasons": rec.reasons,
+        "version_of": version.of_track_id if version else None,
+        "version_of_title": original.title if original else None,
+        "version_label": version.label if version else None,
+    }
+
+
+def versions_leading_a_column(
+    session: Session, column: str, of_track_ids: list[int], *, skip: list[int], k: int
+) -> dict[int, LeadingVersion]:
+    if column != MIX_ROLE:
+        return {}
+    return leading_versions(
+        version_index(session), of_track_ids, skip=skip, limit=max(1, k // 2)
+    )
+
+
 __all__ = [
+    "column_rec_out",
     "fullmix_analysis",
     "get_bridge",
     "get_session",
     "get_settings",
     "track_tag_values",
     "track_to_out",
+    "versions_leading_a_column",
     "Depends",
 ]

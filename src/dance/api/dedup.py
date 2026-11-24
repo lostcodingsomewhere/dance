@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
+from dance.recommender.versions import VERSION_WORDS
+
 _NON_ALNUM = re.compile(r"[^a-z0-9\s]+")
 _WS = re.compile(r"\s+")
 
@@ -50,16 +52,9 @@ _WS = re.compile(r"\s+")
 #: Mirrors ``dance.recommender.dedup.SAME_RECORDING_TOLERANCE_S``.
 SAME_RECORDING_TOLERANCE_S = 5.0
 
-#: Title words that name a *version*. Two titles whose sets of these differ
-#: are different recordings, however similar the rest of the string is.
-VERSION_WORDS = frozenset(
-    {
-        "remix", "rmx", "extended", "edit", "mix", "mixed", "live", "acoustic",
-        "instrumental", "acapella", "vip", "dub", "rework", "bootleg", "flip",
-        "radio", "club", "version", "remaster", "remastered", "reprise", "demo",
-        "unplugged", "slowed", "sped", "nightcore", "cover", "karaoke",
-    }
-)
+#: Title words that name a *version* (``VERSION_WORDS``). Two titles whose sets
+#: of these differ are different recordings, however similar the rest of the
+#: string is.
 # "Original Mix" is the default version, not a different one: strip it before
 # comparing version words so ``Title (Original Mix)`` still matches ``Title``.
 _ORIGINAL_MIX = re.compile(r"\boriginal mix\b")

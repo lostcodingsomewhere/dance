@@ -304,6 +304,7 @@ class _ColumnRecommenderImpl:
         k: int,
         exclude_track_ids: list[int],
         trailing_track_ids: list[int] | None,
+        lead_track_ids: list[int] | None = None,
     ) -> list[ColumnRecResult]:
         if column not in VALID_COLUMNS:
             raise ValueError(f"unknown column {column!r}; valid: {VALID_COLUMNS}")
@@ -347,6 +348,9 @@ class _ColumnRecommenderImpl:
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
+        if lead_track_ids:
+            place = {track_id: index for index, track_id in enumerate(lead_track_ids)}
+            results.sort(key=lambda r: place.get(r.track_id, len(place)))
         # Collapse duplicate RECORDINGS before truncating, so a rec list never
         # spends two of its k slots on the same song ingested twice. Done after
         # the sort so the copy the scorer preferred is the one kept, and before
@@ -591,13 +595,15 @@ def recommend_by_column(
     k: int = 5,
     exclude_track_ids: list[int] | None = None,
     trailing_track_ids: list[int] | None = None,
+    lead_track_ids: list[int] | None = None,
 ) -> list[ColumnRecResult]:
     """Top-K candidate stems (or tracks for ``column='mix'``) for this column,
     re-scored against the active combo through the shared scoring core.
 
     ``trailing_track_ids`` is the recent live-set sequence; when supplied the
     recommender gains trend-aware vibe and a soft anti-repetition penalty.
-    Stateless — load + score + sort in one call.
+    ``lead_track_ids`` are placed first, in the order given, ahead of the
+    scored list. Stateless — load + score + sort in one call.
     """
     impl = _ColumnRecommenderImpl(session)
     return impl.run(
@@ -607,6 +613,7 @@ def recommend_by_column(
         k=k,
         exclude_track_ids=list(exclude_track_ids or []),
         trailing_track_ids=list(trailing_track_ids) if trailing_track_ids else None,
+        lead_track_ids=lead_track_ids,
     )
 
 

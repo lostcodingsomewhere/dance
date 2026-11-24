@@ -190,11 +190,12 @@ export function CommandBar() {
             count={fuzzyHits.length}
             loading={fuzzy.isLoading}
           >
-            {fuzzyHits.map((t) => (
+            {fuzzyHits.map((t, place) => (
               <TrackRow
                 key={`fuzzy-${t.id}`}
                 track={t}
                 activeSetId={activeSet?.id ?? null}
+                versionMark={versionMark(fuzzyHits, place)}
               />
             ))}
           </Section>
@@ -381,16 +382,31 @@ function SectionError({ msg }: { msg: string }) {
   return <div className="m-2 text-sm text-rose-300">{msg}</div>;
 }
 
+type VersionMark = { text: string; underTheRowAbove: boolean } | null;
+
+function versionMark(hits: Track[], place: number): VersionMark {
+  const family = hits[place].version_family ?? null;
+  if (family == null) return null;
+  if (place > 0 && hits[place - 1].version_family === family) {
+    return { text: "version", underTheRowAbove: true };
+  }
+  const together = hits.filter((hit) => hit.version_family === family).length;
+  return together > 1 ? { text: `${together} versions`, underTheRowAbove: false } : null;
+}
+
 function TrackRow({
   track,
   activeSetId,
+  versionMark,
 }: {
   track: Track;
   activeSetId: number | null;
+  versionMark: VersionMark;
 }) {
   const analysis = track.analysis;
   return (
     <RowShell
+      versionMark={versionMark}
       title={track.title ?? `Track #${track.id}`}
       artist={track.artist}
       bpm={analysis?.bpm ?? null}
@@ -439,6 +455,7 @@ function RowShell({
   trackId,
   filePath,
   activeSetId,
+  versionMark = null,
 }: {
   title: string;
   artist: string | null;
@@ -450,6 +467,7 @@ function RowShell({
   trackId: number;
   filePath: string | null;
   activeSetId: number | null;
+  versionMark?: VersionMark;
 }) {
   const addToPlan = useAppendToPlan();
   const scheduleWarpCheck = useWarpCheck();
@@ -504,11 +522,22 @@ function RowShell({
   }
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60">
+    <div
+      role="group"
+      aria-label={`Search result: ${title}`}
+      className={`flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60 ${
+        versionMark?.underTheRowAbove ? "ml-5 border-l border-fuchsia-500/40" : ""
+      }`}
+    >
       <KeyBadge keyCamelot={keyCamelot ?? null} size="sm" />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-neutral-100 truncate">
-          {title}
+        <div className="flex items-center gap-1.5 text-sm font-semibold text-neutral-100">
+          <span className="truncate">{title}</span>
+          {versionMark && (
+            <span className="shrink-0 rounded bg-fuchsia-500/25 px-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200/90">
+              {versionMark.text}
+            </span>
+          )}
         </div>
         <div className="text-xs text-neutral-500 truncate">
           {artist ?? "Unknown"}
