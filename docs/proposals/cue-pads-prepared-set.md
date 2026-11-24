@@ -225,7 +225,7 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
 **Step 5, version families (read side)**
 
 - Built on 2026-11-24. Live is not involved. Checked in a browser on a copy of the
-  library; nobody has used it in a set.
+  library; nobody has used it in a set. Merged to `main` on 2026-11-24.
 - The rule is option A: worked out per request from the track table, nothing
   stored (`recommender/versions.py`). Two tracks are versions of one song when
   they have the same base title, share at least one credited artist, and are not
