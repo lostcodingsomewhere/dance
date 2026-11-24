@@ -38,7 +38,12 @@ function track(
 }
 
 const FAILED = track({ id: 7, title: "Night Drive", state: "error", error_message: OUT_OF_MEMORY });
-const FILE_MISSING = track({ id: 8, title: "Half Light", state: "error", error_message: FILE_IS_GONE });
+const FILE_MISSING = track({
+  id: 8,
+  title: "Half Light",
+  state: "error",
+  error_message: FILE_IS_GONE,
+});
 const FINISHED = track({ id: 9, title: "Slow Burn" });
 
 function statusOf(tracks: PipelineRecentTrack[]) {
@@ -307,7 +312,7 @@ describe("starting work from the Pipeline view", () => {
     const field = within(csvDialog()).getByPlaceholderText(CSV_FIELD);
     fireEvent.change(field, { target: { value: CSV } });
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(field, { key: "Escape" });
     expect(csvDialog()).toBeInTheDocument();
     expect(within(csvDialog()).getByPlaceholderText(CSV_FIELD)).toHaveValue(CSV);
     expect(within(csvDialog()).getByRole("status")).toHaveTextContent(
@@ -321,9 +326,10 @@ describe("starting work from the Pipeline view", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Ingest CSV…" }));
-    expect(within(csvDialog()).getByPlaceholderText(CSV_FIELD)).toHaveValue("");
+    const emptyField = within(csvDialog()).getByPlaceholderText(CSV_FIELD);
+    expect(emptyField).toHaveValue("");
     expect(within(csvDialog()).queryByRole("status")).not.toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(emptyField, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
