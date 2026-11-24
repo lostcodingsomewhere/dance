@@ -115,7 +115,6 @@ async function bothDecksPlayingWithTheNextPickArmed(): Promise<void> {
   fireEvent.click(await screen.findByTitle("Load → Deck A"));
   await screen.findByTestId("armed-a");
   await within(deck("A")).findByRole("button", { name: "SYNC" });
-  await within(deck("A")).findByTestId("waveform-section-icon");
   await screen.findByRole("button", { name: "Fire riser" });
 }
 
@@ -205,21 +204,25 @@ describe("a deck panel in the middle of a set", () => {
     expect(screen.getByRole("button", { name: "Fire riser" })).toHaveClass("h-6");
   });
 
-  it("shows no text under 11 px", () => {
+  it("shows no text under 11 px", async () => {
+    const sectionIcon = await within(deck("A")).findByTestId("waveform-section-icon");
     const sized = sizedTextsIn(screen.getByTestId("two-deck-strip"));
     const everyKindOfTextOnADeck = [
       "▶ live",
       "armed · 6",
+      "▶",
+      "■",
       "PFL",
       "HPF",
       "REV",
       "DLY",
       "Test Artist",
+      `${SLOWER_THAN_LIVE_BPM}SYNC· 8A· E6`,
       "SYNC",
       "mixed",
       `◇${ON_DECK_A.title}`,
       "1 intro",
-      "▷",
+      sectionIcon.textContent,
       "—:—4:00",
       "▲ Riser",
     ];
