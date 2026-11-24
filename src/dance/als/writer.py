@@ -214,7 +214,7 @@ class PlacedClip:
     name: str
     start_beats: float
     loop_beats: float | None
-    color_index: int
+    color_index: int | None
     muted: bool = False
 
 

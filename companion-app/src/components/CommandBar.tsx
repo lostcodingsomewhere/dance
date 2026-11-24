@@ -463,10 +463,9 @@ function RowShell({
   async function loadToLive() {
     try {
       setLoading(true);
-      const sceneIndex = store.peekNextScene();
       const r = await pushTrackToLive(trackId, {
         includeStems: true,
-        sceneIndex,
+        page: store.peekBoothPage(),
       });
       store.registerDeck({
         track_id: trackId,

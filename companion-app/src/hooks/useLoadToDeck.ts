@@ -46,6 +46,7 @@ export function useLoadToDeck() {
         includeStems: true,
         kinds: loadKinds(role),
         side,
+        page: store.peekBoothPage(),
       }),
     onSuccess: (result, { trackId, title, side }) => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });

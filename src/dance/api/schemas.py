@@ -493,6 +493,8 @@ class LoadTrackRequest(BaseModel):
     # load buttons so the DJ has direct control over which deck gets the
     # incoming track.
     side: str | None = None
+    # Where to start looking for free deck columns; None starts at scene_index's page.
+    page: int | None = Field(default=None, ge=0)
 
 
 class LoadTrackResult(BaseModel):
@@ -507,6 +509,7 @@ class LoadTrackResult(BaseModel):
 
     ok: bool
     scene_index: int
+    page: int
     # Which deck side received the load ("a" / "b"). The request may omit
     # ``side`` and let the bridge pick the less-full one, so this is the only
     # way the companion learns which deck to arm for playback.

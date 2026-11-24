@@ -13,6 +13,7 @@ import { formatDuration } from "../lib/format";
 import {
   cueText,
   pageCount,
+  pageOfScene,
   pagesPlaying,
   scenesOnPage,
   songTitlesOnPage,
@@ -55,15 +56,12 @@ export function SceneGrid() {
   const deleteCell = useDeleteCell();
   const qc = useQueryClient();
   const scheduleWarpCheck = useWarpCheck();
-  // Anchor-fill: load all 4 stems from a single-stem row's track into the
-  // same row. Backend already supports it — pass scene_index=this row,
-  // kinds=undefined (= full song). Lone stem gets overwritten with the
-  // same audio, the 3 missing stems join it = instant anchor.
   const anchorFill = useMutation({
-    mutationFn: (vars: { trackId: number; sceneIdx: number }) =>
+    mutationFn: (vars: { trackId: number; sceneIdx: number; side: "a" | "b" }) =>
       pushTrackToLive(vars.trackId, {
         includeStems: true,
-        sceneIndex: vars.sceneIdx,
+        side: vars.side,
+        page: pageOfScene(vars.sceneIdx),
       }),
     onSuccess: (result, vars) => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
@@ -254,6 +252,7 @@ export function SceneGrid() {
                           anchorFill.mutate({
                             trackId: cell.track_id,
                             sceneIdx,
+                            side: deckKind.endsWith("_b") ? "b" : "a",
                           })
                       : undefined
                   }

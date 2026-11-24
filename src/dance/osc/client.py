@@ -314,6 +314,21 @@ class AbletonOSCClient:
     def delete_clip(self, track: int, slot: int) -> None:
         self._send("/live/clip_slot/delete_clip", track, slot)
 
+    def duplicate_clip_to(self, track: int, slot: int, target_track: int, target_slot: int) -> None:
+        self._send("/live/clip_slot/duplicate_clip_to", track, slot, target_track, target_slot)
+
+    def set_clip_looping(self, track: int, slot: int, looping: bool) -> None:
+        self._send("/live/clip/set/looping", track, slot, 1 if looping else 0)
+
+    def set_clip_muted(self, track: int, slot: int, muted: bool) -> None:
+        self._send("/live/clip/set/muted", track, slot, 1 if muted else 0)
+
+    def set_clip_loop_end(self, track: int, slot: int, beats: float) -> None:
+        self._send("/live/clip/set/loop_end", track, slot, beats)
+
+    def set_clip_end_marker(self, track: int, slot: int, beats: float) -> None:
+        self._send("/live/clip/set/end_marker", track, slot, beats)
+
     def set_clip_warp(self, track: int, slot: int, warp: bool) -> None:
         self._send("/live/clip/set/warping", track, slot, 1 if warp else 0)
 
@@ -321,30 +336,17 @@ class AbletonOSCClient:
         """Set the clip's warp ALGORITHM (not whether it warps).
 
         Live's WarpMode enum: 0=Beats, 1=Tones, 2=Texture, 3=Re-Pitch,
-        4=Complex, 6=Complex Pro. We force 0 (Beats) to match what the
-        offline .als writer emits (``als/writer.py`` → ``WarpMode 0``) —
-        the two load paths disagreeing on warp is exactly the drift that
-        makes a stem sound fine from a generated Set and wrong when
-        live-loaded.
-
-        Warp MARKERS are not settable over OSC — AbletonOSC's clip handler
-        explicitly excludes ``warp_markers`` ("Infered arg_value type is not
-        supported"). So we can pin the algorithm but not the grid; catching
-        a bad grid is what ``AbletonBridge._check_warp_agreement`` is for.
+        4=Complex, 6=Complex Pro. The bridge sends the mode the .als writer
+        gives the same stem (``als/writer.py`` ``WARP_MODE_BY_KIND``), so a
+        live-loaded stem and an exported one are stretched the same way.
         """
         self._send("/live/clip/set/warp_mode", track, slot, mode)
 
     # -- Warp markers -------------------------------------------------------
     #
-    # Live's Clip exposes add/move/remove_warp_marker as public LOM methods
-    # (Live 11+). Stock AbletonOSC doesn't register them — ``add_warp_marker``
-    # takes a DICT and the generic method dispatcher splats positional args —
-    # so our fork adds thin handlers that rebuild the dict. See
-    # docs/proposals/warp-guard.md.
-    #
-    # UNVERIFIED AGAINST LIVE: the fork patch only takes effect after Live
-    # reloads its Remote Scripts. Use ``scripts/warp_probe.py`` to confirm
-    # before relying on any of this.
+    # Handlers from vendor/abletonosc patch 0005, checked on Live 12.4.3
+    # (docs/live-compat.md, 2026-11-24). ``add_warp_marker`` refuses a dict
+    # there, so the patch builds a ``Live.Clip.WarpMarker``.
 
     def add_warp_marker(
         self, track: int, slot: int, beat_time: float, sample_time: float

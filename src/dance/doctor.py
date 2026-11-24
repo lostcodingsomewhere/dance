@@ -798,7 +798,7 @@ KNOWN_PATCHES: tuple[OscPatch, ...] = (
     ),
     OscPatch(
         "warp_markers",
-        "warp-marker read/repair (scripts/warp_probe.py)",
+        "warp-marker read and write (a live load puts the song's own grid on its clips)",
         f"{_PATCH_DIR}/0005-clip-read-and-edit-warp-markers-as-plain-floats.patch",
         frozenset(
             {
@@ -812,6 +812,9 @@ KNOWN_PATCHES: tuple[OscPatch, ...] = (
 
 _LOG_FIX_DOC = f"{_PATCH_DIR}/0002-clip_slot-fix-the-logging-call-that-raised-on-every-.patch"
 _LOG_BUG_RE = re.compile(r"logger\.info\(\s*track_index\s*,")
+_WARP_MARKER_DOC = f"{_PATCH_DIR}/0005-clip-read-and-edit-warp-markers-as-plain-floats.patch"
+_WARP_MARKER_AS_DICT_RE = re.compile(r"\.add_warp_marker\(\s*\{")
+_WARP_MARKER_OBJECT_RE = re.compile(r"\bWarpMarker\b")
 
 
 class _HandlerScanner(ast.NodeVisitor):
@@ -1129,6 +1132,22 @@ def check_abletonosc(
         fixes.append(f"logging fix: {_LOG_FIX_DOC}")
     else:
         installed_patches.append("clip_slot_log_fix")
+
+    clip_handlers = root / "abletonosc" / "clip.py"
+    try:
+        clip_source = clip_handlers.read_text(encoding="utf-8")
+    except OSError:
+        clip_source = ""
+    if _WARP_MARKER_AS_DICT_RE.search(clip_source) and not _WARP_MARKER_OBJECT_RE.search(
+        clip_source
+    ):
+        statuses.append(FAIL)
+        details.append(
+            "the add_warp_marker handler passes Live a dict, which Live 12.4 refuses "
+            "(TypeError in Live's log); a live load then keeps Live's own warp grid and "
+            "its cue pads start in the wrong place"
+        )
+        fixes.append(f"warp markers: {_WARP_MARKER_DOC}")
 
     if installed_patches:
         details.insert(1, "patches present: " + ", ".join(installed_patches))

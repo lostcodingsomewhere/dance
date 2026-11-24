@@ -81,10 +81,9 @@ export function LoadActions({
     try {
       setError(null);
       setPushing(true);
-      const sceneIndex = store.peekNextScene();
       const result = await pushTrackToLive(trackId, {
         includeStems: true,
-        sceneIndex,
+        page: store.peekBoothPage(),
       });
       // Track which scene this dance-track now occupies so the Booth can
       // auto-detect when its clips fire and stop double-loading the same

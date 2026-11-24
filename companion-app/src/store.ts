@@ -203,9 +203,8 @@ export const store = {
     state = { ...state, currentView: view };
     emit();
   },
-  /** Same as nextSceneIndex(state.loadedDecks) but for non-React callsites. */
-  peekNextScene(): number {
-    return nextSceneIndex(state.loadedDecks);
+  peekBoothPage(): number {
+    return state.boothPage;
   },
   setSessionId(id: number | null): void {
     state = { ...state, currentSessionId: id };

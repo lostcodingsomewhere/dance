@@ -157,6 +157,10 @@ against real Live with real stems, instead of against fixtures.
   always did this — the two paths had silently diverged); `check_warp_at` +
   `POST /ableton/warp-check/{scene}`; an 18 s-delayed audit from the companion
   into a sticky amber banner naming the cell and the fix (`*2` / `:2`).
+- 2026-11-24, step 4 of `docs/proposals/cue-pads-prepared-set.md` (checked against
+  Live 12.4.3 over OSC, not listened to): a load sends each stem's own warp mode
+  and writes the song's tempo grid onto its clips, and the audit checks that grid
+  in place of the length comparison.
 - Two timing facts that shaped the design, both measured: a fresh clip reports a
   **placeholder** length (= project tempo) for ~13–15 s, so an inline check reads
   it and always says all-clear; and **stamping the project tempo before loading

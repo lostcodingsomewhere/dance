@@ -64,6 +64,7 @@ export function CueStrip() {
       return pushTrackToLive(previewing.trackId, {
         includeStems: true,
         kinds,
+        page: store.peekBoothPage(),
       });
     },
     onSuccess: (result) => {

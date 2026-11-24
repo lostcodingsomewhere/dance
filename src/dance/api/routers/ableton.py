@@ -28,11 +28,13 @@ from dance.api.schemas import (
     VolumeRequest,
     WarpCheckResult,
 )
+from dance.als.cue_clips import WHOLE_SONG_FROM_THE_TOP, CueClip, cue_clips_by_role
 from dance.core.database import AudioAnalysis, StemFile, Track
 from dance.osc.bridge import AbletonBridge
 from dance.pipeline.utils.pads import (
     MIX_ROLE,
     PAD_COUNT,
+    PAD_ROLE_ORDER,
     TrackPad,
     load_track_pads,
     pad_start_beats,
@@ -497,16 +499,31 @@ def load_track(
     if analysis is not None and analysis.bpm and track.duration_seconds:
         expected_beats = float(track.duration_seconds) * float(analysis.bpm) / 60.0
 
+    bpm = track_bpm(session, int(track.id))
+    on_its_own_grid = body.include_stems and bpm > 0 and (track.duration_seconds or 0) > 1
+    cue_warnings: list[str] = []
     try:
-        result = bridge.push_track_to_live(
-            track,
-            stems,
-            include_stems=body.include_stems,
-            scene_index=body.scene_index,
-            kinds=body.kinds,
-            side=body.side,
-            expected_beats=expected_beats,
-        )
+        if on_its_own_grid:
+            cues = _cues_for_load(session, int(track.id), bpm, cue_warnings)
+            result = bridge.push_cue_pads_to_live(
+                track,
+                stems,
+                cues=cues,
+                bpm=bpm,
+                kinds=body.kinds,
+                side=body.side,
+                page=_page_asked_for(body),
+            )
+        else:
+            result = bridge.push_track_to_live(
+                track,
+                stems,
+                include_stems=body.include_stems,
+                scene_index=body.scene_index,
+                kinds=body.kinds,
+                side=body.side,
+                expected_beats=expected_beats,
+            )
     except OSError as exc:
         logger.warning("OSC send failed during load-track: %s", exc)
         raise HTTPException(
@@ -517,7 +534,11 @@ def load_track(
     title = track.title or track.file_name or f"Track {track.id}"
     stems_loaded = result.get("stems_loaded", 0)
     is_full_song = body.kinds is None and body.include_stems
-    if is_full_song and stems_loaded == 4:
+    if on_its_own_grid and stems_loaded > 0:
+        message = (
+            f"Loaded {title!r} on page {result['page'] + 1}, deck {result['side'].upper()}."
+        )
+    elif is_full_song and stems_loaded == 4:
         message = (
             f"Loaded {title!r} into scene {result['scene_index'] + 1}. Fire the scene to play."
         )
@@ -530,12 +551,32 @@ def load_track(
     return LoadTrackResult(
         ok=True,
         scene_index=result["scene_index"],
+        page=result.get("page", result["scene_index"] // PAD_COUNT),
         side=result.get("side"),
         track_indices=result["track_indices"],
         stems_loaded=stems_loaded,
         message=message,
-        warnings=result.get("warnings", []),
+        warnings=[*cue_warnings, *result.get("warnings", [])],
     )
+
+
+def _page_asked_for(body: LoadTrackRequest) -> int:
+    if body.page is not None:
+        return body.page
+    return (body.scene_index or 0) // PAD_COUNT
+
+
+def _cues_for_load(
+    session: Session, track_id: int, bpm: float, warnings: list[str]
+) -> dict[str, list[CueClip]]:
+    cues = cue_clips_by_role(session, track_id, bpm)
+    without_pads = [role for role in PAD_ROLE_ORDER if not cues.get(role)]
+    if without_pads:
+        warnings.append(
+            "This song has no cue pads yet, so each stem was loaded whole on the first "
+            "row. Run `dance reprocess --from detect_regions` to give it pads."
+        )
+    return {role: cues.get(role) or [WHOLE_SONG_FROM_THE_TOP] for role in PAD_ROLE_ORDER}
 
 
 @router.post("/warp-check/{scene_index}", response_model=WarpCheckResult)
