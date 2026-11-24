@@ -31,6 +31,7 @@ from dance.core.database import (
     Track,
     TrackEdge,
     TrackEmbedding,
+    TrackState,
 )
 from dance.core.embedding_scheme import current_scheme
 from dance.core.serialization import decode_embedding
@@ -196,10 +197,16 @@ class Recommender:
         query_norm = float(np.linalg.norm(query_vec)) or 1.0
         query_vec = query_vec / query_norm
 
-        # Pull all full-mix embeddings (one per track).
+        # Redundant copies and unfinished tracks would take slots from songs that can be loaded.
         embed_q = (
             self.session.query(TrackEmbedding)
-            .filter(TrackEmbedding.stem_file_id.is_(None), current_scheme())
+            .join(Track, Track.id == TrackEmbedding.track_id)
+            .filter(
+                TrackEmbedding.stem_file_id.is_(None),
+                current_scheme(),
+                Track.duplicate_of.is_(None),
+                Track.state == TrackState.COMPLETE.value,
+            )
         )
         if model_name:
             embed_q = embed_q.filter(TrackEmbedding.model == model_name)
