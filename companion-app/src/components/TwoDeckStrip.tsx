@@ -135,36 +135,12 @@ export function TwoDeckStrip() {
   }
 
   return (
-    <div className="relative" data-testid="two-deck-strip">
-      {/* One-shot FX cluster — sits ON TOP of the deck panels, centered
-          between them. Riser fires the named FX clip; quantized to the
-          next bar by the .als writer's LaunchQuantisation = 1. Disabled
-          (with a tooltip explaining why) when the .als doesn't have a
-          riser clip authored yet. */}
-      <div
-        className="absolute left-1/2 top-0 -translate-x-1/2 z-10 flex items-center gap-1 pt-1"
-        data-testid="fx-cluster"
-      >
-        <button
-          type="button"
-          onClick={() => fxFire.mutate("riser")}
-          disabled={!riserAvailable || fxFire.isPending}
-          title={
-            riserAvailable
-              ? "Fire the Riser one-shot on the next bar"
-              : "No 'Riser' clip in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
-          }
-          aria-label="Fire riser"
-          className={`text-[10px] font-bold uppercase tracking-widest leading-none rounded px-2.5 py-1.5 border transition-colors ${
-            riserAvailable
-              ? "bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
-              : "bg-neutral-900 text-neutral-700 border-neutral-800 cursor-not-allowed"
-          }`}
-        >
-          ▲ Riser
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
+    <div
+      className={`grid gap-2 ${
+        riserAvailable ? "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]" : "grid-cols-2"
+      }`}
+      data-testid="two-deck-strip"
+    >
       <DeckPanel
         side="a"
         columns={columns}
@@ -201,6 +177,21 @@ export function TwoDeckStrip() {
           seek.mutate({ track, slot, positionBeats: beats })
         }
       />
+      {riserAvailable && (
+        // Same border and top padding as a deck panel, so the Riser lines up with the deck headers.
+        <div className="border border-transparent pt-2" data-testid="fx-cluster">
+          <button
+            type="button"
+            onClick={() => fxFire.mutate("riser")}
+            disabled={fxFire.isPending}
+            title="Fire the Riser one-shot on the next bar"
+            aria-label="Fire riser"
+            className="text-[10px] font-bold uppercase tracking-widest leading-none rounded px-2.5 py-1.5 border transition-colors bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
+          >
+            ▲ Riser
+          </button>
+        </div>
+      )}
       <DeckPanel
         side="b"
         columns={columns}
@@ -237,7 +228,6 @@ export function TwoDeckStrip() {
           seek.mutate({ track, slot, positionBeats: beats })
         }
       />
-      </div>
     </div>
   );
 }
@@ -693,81 +683,72 @@ function DeckHeader({
       >
         PFL
       </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          // Shift-click = continuous 4-bar sweep. Plain click = snap toggle.
-          // Gives DJs both gestures on one button: tap for instant, hold
-          // shift for analog-style ramp.
-          if (e.shiftKey) onSweepFilter(4);
-          else onToggleFilter();
-        }}
-        disabled={!filterAvailable}
-        title={
-          !filterAvailable
-            ? "No 'Filter' return in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
-            : filterActive
-            ? `Filter off — Deck ${sideLabel} returns to full range\nShift-click = 4-bar sweep`
-            : `Filter on — HPF Deck ${sideLabel} (cuts lows)\nShift-click = 4-bar sweep`
-        }
-        aria-pressed={filterActive}
-        aria-label={`HPF Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !filterAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : filterActive
-            ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
-            : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
-        }`}
-      >
-        HPF
-      </button>
-      <button
-        type="button"
-        onClick={onToggleReverb}
-        disabled={!reverbAvailable}
-        title={
-          !reverbAvailable
-            ? "No 'Reverb' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
-            : reverbActive
-            ? `Reverb off — Deck ${sideLabel} dry`
-            : `Reverb throw — send Deck ${sideLabel} into the reverb tail`
-        }
-        aria-pressed={reverbActive}
-        aria-label={`Reverb throw Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !reverbAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : reverbActive
-            ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
-            : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
-        }`}
-      >
-        REV
-      </button>
-      <button
-        type="button"
-        onClick={onToggleDelay}
-        disabled={!delayAvailable}
-        title={
-          !delayAvailable
-            ? "No 'Delay' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
-            : delayActive
-            ? `Delay off — Deck ${sideLabel} dry`
-            : `Delay throw — echo Deck ${sideLabel} into the next bars`
-        }
-        aria-pressed={delayActive}
-        aria-label={`Delay throw Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !delayAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : delayActive
-            ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
-            : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
-        }`}
-      >
-        DLY
-      </button>
+      {filterAvailable && (
+        <button
+          type="button"
+          onClick={(e) => {
+            // Shift-click = continuous 4-bar sweep. Plain click = snap toggle.
+            // Gives DJs both gestures on one button: tap for instant, hold
+            // shift for analog-style ramp.
+            if (e.shiftKey) onSweepFilter(4);
+            else onToggleFilter();
+          }}
+          title={
+            filterActive
+              ? `Filter off — Deck ${sideLabel} returns to full range\nShift-click = 4-bar sweep`
+              : `Filter on — HPF Deck ${sideLabel} (cuts lows)\nShift-click = 4-bar sweep`
+          }
+          aria-pressed={filterActive}
+          aria-label={`HPF Deck ${sideLabel}`}
+          className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+            filterActive
+              ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
+              : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
+          }`}
+        >
+          HPF
+        </button>
+      )}
+      {reverbAvailable && (
+        <button
+          type="button"
+          onClick={onToggleReverb}
+          title={
+            reverbActive
+              ? `Reverb off — Deck ${sideLabel} dry`
+              : `Reverb throw — send Deck ${sideLabel} into the reverb tail`
+          }
+          aria-pressed={reverbActive}
+          aria-label={`Reverb throw Deck ${sideLabel}`}
+          className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+            reverbActive
+              ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
+              : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
+          }`}
+        >
+          REV
+        </button>
+      )}
+      {delayAvailable && (
+        <button
+          type="button"
+          onClick={onToggleDelay}
+          title={
+            delayActive
+              ? `Delay off — Deck ${sideLabel} dry`
+              : `Delay throw — echo Deck ${sideLabel} into the next bars`
+          }
+          aria-pressed={delayActive}
+          aria-label={`Delay throw Deck ${sideLabel}`}
+          className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+            delayActive
+              ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
+              : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
+          }`}
+        >
+          DLY
+        </button>
+      )}
       {anchorCell ? (
         <>
           <div className="text-sm text-neutral-100 truncate font-medium min-w-0 flex-1">
