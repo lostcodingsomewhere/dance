@@ -1,6 +1,6 @@
 # Two API additions from the UI review
 
-**Status:** PROPOSED, waiting for a go-ahead
+**Status:** APPROVED 2026-11-24 (both additions, including the ingest change in section 2)
 **Date:** 2026-11-24
 
 The UI review of 2026-11-24 found two defects that cannot be fixed in the
