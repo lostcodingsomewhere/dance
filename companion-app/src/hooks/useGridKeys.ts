@@ -99,15 +99,13 @@ export function useGridKeys(actions: GridKeyActions, enabled = true): void {
       const trackId = focusedTrackId(shape, current);
       if (current == null || trackId == null) return;
 
-      if (e.key === " " || e.key === "Spacebar") {
-        e.preventDefault(); // space scrolls otherwise
-        actions.onAudition(trackId, current);
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        actions.onCommit(trackId, current, e.shiftKey);
-      }
+      const isAudition = e.key === " " || e.key === "Spacebar";
+      const isCommit = e.key === "Enter";
+      if (!isAudition && !isCommit) return;
+      e.preventDefault(); // space scrolls otherwise
+      if (e.repeat) return;
+      if (isAudition) actions.onAudition(trackId, current);
+      else actions.onCommit(trackId, current, e.shiftKey);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

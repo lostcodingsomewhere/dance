@@ -173,6 +173,7 @@ describe("the commit verb differs by mode", () => {
   });
 
   it("live mode: enter loads Deck A, shift+enter Deck B", async () => {
+    loadToDeck.mockImplementation((_pick, whenDone) => whenDone?.onSettled?.());
     state.liveRecs = [rec({ track_id: 9, track_title: "Load Me" })];
     renderGrid("live");
     await waitFor(() => expect(screen.getAllByText("Load Me").length).toBeGreaterThan(0));
@@ -181,11 +182,13 @@ describe("the commit verb differs by mode", () => {
     press("Enter");
     expect(loadToDeck).toHaveBeenCalledWith(
       expect.objectContaining({ trackId: 9, side: "a" }),
+      expect.anything(),
     );
 
     press("Enter", { shiftKey: true });
     expect(loadToDeck).toHaveBeenLastCalledWith(
       expect.objectContaining({ trackId: 9, side: "b" }),
+      expect.anything(),
     );
     expect(addToRole).not.toHaveBeenCalled();
   });

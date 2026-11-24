@@ -5,24 +5,49 @@ import { store } from "../src/store";
 import {
   BoothBackend,
   LIVE_TRACK_OF,
+  PADS_PER_PAGE,
   deck,
   grid,
   renderApp,
   songOn,
   type SeenRequest,
 } from "./boothHarness";
+import { holdAnswersTo, letRequestsGoOut, press } from "./safe-inputHelpers";
 
 const ORIGINAL = { track_id: 7, title: "Night Drive" };
 const CLUB_MIX = { track_id: 8, title: "Night Drive (Club Mix)" };
+const RECOMMENDED = { track_id: 9, title: "Half Light" };
+const SONG_COLUMN = "mix";
 const SONG_SECONDS = 240;
 const WAVEFORM_WIDTH_PX = 1000;
+const MISSING_STEM = "The bass stem is missing on disk.";
+
+const LOAD = "/api/v1/ableton/load-track";
+const PREVIEW = "/api/v1/ableton/preview";
+const STOP_PREVIEW = "/api/v1/ableton/preview/stop";
 const SEEK_ON_DECK_A = `/api/v1/ableton/transport/seek/${LIVE_TRACK_OF.mix_a}/0`;
+
 const DRUMS_A_INTRO_PAD = "Drums A: Night Drive — Test Artist — cue 1, intro — tap to fire";
 const REMOVE_IDLE = "Remove Drums clip from scene";
 const REMOVE_ARMED = "Press again to remove Drums clip from scene";
 const REMOVE_STAYS_ARMED_MS = 2500;
 
-function boothWithBothDecksLoaded({ path }: SeenRequest): unknown {
+function recommendation() {
+  return {
+    track_id: RECOMMENDED.track_id,
+    stem_file_id: null,
+    track_title: RECOMMENDED.title,
+    track_artist: "Test Artist",
+    bpm: 128,
+    key_camelot: "8A",
+    floor_energy: 6,
+    score: 0.82,
+    score_breakdown: { embedding: 0.9, bpm: 0.7 },
+    reasons: ["close vibe"],
+  };
+}
+
+function boothWithBothDecksLoaded({ method, path, body }: SeenRequest): unknown {
   if (path.endsWith("/ableton/decks")) {
     return {
       columns: LIVE_TRACK_OF,
@@ -31,6 +56,22 @@ function boothWithBothDecksLoaded({ path }: SeenRequest): unknown {
   }
   if (/\/tracks\/\d+\/waveform$/.test(path)) {
     return { peaks: [0.2, 0.8, 0.5, 0.3], duration_seconds: SONG_SECONDS, num_peaks: 4 };
+  }
+  if (path.endsWith("/recommend/by-column")) {
+    const column = (body as { column: string }).column;
+    return { column, combo_size: 0, recs: column === SONG_COLUMN ? [recommendation()] : [] };
+  }
+  if (method === "POST" && path === LOAD) {
+    return {
+      ok: true,
+      scene_index: PADS_PER_PAGE,
+      page: 1,
+      side: (body as { side: "a" | "b" }).side,
+      track_indices: LIVE_TRACK_OF,
+      stems_loaded: 3,
+      message: null,
+      warnings: [MISSING_STEM],
+    };
   }
   return undefined;
 }
@@ -44,32 +85,41 @@ async function waveformOf(side: "A" | "B"): Promise<Element> {
   return bars[0].closest("div") as Element;
 }
 
-function seeksSent(): SeenRequest[] {
-  return backend.requests.filter((request) => request.path.includes("/ableton/transport/seek/"));
-}
-
 function removeButtonOf(padTitle: string): HTMLElement {
   const pad = within(grid()).getByTitle(padTitle).parentElement as HTMLElement;
   return within(pad).getByRole("button", { name: /remove Drums clip/i });
+}
+
+function seeksSent(): SeenRequest[] {
+  return backend.requests.filter((request) => request.path.includes("/ableton/transport/seek/"));
 }
 
 function clipsRemoved(): SeenRequest[] {
   return backend.requests.filter((request) => request.method === "DELETE");
 }
 
-async function letRequestsGoOut(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
+function decksLoaded(): string[] {
+  return backend.sent("POST", LOAD).map((sent) => (sent.body as { side: string }).side);
 }
 
-function startFromACleanBooth() {
+async function openBoothWithTheCursorOnTheRecommendedSong(): Promise<void> {
+  renderApp();
+  await screen.findByRole("button", { name: "Page 1" });
+  backend.liveNowPlays({});
+  await screen.findByRole("group", { name: RECOMMENDED.title });
+  press("ArrowDown");
+}
+
+function startFromACleanBooth(): void {
   store.setView("booth");
   store.setBoothPage(0);
   store.setGridFocus(null);
   store.setPreviewing(null);
   store.clearLoadWarnings();
   store.closeCommandBar();
+  store.clearDecks();
+  store.clearArm("a");
+  store.clearArm("b");
 }
 
 let backend: BoothBackend;
@@ -159,5 +209,78 @@ describe("stray input in the Booth", () => {
     await letRequestsGoOut();
     expect(remove()).toHaveAccessibleName(REMOVE_ARMED);
     expect(clipsRemoved()).toHaveLength(1);
+  });
+});
+
+describe("Enter and Space on the Booth's plan grid", () => {
+  it("loads the pick once when Enter is pressed again before the load has finished", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+    const finishLoading = holdAnswersTo(LOAD);
+
+    press("Enter");
+    press("Enter");
+    press("Enter", { shiftKey: true });
+    await letRequestsGoOut();
+    expect(backend.sent("POST", LOAD)).toMatchObject([
+      { body: { track_id: RECOMMENDED.track_id, kinds: null, side: "a", page: 0 } },
+    ]);
+
+    finishLoading();
+    await screen.findByText(MISSING_STEM);
+    press("Enter", { shiftKey: true });
+    await waitFor(() => expect(decksLoaded()).toEqual(["a", "b"]));
+  });
+
+  it("says which pick is loading onto which deck until the load has finished", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+    const finishLoading = holdAnswersTo(LOAD);
+
+    press("Enter");
+    const loading = await screen.findByText("loading Half Light onto Deck A…");
+    expect(loading).toHaveAttribute("role", "status");
+
+    finishLoading();
+    await waitFor(() => expect(screen.queryByText(/^loading /)).not.toBeInTheDocument());
+    expect(screen.getByText(MISSING_STEM)).toBeInTheDocument();
+  });
+
+  it("names the pick in the warning a load leaves behind", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+
+    press("Enter", { shiftKey: true });
+
+    const warning = await screen.findByTestId("load-warnings");
+    expect(within(warning).getByText("Half Light → Deck B")).toBeInTheDocument();
+    expect(within(warning).getByText(MISSING_STEM)).toBeInTheDocument();
+  });
+
+  it("loads the pick once however long Enter is held", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+
+    press("Enter");
+    await screen.findByText(MISSING_STEM);
+    press("Enter", { repeat: true });
+    press("Enter", { repeat: true });
+    press("Enter", { repeat: true });
+    press("Enter", { shiftKey: true });
+
+    await waitFor(() => expect(decksLoaded()).toContain("b"));
+    expect(decksLoaded()).toEqual(["a", "b"]);
+  });
+
+  it("auditions the pick once however long Space is held", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+
+    press(" ");
+    press(" ", { repeat: true });
+    press(" ", { repeat: true });
+    press(" ", { repeat: true });
+    press("Escape");
+
+    await waitFor(() => expect(backend.sent("POST", STOP_PREVIEW)).not.toHaveLength(0));
+    expect(backend.sent("POST", PREVIEW)).toMatchObject([
+      { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
+    ]);
+    expect(backend.sent("POST", STOP_PREVIEW)).toHaveLength(1);
   });
 });

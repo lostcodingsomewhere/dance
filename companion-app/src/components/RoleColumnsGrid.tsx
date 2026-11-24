@@ -1,12 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useGridKeys } from "../hooks/useGridKeys";
-import { useLoadToDeck } from "../hooks/useLoadToDeck";
+import { useLoadToDeck, type LoadToDeckVars } from "../hooks/useLoadToDeck";
 import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { usePlanMutations } from "../hooks/useSetPlan";
 import type { GridFocus } from "../lib/gridNav";
 import { store } from "../store";
-import { PLAN_ROLES, type PlanItem, type PlanRole } from "../types";
+import {
+  PLAN_ROLES,
+  type ColumnRecsResponse,
+  type PlanItem,
+  type PlanRole,
+  type SetPlan,
+} from "../types";
 import { Modal } from "./Modal";
 import { PadEditor } from "./PadEditor";
 import { ColumnHeader, PlanBand, RecsBand } from "./RoleColumn";
@@ -15,6 +22,31 @@ import { VersionFinder } from "./VersionFinder";
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
 function visRole(role: PlanRole): string {
   return role === "song" ? "mix" : role;
+}
+
+function titleOfPick(
+  queryClient: QueryClient,
+  setId: number | null,
+  role: PlanRole,
+  trackId: number,
+): string | null {
+  const queued = queryClient
+    .getQueryData<SetPlan>(["sets", setId, "plan"])
+    ?.queues?.[role]?.find((item) => item.track_id === trackId);
+  if (queued?.title) return queued.title;
+  const recLists = [
+    ...queryClient.getQueriesData<ColumnRecsResponse>({
+      queryKey: ["recommend", "by-column", visRole(role)],
+    }),
+    ...queryClient.getQueriesData<ColumnRecsResponse>({
+      queryKey: ["sets", setId, "plan-recs", role],
+    }),
+  ];
+  for (const [, list] of recLists) {
+    const title = list?.recs?.find((rec) => rec.track_id === trackId)?.track_title;
+    if (title) return title;
+  }
+  return null;
 }
 
 /**
@@ -43,6 +75,8 @@ export function RoleColumnsGrid({
 }) {
   const { addToRole } = usePlanMutations(setId);
   const load = useLoadToDeck();
+  const queryClient = useQueryClient();
+  const keyboardLoadInFlight = useRef(false);
   const startPreview = useStartPreview();
   const stopPreview = useStopPreview();
   const previewing = usePreviewState();
@@ -81,8 +115,22 @@ export function RoleColumnsGrid({
   const onCommit = useCallback(
     (trackId: number, focus: GridFocus, shift: boolean) => {
       if (mode === "live") {
+        if (keyboardLoadInFlight.current) return;
+        keyboardLoadInFlight.current = true;
         // enter → Deck A, shift+enter → Deck B. Two decks, two keystrokes.
-        load.mutate({ trackId, role: focus.role, title: null, side: shift ? "b" : "a" });
+        load.mutate(
+          {
+            trackId,
+            role: focus.role,
+            title: titleOfPick(queryClient, setId, focus.role, trackId),
+            side: shift ? "b" : "a",
+          },
+          {
+            onSettled: () => {
+              keyboardLoadInFlight.current = false;
+            },
+          },
+        );
         return;
       }
       if (setId == null) return;
@@ -91,7 +139,7 @@ export function RoleColumnsGrid({
       // triage continues without touching an arrow key.
       addToRole(focus.role, trackId);
     },
-    [mode, setId, addToRole, load],
+    [mode, setId, addToRole, load, queryClient],
   );
 
   const onEscape = useCallback(() => {
@@ -147,7 +195,7 @@ export function RoleColumnsGrid({
         ))}
       </div>
 
-      <KeyHints mode={mode} />
+      <KeyHints mode={mode} loading={load.isPending ? load.variables : undefined} />
 
       <Modal
         open={padsPick != null}
@@ -182,7 +230,7 @@ export function RoleColumnsGrid({
  * being learned from scratch by the person who built it. Cheap to show,
  * and it doubles as the reminder that the booth uses the same motions.
  */
-function KeyHints({ mode }: { mode: "plan" | "live" }) {
+function KeyHints({ mode, loading }: { mode: "plan" | "live"; loading?: LoadToDeckVars }) {
   const commit = mode === "live" ? "load Deck A · ⇧⏎ Deck B" : "add to plan";
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-neutral-900 pt-1.5 text-[10px] text-neutral-600">
@@ -193,6 +241,11 @@ function KeyHints({ mode }: { mode: "plan" | "live" }) {
       <span className="text-neutral-700">
         same keys in {mode === "live" ? "Set" : "Booth"}
       </span>
+      {loading && (
+        <span role="status" className="text-amber-200">
+          {`loading ${loading.title ?? `Track #${loading.trackId}`} onto Deck ${loading.side.toUpperCase()}…`}
+        </span>
+      )}
     </div>
   );
 }
