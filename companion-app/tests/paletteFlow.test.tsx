@@ -166,10 +166,17 @@ function searchField(): HTMLElement {
   return within(palette()).getByRole("textbox");
 }
 
+function searchesFor(text: string): SeenRequest[] {
+  return backend
+    .sent("GET", "/api/v1/tracks/search")
+    .filter((sent) => new URLSearchParams(sent.query).get("q") === text);
+}
+
 async function openPaletteAndType(text: string): Promise<void> {
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   await screen.findByRole("dialog", { name: PALETTE });
   fireEvent.change(searchField(), { target: { value: text } });
+  await waitFor(() => expect(searchesFor(text)).not.toHaveLength(0));
 }
 
 function press(key: string, held: KeyboardEventInit = {}): void {
@@ -228,6 +235,251 @@ beforeEach(() => {
 afterEach(() => {
   backend.restore();
   Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+});
+
+describe("the search palette, from the keyboard", () => {
+  it("moves a highlight through every row in the order shown", async () => {
+    backend = new BoothBackend(
+      aLibrary({ byVibe: [foundByVibe(SLOW_TIDE)], onSpotify: [REMIX_ON_SPOTIFY] }),
+    );
+    renderApp();
+    await openPaletteAndType("night drive");
+    await within(palette()).findByRole("group", { name: `Search result: ${SLOW_TIDE.title}` });
+    await within(palette()).findByText(REMIX_ON_SPOTIFY.title);
+    await waitFor(() => expect(button(libraryRow("Night Drive"), "+ Plan")).toBeEnabled());
+
+    expect(highlighted()).toEqual([]);
+    press("ArrowUp");
+    expect(highlighted()).toEqual([]);
+
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Night Drive"]);
+    expect(scrolledIntoView.at(-1)).toBe(libraryRow("Night Drive"));
+    expect(within(button(libraryRow("Night Drive"), "Load")).getByText("⏎")).toBeInTheDocument();
+    expect(within(libraryRow("Half Light")).queryByText("⏎")).not.toBeInTheDocument();
+
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Half Light"]);
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Slow Tide"]);
+    press("ArrowDown");
+    expect(highlighted()).toEqual([`Spotify result: ${REMIX_ON_SPOTIFY.title}`]);
+    expect(scrolledIntoView.at(-1)).toBe(spotifyRow(REMIX_ON_SPOTIFY.title));
+    expect(
+      within(button(spotifyRow(REMIX_ON_SPOTIFY.title), "+ Plan")).getByText("⏎"),
+    ).toBeInTheDocument();
+    press("ArrowDown");
+    expect(highlighted()).toEqual([`Spotify result: ${REMIX_ON_SPOTIFY.title}`]);
+
+    press("ArrowUp");
+    expect(highlighted()).toEqual(["Search result: Slow Tide"]);
+
+    const reachedWithTab = button(libraryRow("Night Drive"), "+ Plan");
+    act(() => reachedWithTab.focus());
+    fireEvent.keyDown(reachedWithTab, { key: "ArrowUp" });
+    expect(highlighted()).toEqual(["Search result: Half Light"]);
+    expect(searchField()).toHaveFocus();
+    press("ArrowDown");
+
+    fireEvent.click(button(palette(), "BPM range"));
+    fireEvent.keyDown(within(palette()).getByLabelText("BPM min"), { key: "ArrowDown" });
+    expect(highlighted()).toEqual(["Search result: Slow Tide"]);
+
+    fireEvent.change(searchField(), { target: { value: "night drive " } });
+    expect(highlighted()).toEqual([]);
+
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Night Drive"]);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("group", { name: "Search result: Night Drive" });
+    expect(highlighted()).toEqual([]);
+  });
+
+  it("runs the highlighted row with Enter in the Booth, and plans a song with ⌘Enter", async () => {
+    backend = new BoothBackend(aLibrary({ onSpotify: [REMIX_ON_SPOTIFY] }));
+    renderApp();
+    await openPaletteAndType("night drive");
+    await within(palette()).findByText(REMIX_ON_SPOTIFY.title);
+    await waitFor(() => expect(button(libraryRow("Night Drive"), "+ Plan")).toBeEnabled());
+
+    press("Enter");
+    press("Enter", { metaKey: true });
+
+    press("ArrowDown");
+    press("ArrowDown");
+    press("ArrowDown");
+    expect(highlighted()).toEqual([`Spotify result: ${REMIX_ON_SPOTIFY.title}`]);
+    press("Enter");
+    await waitFor(() =>
+      expect(bodiesSentTo(INGEST_PATH)).toEqual([
+        {
+          spotify_id: "sp-remix",
+          title: REMIX_ON_SPOTIFY.title,
+          artist: "Test Artist, Tinlicker",
+          duration_ms: 210_000,
+        },
+      ]),
+    );
+    await within(spotifyRow(REMIX_ON_SPOTIFY.title)).findByRole("button", { name: "✓ added" });
+
+    press("ArrowUp");
+    press("ArrowUp");
+    expect(highlighted()).toEqual(["Search result: Night Drive"]);
+    press("Enter", { shiftKey: true });
+    fireEvent.keyDown(button(libraryRow("Half Light"), "Load"), { key: "Enter" });
+    press("Enter", { metaKey: true });
+    await waitFor(() =>
+      expect(bodiesSentTo(APPEND_PATH)).toEqual([
+        { role: "song", track_id: NEW_TRACK_ID, after_track_id: null },
+        { role: "song", track_id: NIGHT_DRIVE.track_id, after_track_id: null },
+      ]),
+    );
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+
+    press("Enter");
+    await waitFor(() =>
+      expect(backend.sent("POST", LOAD_PATH)).toMatchObject([
+        { body: { track_id: NIGHT_DRIVE.track_id, kinds: null, side: null, page: 0 } },
+      ]),
+    );
+    expect(bodiesSentTo(APPEND_PATH)).toHaveLength(2);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("adds the highlighted song to the plan with Enter in the Set view", async () => {
+    backend = new BoothBackend(aLibrary());
+    renderApp();
+    openSetView();
+    await screen.findByRole("button", { name: "Open in Live" });
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Half Light" });
+    await waitFor(() => expect(button(libraryRow("Half Light"), "+ Plan")).toBeEnabled());
+
+    press("ArrowDown");
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Half Light"]);
+    const row = libraryRow("Half Light");
+    expect(within(button(row, "+ Plan")).getByText("⏎")).toBeInTheDocument();
+    expect(within(button(row, "Load")).queryByText("⏎")).not.toBeInTheDocument();
+
+    press("Enter");
+
+    await waitFor(() =>
+      expect(bodiesSentTo(APPEND_PATH)).toEqual([
+        { role: "song", track_id: HALF_LIGHT.track_id, after_track_id: null },
+      ]),
+    );
+    expect(
+      await within(libraryRow("Half Light")).findByRole("button", { name: "✓ in plan" }),
+    ).toBeDisabled();
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+  });
+});
+
+describe("the search palette's rows", () => {
+  it("say which songs the plan already has, and mark a song once it is added", async () => {
+    backend = new BoothBackend(aLibrary({ alreadyPlanned: [NIGHT_DRIVE.track_id] }));
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+
+    expect(
+      await within(libraryRow("Night Drive")).findByRole("button", { name: "✓ in plan" }),
+    ).toBeDisabled();
+
+    act(() => searchField().blur());
+    fireEvent.click(libraryRow("Half Light"));
+    expect(searchField()).not.toHaveFocus();
+
+    clickWithTheMouse(button(libraryRow("Half Light"), "+ Plan"));
+
+    expect(
+      await within(libraryRow("Half Light")).findByRole("button", { name: "✓ in plan" }),
+    ).toBeDisabled();
+    expect(bodiesSentTo(APPEND_PATH)).toEqual([
+      { role: "song", track_id: HALF_LIGHT.track_id, after_track_id: null },
+    ]);
+    expect(searchField()).toHaveFocus();
+  });
+
+  it("say why a song could not be added to the plan", async () => {
+    backend = new BoothBackend(aLibrary({ whenPlanning: () => failure(404, "track not found") }));
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+    await waitFor(() => expect(button(libraryRow("Night Drive"), "+ Plan")).toBeEnabled());
+
+    fireEvent.click(button(libraryRow("Night Drive"), "+ Plan"));
+
+    expect(await within(libraryRow("Night Drive")).findByRole("alert")).toHaveTextContent(
+      "track not found",
+    );
+    expect(within(palette()).queryByText(/API 404/)).not.toBeInTheDocument();
+    expect(button(libraryRow("Night Drive"), "+ Plan")).toBeEnabled();
+  });
+
+  it("say why a song cannot be loaded yet, and offer no Load for it", async () => {
+    backend = new BoothBackend(
+      aLibrary({
+        tracks: [
+          inLibrary(NIGHT_DRIVE),
+          inLibrary(HALF_LIGHT, "pending"),
+          inLibrary(SLOW_TIDE, "separating"),
+          inLibrary(LOW_SUN, "error"),
+        ],
+      }),
+    );
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+    await waitFor(() => expect(button(libraryRow("Half Light"), "+ Plan")).toBeEnabled());
+
+    expect(button(libraryRow("Night Drive"), "Load")).toBeEnabled();
+    const notReady: [Song, string][] = [
+      [HALF_LIGHT, "not processed yet"],
+      [SLOW_TIDE, "processing"],
+      [LOW_SUN, "failed, see Pipeline"],
+    ];
+    for (const [song, inWords] of notReady) {
+      const row = libraryRow(song.title);
+      expect(within(row).getByText(inWords)).toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Load" })).not.toBeInTheDocument();
+      expect(button(row, "+ Plan")).toBeEnabled();
+    }
+
+    press("ArrowDown");
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Half Light"]);
+    expect(within(libraryRow("Half Light")).queryByText("⏎")).not.toBeInTheDocument();
+    press("Enter");
+    press("Enter", { metaKey: true });
+
+    await waitFor(() =>
+      expect(bodiesSentTo(APPEND_PATH)).toEqual([
+        { role: "song", track_id: HALF_LIGHT.track_id, after_track_id: null },
+      ]),
+    );
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+  });
+
+  it("say in the server's words why a Load failed", async () => {
+    backend = new BoothBackend(aLibrary({ whenLoading: () => failure(503, LIVE_IS_NOT_THERE) }));
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+
+    fireEvent.click(button(libraryRow("Night Drive"), "Load"));
+
+    expect(await within(libraryRow("Night Drive")).findByRole("alert")).toHaveTextContent(
+      LIVE_IS_NOT_THERE,
+    );
+    expect(within(palette()).queryByText(/API 503/)).not.toBeInTheDocument();
+    expect(button(libraryRow("Night Drive"), "Load")).toBeEnabled();
+  });
 });
 
 describe("the BPM range popover in the search palette", () => {
