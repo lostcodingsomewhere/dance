@@ -613,17 +613,17 @@ function DeckHeader({
     && Math.abs(projectTempo - sourceBpm) > 0.5;
   return (
     <div className="flex items-baseline gap-2">
-      <div className={`text-base font-bold tracking-wider ${accentText}`}>
+      <div className={`shrink-0 text-base font-bold tracking-wider ${accentText}`}>
         DECK {sideLabel}
       </div>
       {firing && (
-        <span className="text-[10px] text-emerald-300 uppercase tracking-widest animate-pulse">
+        <span className="shrink-0 text-[10px] text-emerald-300 uppercase tracking-widest animate-pulse">
           ▶ live
         </span>
       )}
       {armedSceneIdx != null && (
         <span
-          className="text-[10px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
+          className="shrink-0 text-[10px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
           title={`▶ will fire scene ${armedSceneIdx + 1} — the track you last loaded onto Deck ${sideLabel}`}
           data-testid={`armed-${side}`}
         >
@@ -751,15 +751,16 @@ function DeckHeader({
       )}
       {anchorCell ? (
         <>
-          <div className="text-sm text-neutral-100 truncate font-medium min-w-0 flex-1">
+          {/* The artist and the original chip shrink 100 times as fast as the BPM and key, so they give way first. */}
+          <div className="text-sm text-neutral-100 truncate font-medium min-w-[12ch] flex-1">
             {anchorCell.title ?? `Track #${anchorCell.track_id}`}
           </div>
           {anchorCell.artist && (
-            <div className="text-[11px] text-neutral-400 truncate shrink-[2] min-w-0">
+            <div className="text-[11px] text-neutral-400 truncate shrink-[100] min-w-0">
               {anchorCell.artist}
             </div>
           )}
-          <div className="text-[10px] font-mono tabular-nums text-neutral-500 shrink-0 flex items-baseline gap-1.5">
+          <div className="text-[10px] font-mono tabular-nums text-neutral-500 min-w-0 overflow-hidden whitespace-nowrap flex items-baseline gap-1.5">
             {sourceBpm != null && <span>{sourceBpm.toFixed(0)}</span>}
             {showSync && (
               <button
@@ -803,7 +804,7 @@ function DeckHeader({
               }
               aria-label={`Play original mix on Deck ${sideLabel}`}
               aria-pressed={mixFiring}
-              className={`shrink-0 text-[9px] font-mono uppercase tracking-wider leading-none rounded px-1.5 py-1 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
+              className={`shrink-[100] min-w-7 text-[9px] font-mono uppercase tracking-wider leading-none rounded px-1.5 py-1 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
                 mixFiring
                   ? "bg-emerald-500/30 text-emerald-100 border-emerald-400/60"
                   : "text-neutral-400 hover:text-neutral-100 border-neutral-700 hover:border-neutral-500"
