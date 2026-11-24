@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from dance.api.deps import get_settings
 from dance.config import Settings
+from dance.doctor import live_install_for_sets
 
 logger = logging.getLogger(__name__)
 
@@ -88,3 +89,42 @@ def reveal(
         ) from exc
     logger.info("Revealed %s via %s", target, cmd[0])
     return {"ok": True, "command": cmd[0]}
+
+
+def _is_inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+@router.post("/open-in-live")
+def open_in_live(
+    body: dict,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    raw = body.get("path")
+    if not raw or not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="path required")
+    target = Path(raw)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="path does not exist")
+    if target.suffix != ".als" or not _is_inside(target, settings.als_output_dir):
+        raise HTTPException(status_code=403, detail="only .als files inside als_output_dir open")
+    install = live_install_for_sets() if platform.system() == "Darwin" else None
+    if install is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No Ableton Live Standard or Suite that can open this Set was found. "
+            "Run `dance doctor` to see what is installed.",
+        )
+    # Live Lite shares Standard's bundle id, so the app is named by its path.
+    subprocess.Popen(
+        ["open", "-a", str(install.app), str(target.resolve())],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    logger.info("Opened %s in %s", target, install.app.name)
+    return {"ok": True, "app": install.app.name.removesuffix(".app")}
+

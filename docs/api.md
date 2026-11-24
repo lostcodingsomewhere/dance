@@ -192,6 +192,7 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | Method | Path                | Body              | Response               | 4xx |
 |--------|---------------------|-------------------|------------------------|-----|
 | POST   | `/api/v1/files/reveal` | `{"path": str}` | `{"ok": true, "command": str}` | 400, 403, 404, 500 |
+| POST   | `/api/v1/files/open-in-live` | `{"path": str}` (an `.als` inside `als_output_dir`) | `{"ok": true, "app": str}`: opens the Set in the installed Live Standard or Suite, named by its app path so Lite is never picked | 400, 403, 404, 409 (no usable Live found) |
 
 Allowlist: `path` must live under `library_dir`, `stems_dir`, or `als_output_dir` (`files.py:26`) — otherwise 403. Uses `open -R` (macOS), `explorer /select,` (Windows), or `xdg-open` (Linux).
 

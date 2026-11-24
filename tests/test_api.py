@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1016,6 +1017,78 @@ def test_recommend_by_text_exclude(client, app, fake_bridge):
 # ---------------------------------------------------------------------------
 # Reveal-in-Finder endpoint
 # ---------------------------------------------------------------------------
+
+
+def _exported_set_file(app, name: str = "Friday night.als") -> Path:
+    sets_dir = Path(app.state.settings.als_output_dir)
+    sets_dir.mkdir(parents=True, exist_ok=True)
+    live_set = sets_dir / name
+    live_set.write_bytes(b"not a real set")
+    return live_set
+
+
+def _live_on_this_mac(monkeypatch, app_path: Path | None) -> list[list[str]]:
+    import dance.api.routers.files as files_mod
+    from dance.doctor import LiveInstall
+
+    commands: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, cmd, **_kwargs):
+            commands.append(list(cmd))
+
+    install = (
+        None
+        if app_path is None
+        else LiveInstall(
+            app=app_path, edition="Standard", version="12.4.3", build="x_abc", bundle_id="b"
+        )
+    )
+    monkeypatch.setattr(files_mod.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(files_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(files_mod, "live_install_for_sets", lambda: install)
+    return commands
+
+
+def test_open_in_live_opens_an_exported_set_in_the_full_live(client, app, monkeypatch):
+    live_app = Path("/Applications/Ableton Live 12 Standard.app")
+    commands = _live_on_this_mac(monkeypatch, live_app)
+    live_set = _exported_set_file(app)
+
+    r = client.post("/api/v1/files/open-in-live", json={"path": str(live_set)})
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "app": "Ableton Live 12 Standard"}
+    assert commands == [["open", "-a", str(live_app), str(live_set.resolve())]]
+
+
+def test_open_in_live_refuses_what_it_should_not_open(client, app, tmp_path, monkeypatch):
+    commands = _live_on_this_mac(monkeypatch, Path("/Applications/Ableton Live 12 Standard.app"))
+    live_set = _exported_set_file(app)
+    outside = tmp_path / "elsewhere.als"
+    outside.write_bytes(b"x")
+    not_a_set = live_set.with_suffix(".txt")
+    not_a_set.write_bytes(b"x")
+
+    def status(path: Path) -> int:
+        return client.post("/api/v1/files/open-in-live", json={"path": str(path)}).status_code
+
+    assert client.post("/api/v1/files/open-in-live", json={}).status_code == 400
+    assert status(live_set.with_name("missing.als")) == 404
+    assert status(outside) == 403
+    assert status(not_a_set) == 403
+    assert commands == []
+
+
+def test_open_in_live_says_so_when_no_full_live_is_installed(client, app, monkeypatch):
+    commands = _live_on_this_mac(monkeypatch, None)
+    live_set = _exported_set_file(app)
+
+    r = client.post("/api/v1/files/open-in-live", json={"path": str(live_set)})
+
+    assert r.status_code == 409
+    assert "dance doctor" in r.json()["detail"]
+    assert commands == []
 
 
 def test_reveal_requires_path(client):

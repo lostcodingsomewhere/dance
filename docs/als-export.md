@@ -135,7 +135,9 @@ dance export-set            # the active set
 dance export-set 3 --out ~/Music/Dance/Sets/friday.als
 ```
 
-`POST /api/v1/sets/{id}/als` does the same. The file holds the set's whole plan,
+`POST /api/v1/sets/{id}/als` does the same, and so does the **Export to Live** button
+in the app's Set view. Its **Open in Live** opens the file in Live Standard or Suite
+(`POST /api/v1/files/open-in-live`), never Lite. The file holds the set's whole plan,
 laid out in pages of five scene rows (what the APC40 shows at once):
 
 - **Songs fill pages in plan order.** The first song goes on deck A of page 1, the

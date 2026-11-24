@@ -8,10 +8,13 @@
  */
 
 import type React from "react";
+import { useRef } from "react";
 
 import { CueStrip } from "../components/CueStrip";
 import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
+import { SetExportStrip } from "../components/SetExportStrip";
 import { SetMenu } from "../components/SetMenu";
+import { useExportSetToLive } from "../hooks/useSetExport";
 import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
 import { store } from "../store";
 import type { DanceSet } from "../types";
@@ -37,23 +40,54 @@ export function SetEditor() {
 }
 
 function Header({ set }: { set: DanceSet }) {
+  const exportToLive = useExportSetToLive();
+  const exportButton = useRef<HTMLButtonElement>(null);
+  const exportFinishedForThisSet =
+    exportToLive.variables === set.id && (exportToLive.isSuccess || exportToLive.isError);
+
+  function dismissExportResult() {
+    exportToLive.reset();
+    exportButton.current?.focus();
+  }
+
   return (
-    <div className="flex items-center gap-3 px-6 py-3 border-b border-neutral-800">
-      <button
-        type="button"
-        onClick={() => store.setView("booth")}
-        className="text-xs text-neutral-500 hover:text-neutral-100 shrink-0"
-      >
-        ← Booth
-      </button>
-      <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
-        Set
-      </span>
-      <SetMenu set={set} variant="full" />
-      <span className="ml-auto text-[11px] text-neutral-500 shrink-0">
-        queue stems per role · ＋ from recs or ⌘K
-      </span>
-    </div>
+    <>
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-neutral-800">
+        <button
+          type="button"
+          onClick={() => store.setView("booth")}
+          className="text-xs text-neutral-500 hover:text-neutral-100 shrink-0"
+        >
+          ← Booth
+        </button>
+        <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
+          Set
+        </span>
+        <SetMenu set={set} variant="full" />
+        <span className="ml-auto hidden lg:inline text-[11px] text-neutral-500 shrink-0">
+          queue stems per role · ＋ from recs or ⌘K
+        </span>
+        <button
+          ref={exportButton}
+          type="button"
+          onClick={() => exportToLive.mutate(set.id)}
+          disabled={exportToLive.isPending}
+          title="Write this set's whole plan as one Ableton Live Set"
+          className="h-7 px-3 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs shrink-0 disabled:opacity-50"
+        >
+          {exportToLive.isPending ? "Exporting…" : "Export to Live"}
+        </button>
+      </div>
+      {exportFinishedForThisSet && (
+        <SetExportStrip
+          key={exportToLive.submittedAt}
+          setId={set.id}
+          exported={exportToLive.data}
+          failure={exportToLive.error}
+          onDismiss={dismissExportResult}
+        />
+      )}
+    </>
   );
 }
 
