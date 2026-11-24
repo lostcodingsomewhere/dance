@@ -52,8 +52,9 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   the first drop in place of the loudest scored the same (40%, 43 of 243), so the
   limit is the section labels, which call long stretches "breakdown". Moving pads by
   hand covers it for now. Better section labels are their own piece of work.
-- The real library has no pads yet. After this branch merges it needs
-  `alembic upgrade head` and one `detect_regions` pass.
+- Merged to `main` on 2026-11-23 (`97595cf`). The real library was backed up to
+  `~/.dance/dance.db.bak-pre-pads-20261123-172103`, migrated to `a1c5d9e3f7b2`, and
+  given its pads: 244 of 244 tracks, 0 errors, 97 s.
 - Not done: listening to the start points on ten songs you know.
 
 ---
