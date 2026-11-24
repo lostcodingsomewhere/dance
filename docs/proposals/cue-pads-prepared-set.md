@@ -28,7 +28,11 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   clips, and the warp-marker read handlers from patch `0005` are active. Details in
   `docs/live-compat.md`. This settles the open question of whether a Set file can
   carry its own timing.
-- Step 2 (Save As round-trip) needs a person at the Mac. Option A is not landed.
+- Step 2 (Save As round-trip) is done. Live kept both warp markers and showed which
+  element names and file reference form it writes.
+- Option A is landed and checked in Live over OSC: the new export loads, clips carry
+  their stem colour, quantization follows the Set, and the grid is kept after 22 s.
+  Still open: a round-trip of the new export, and eyes and ears on it.
 
 **Step 1, cues in data**
 

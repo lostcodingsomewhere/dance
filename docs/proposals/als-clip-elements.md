@@ -1,6 +1,6 @@
 # `.als` clip elements: write what Live 12.4 reads
 
-**Status:** PROPOSAL, not implemented. Waiting for your go-ahead (CLAUDE.md rule 1: it changes the `.als` writer's emission shape).
+**Status:** option A LANDED 2026-11-23. The go-ahead came with [`cue-pads-prepared-set.md`](cue-pads-prepared-set.md). Decisions as taken: 2 `IsWarped=true`; 3 `LaunchQuantisation=0`; 4 `MarkersGenerated=true` (`false` was not tried); 5 the element order list lives in `tests/test_als_export_e2e.py`, taken from Live's own save of our Set, in place of the skeleton fixture and its script. Verification steps 1 to 3 were read over OSC and are logged in `docs/live-compat.md`. Still open: a round-trip of the new export, eyes and ears on it, the upgrade tripwire, downbeat anchoring.
 **Date:** 2026-10-13
 **Touches:** `src/dance/als/writer.py` (`_populate_audio_track`, `_build_audio_clip`, `_add_file_ref`), `tests/test_als_generator.py`, a new test file and fixture, docs. No DB, API, OSC, or Stage change.
 **Related:** [`warp-guard.md`](warp-guard.md), [`../live-compat.md`](../live-compat.md), [`../als-export.md`](../als-export.md), [`als-deck-name-prefix-mismatch.md`](als-deck-name-prefix-mismatch.md)
@@ -450,4 +450,4 @@ A new file, `tests/test_als_clip_conformance.py`:
   installed app and diffs it against the fixture. It is `skipif` when the app is absent
   (as in CI), and it catches a Live upgrade the same way the template-refresh note does.
 
-Per CLAUDE.md, implementation waits for your go-ahead.
+The go-ahead was given on 2026-11-23.

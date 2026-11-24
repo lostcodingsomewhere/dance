@@ -381,6 +381,10 @@ def test_clean_warp_markers_drops_non_monotonic() -> None:
 # ---------------------------------------------------------------------------
 
 
+_GRID_AT_120 = f'SecTime="{0.03125 * 60.0 / 120.0!r}"'
+_GRID_AT_121 = f'SecTime="{0.03125 * 60.0 / 121.0!r}"'
+
+
 def test_als_round_trip_through_writer(tmp_path: Path) -> None:
     stems = [
         StemEntry(kind=k, path=tmp_path / f"{k}.wav", duration_seconds=60.0)
@@ -399,7 +403,7 @@ def test_als_round_trip_through_writer(tmp_path: Path) -> None:
     assert mix.location == "session"
     assert mix.warped is True
     assert mix.sample_duration_s == pytest.approx(60.0, abs=1e-4)
-    assert mix.markers == [WarpMarker(0.0, 0.0), WarpMarker(60.0, 128.0)]
+    assert mix.markers == [WarpMarker(0.0, 0.0), WarpMarker(0.03125 * 60.0 / 128.0, 0.03125)]
 
     g = beats_from_warp_markers(mix.markers, end_sec=60.0)
     assert g.bpm == pytest.approx(128.0)
@@ -933,7 +937,7 @@ def test_grid_diff_gate_flags_a_changed_reference(
     # So is a Set whose warps were re-corrected in Live (121 BPM now).
     root = gzip.decompress(als[0].read_bytes()).decode()
     fixed = tmp_path / "fixed.als"
-    fixed.write_bytes(gzip.compress(root.replace('BeatTime="120', 'BeatTime="121').encode()))
+    fixed.write_bytes(gzip.compress(root.replace(_GRID_AT_120, _GRID_AT_121).encode()))
     moved = [*argv, "--als", str(fixed), "--baseline", str(base), "--json", str(out)]
     assert grid_diff.main(moved) == 1
     metrics = {r["metric"] for r in json.loads(out.read_text())["gate"]["regressions"]}
@@ -1184,9 +1188,9 @@ def test_grid_diff_refuses_to_guess_between_conflicting_clips(
     db_path, als = graded_library
     # A second Set holding the same mix with a different warp: Live at 121.
     root = gzip.decompress(als[0].read_bytes()).decode()
-    assert 'BeatTime="120' in root
+    assert _GRID_AT_120 in root
     other = tmp_path / "other.als"
-    other.write_bytes(gzip.compress(root.replace('BeatTime="120', 'BeatTime="121').encode()))
+    other.write_bytes(gzip.compress(root.replace(_GRID_AT_120, _GRID_AT_121).encode()))
     out = tmp_path / "c.json"
     argv = ["--db", str(db_path), "--track", "1", "--json", str(out)]
     # The same Set twice is one clip, not a conflict.

@@ -87,7 +87,7 @@ def _clip_from_element(clip: etree._Element) -> AlsClip:
     if sample_name is None and sample_path:
         sample_name = Path(sample_path).name
 
-    # Live 10+ writes <IsWarped>; dance's offline writer emits <Warp>.
+    # Live 10+ writes <IsWarped>; Sets dance exported before 2026-11-23 carry <Warp>.
     warped = _bool(_value(clip, "IsWarped"))
     if warped is None:
         warped = _bool(_value(clip, "Warp"))

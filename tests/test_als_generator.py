@@ -288,7 +288,7 @@ def test_writer_track_color_palette(tmp_path: Path):
         "other", "other", "mix", "mix",
     )
     for t, src in zip(audio_tracks, expected_kinds):
-        color_idx = int(t.find("./ColorIndex").get("Value"))
+        color_idx = int(t.find("./Color").get("Value"))
         assert color_idx == STEM_COLOR_INDEX[src], (
             f"color for {src!r} should be {STEM_COLOR_INDEX[src]}, got {color_idx}"
         )
@@ -524,7 +524,7 @@ def test_generator_track_colors(als_settings, session, complete_track_with_stems
 
     by_name = {
         t.find("./Name/EffectiveName").get("Value"): int(
-            t.find("./ColorIndex").get("Value")
+            t.find("./Color").get("Value")
         )
         for t in root.findall("./LiveSet/Tracks/AudioTrack")
     }

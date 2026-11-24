@@ -175,18 +175,20 @@ class AlsGenerator:
 
         locators = regions_to_locators(regions, bpm=float(analysis.bpm))
 
+        target = out_path if out_path is not None else self.default_path_for(track)
+        target = self._validate_in_output_dir(target)
+
         spec = LiveSetSpec(
             name=track.title or track.file_name or f"Track {track.id}",
             bpm=float(analysis.bpm),
             stems=stem_entries,
             locators=locators,
+            set_dir=target.parent,
         )
 
         xml_bytes = build_live_set_xml(spec)
         gz_bytes = gzip.compress(xml_bytes, compresslevel=6)
 
-        target = out_path if out_path is not None else self.default_path_for(track)
-        target = self._validate_in_output_dir(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(gz_bytes)
 
