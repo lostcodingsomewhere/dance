@@ -56,6 +56,7 @@ from dance.pipeline.dispatcher_lock import (
     DispatcherLock,
 )
 from dance.pipeline.events import StageEvent
+from dance.pipeline.heal_ledger import HealLedger
 from dance.pipeline.placeholders import not_placeholder
 from dance.spotify.csv_importer import (
     CsvRow,
@@ -1230,3 +1231,48 @@ def trigger_process(
         raise
 
     return JobOut(**job.to_dict())
+
+
+NOTHING_TO_RETRY = "This track has not failed, so there is nothing to retry."
+
+
+def _put_back_in_line_for_the_next_run(session: Session, track_id: int, settings: Settings) -> None:
+    lock = DispatcherLock(
+        settings.data_dir, command=f"dance API POST /pipeline/tracks/{track_id}/retry"
+    )
+    try:
+        lock.acquire()
+    except DispatcherBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        still_failed = (
+            session.query(Track)
+            .filter(Track.id == track_id, Track.state == TrackState.ERROR.value)
+            .update({Track.state: TrackState.PENDING.value, Track.error_message: None})
+        )
+        session.commit()
+        if not still_failed:
+            raise HTTPException(status_code=409, detail=NOTHING_TO_RETRY)
+        HealLedger(settings.data_dir).clear(track_id)
+    finally:
+        lock.release()
+
+
+@router.post("/tracks/{track_id}/retry", response_model=PipelineRecentTrackOut)
+def retry_track(
+    track_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> PipelineRecentTrackOut:
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"Track {track_id} is not in the library.")
+    if track.state != TrackState.ERROR.value:
+        raise HTTPException(status_code=409, detail=NOTHING_TO_RETRY)
+    if str(track.file_hash).startswith(NEVER_DOWNLOADED):
+        # No stage can claim a row whose download never finished, so no run is waited for.
+        _download_again_if_it_failed(session, track, settings)
+    else:
+        _put_back_in_line_for_the_next_run(session, track_id, settings)
+    session.refresh(track)
+    return PipelineRecentTrackOut.model_validate(track, from_attributes=True)

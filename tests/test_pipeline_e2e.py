@@ -380,3 +380,94 @@ def test_a_stage_that_fails_without_a_message_still_leaves_a_reason(
     getattr(pipeline, run)(separate=_separate_fails_without_a_message)
 
     assert [row["error_message"] for row in pipeline.rows("error")] == ["separate: RuntimeError"]
+
+
+def test_a_failed_track_goes_back_in_line_and_the_next_run_finishes_it(
+    pipeline, a_song_in_the_library
+):
+    pipeline.dance_process(separate=_separate_runs_out_of_memory)
+    (failed,) = pipeline.rows("error")
+    assert failed["error_message"] == f"separate: {OUT_OF_MEMORY}"
+
+    retried = pipeline.retry(failed["id"])
+
+    assert retried.status_code == 200, retried.text
+    assert (retried.json()["id"], retried.json()["state"], retried.json()["error_message"]) == (
+        failed["id"],
+        "pending",
+        None,
+    )
+    assert pipeline.rows("error") == []
+    assert [row["state"] for row in pipeline.rows()] == ["pending"]
+
+    pipeline.dance_process(separate=_fake_separate_process)
+
+    assert [(row["id"], row["state"]) for row in pipeline.rows()] == [(failed["id"], "complete")]
+
+
+def test_retry_waits_for_a_run_that_is_in_progress(pipeline, a_song_in_the_library, another_run):
+    pipeline.dance_process(separate=_separate_runs_out_of_memory)
+    (failed,) = pipeline.rows("error")
+
+    running = another_run(pipeline.settings.data_dir)
+    refused = pipeline.retry(failed["id"])
+
+    assert refused.status_code == 409, refused.text
+    assert "already in progress" in refused.json()["detail"]
+    assert f"pid {running.pid}" in refused.json()["detail"]
+    assert pipeline.rows() == [failed]
+
+    _release(running)
+    assert pipeline.retry(failed["id"]).json()["state"] == "pending"
+
+
+def test_retry_says_why_it_leaves_a_track_that_has_not_failed(pipeline, a_song_in_the_library):
+    pipeline.dance_process(separate=_fake_separate_process)
+    (finished,) = pipeline.rows()
+
+    refused = pipeline.retry(finished["id"])
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == NOTHING_TO_RETRY
+    assert pipeline.rows() == [finished]
+    assert pipeline.retry(999_999).status_code == 404
+
+
+def test_a_retried_track_starts_its_count_of_hard_crashes_again(pipeline, a_song_in_the_library):
+    pipeline.dance_process(separate=_separate_runs_out_of_memory)
+    (failed,) = pipeline.rows("error")
+    HealLedger(pipeline.settings.data_dir).record_heal(failed["id"], TrackState.SEPARATING.value)
+
+    assert pipeline.retry(failed["id"]).status_code == 200
+    pipeline.left_mid_stage_by_a_hard_crash(failed["id"], TrackState.SEPARATING)
+    pipeline.dance_process(separate=_fake_separate_process)
+
+    assert [(row["state"], row["error_message"]) for row in pipeline.rows()] == [("complete", None)]
+
+
+@needs_ffmpeg
+def test_retry_downloads_a_track_again_when_its_download_never_finished(
+    pipeline, another_run, monkeypatch, tmp_path
+):
+    upload = _entry(UPLOAD, "Elderbrook - Shallow Water", "Elderbrook", 60)
+    youtube = FakeYtDlp({"Elderbrook Shallow Water": [upload]}, media={UPLOAD: None})
+    monkeypatch.setattr(csv_importer, "_resolve_yt_dlp", lambda: _FAKE_YT_DLP)
+    monkeypatch.setattr(subprocess, "run", youtube)
+    asked = pipeline.client.post(f"{API_PREFIX}/pipeline/ingest/track", json=SONG_ON_SPOTIFY)
+    track_id = asked.json()["track_id"]
+    assert pipeline.newest_job_finished()["items"][0]["status"] == "fail"
+    (failed,) = pipeline.rows("error")
+    assert failed["id"] == track_id
+
+    youtube.media[UPLOAD] = _encode(tmp_path / "upload.mp3", 60, "libmp3lame")
+    another_run(pipeline.settings.data_dir)
+    retried = pipeline.retry(track_id)
+
+    assert retried.status_code == 200, retried.text
+    assert (retried.json()["state"], retried.json()["error_message"]) == ("pending", None)
+    assert pipeline.newest_job_finished()["items"][0]["status"] == "ok"
+    assert youtube.downloads == [UPLOAD, UPLOAD]
+    file_hash, file_path = pipeline.stored(track_id)
+    assert not file_hash.startswith("pending:")
+    assert Path(file_path).exists()
+    assert [row["state"] for row in pipeline.rows()] == ["pending"]
