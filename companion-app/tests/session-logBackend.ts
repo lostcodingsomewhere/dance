@@ -1,5 +1,6 @@
 import { act } from "@testing-library/react";
 
+import { EMPTY_ABLETON_STATE } from "../src/types";
 import {
   BoothBackend,
   LIVE_TRACK_OF,
@@ -70,10 +71,44 @@ function refused(status: number, detail: string): Response {
   });
 }
 
+function answeredLater(body: () => unknown): { response: Response; send: () => void } {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller;
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+  return {
+    response,
+    send() {
+      stream.enqueue(new TextEncoder().encode(JSON.stringify(body())));
+      stream.close();
+    },
+  };
+}
+
 export class SessionLog {
   public current: Session | null = null;
   public startsToRefuse = 0;
+  public refusesEnds = false;
+  public holdsStarts = false;
+  public holdsReads = false;
+  private heldStarts: Array<() => void> = [];
+  private heldReads: Array<() => void> = [];
   private lastId = 0;
+
+  letStartsThrough(): void {
+    this.holdsStarts = false;
+    for (const send of this.heldStarts.splice(0)) send();
+  }
+
+  letReadsThrough(): void {
+    this.holdsReads = false;
+    for (const send of this.heldReads.splice(0)) send();
+  }
 
   open(startedAt: string, plays: Array<{ track_id: number; played_at: string }> = []): Session {
     this.lastId += 1;
@@ -107,12 +142,22 @@ export class SessionLog {
 
   answer({ method, path, body }: SeenRequest): unknown {
     if (path === `${SESSIONS}/current`) {
+      if (this.holdsReads) {
+        const held = answeredLater(() => this.current);
+        this.heldReads.push(held.send);
+        return held.response;
+      }
       return this.current ?? refused(404, "no active session");
     }
     if (method === "POST" && path === SESSIONS) {
       if (this.startsToRefuse > 0) {
         this.startsToRefuse -= 1;
         return refused(500, "database is locked");
+      }
+      if (this.holdsStarts) {
+        const held = answeredLater(() => this.open(backendTime()));
+        this.heldStarts.push(held.send);
+        return held.response;
       }
       return this.open(backendTime());
     }
@@ -121,6 +166,7 @@ export class SessionLog {
       return this.current;
     }
     if (method === "POST" && END_PATH.test(path)) {
+      if (this.refusesEnds) return refused(500, "database is locked");
       const ended = { ...this.current!, ended_at: backendTime() };
       this.current = null;
       return ended;
@@ -129,12 +175,24 @@ export class SessionLog {
   }
 }
 
+const socketsToLive: WebSocket[] = [];
+
+function alsoReachSocketsTheAppOpens(): void {
+  const HarnessSocket = globalThis.WebSocket;
+  globalThis.WebSocket = class extends HarnessSocket {
+    constructor(url: string | URL) {
+      super(url);
+      socketsToLive.push(this);
+    }
+  };
+}
+
 export function boothWith(
   log: SessionLog,
   inLive: () => Cell[],
   answersFirst: Answer = () => undefined,
 ): BoothBackend {
-  return new BoothBackend((request) => {
+  const backend = new BoothBackend((request) => {
     const answeredFirst = answersFirst(request);
     if (answeredFirst !== undefined) return answeredFirst;
     const { path, body } = request;
@@ -144,6 +202,8 @@ export function boothWith(
     }
     return log.answer(request);
   });
+  alsoReachSocketsTheAppOpens();
+  return backend;
 }
 
 export function decksThisBrowserLoaded(): Record<string, { track_id: number }> {
@@ -167,12 +227,26 @@ export function journeysAsked(backend: BoothBackend): Array<number[] | undefined
     .map((request) => (request.body as { trailing_track_ids?: number[] }).trailing_track_ids);
 }
 
+async function theAppShowsIt(): Promise<void> {
+  await act(async () => {
+    await new Promise((shown) => requestAnimationFrame(shown));
+  });
+}
+
 export async function liveNowPlays(
   backend: BoothBackend,
   playing: Record<string, number>,
 ): Promise<void> {
   backend.liveNowPlays(playing);
-  await act(async () => {
-    await new Promise((shown) => requestAnimationFrame(shown));
+  await theAppShowsIt();
+}
+
+export async function liveStops(): Promise<void> {
+  const stopped = JSON.stringify({ ...EMPTY_ABLETON_STATE, tempo: 128, is_playing: false });
+  act(() => {
+    for (const socket of socketsToLive) {
+      if (socket.url.endsWith("/ws")) socket.onmessage?.({ data: stopped } as MessageEvent);
+    }
   });
+  await theAppShowsIt();
 }

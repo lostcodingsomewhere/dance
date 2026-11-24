@@ -12,6 +12,7 @@ import {
   decksThisBrowserLoaded,
   journeysAsked,
   liveNowPlays,
+  liveStops,
   playsLogged,
   preparedSetInLive,
   sessionsStarted,
@@ -35,7 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await liveNowPlays(backend, {});
+  await liveStops();
   backend.restore();
   vi.useRealTimers();
 });

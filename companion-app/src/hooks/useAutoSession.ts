@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { serverTimeMs } from "../api";
+import type { DjSession } from "../types";
 import { useAbletonState } from "./useAbletonState";
 import {
   useCreateSession,
@@ -11,68 +13,60 @@ const STALE_AFTER_LAST_PLAY_MS = 4 * 60 * 60 * 1000; // 4 hours
 /** Treat an empty session this old as stale too (someone hit Start, walked away). */
 const STALE_AFTER_START_NO_PLAYS_MS = 60 * 60 * 1000; // 1 hour
 
-/**
- * Auto-start a session the first time Ableton plays in a tab. Also auto-ends
- * stale active sessions so coming back the next day starts a fresh set
- * instead of gluing tonight onto last night.
- *
- * Runs once per component mount (attemptedRef) so we don't loop on session
- * data updates.
- */
+const TRANSPORT = "transport";
+
+function isStale(session: DjSession): boolean {
+  const lastPlayedAt = session.plays.at(-1)?.played_at;
+  return lastPlayedAt
+    ? Date.now() - serverTimeMs(lastPlayedAt) > STALE_AFTER_LAST_PLAY_MS
+    : Date.now() - serverTimeMs(session.started_at) > STALE_AFTER_START_NO_PLAYS_MS;
+}
+
+function whatLivePlays(
+  isPlaying: boolean | null,
+  playingClips: Record<string, number>,
+): Set<string> {
+  if (!isPlaying) return new Set();
+  const clips = Object.entries(playingClips).map(([track, scene]) => `${track}:${scene}`);
+  return new Set([TRANSPORT, ...clips]);
+}
+
 export function useAutoSession(): void {
-  const ableton = useAbletonState();
+  const { is_playing: isPlaying, playing_clips: playingClips } = useAbletonState();
   const session = useCurrentSession();
-  const createSession = useCreateSession();
-  const endSession = useEndSession();
-  const attemptedRef = useRef(false);
+  const current = session.data;
+  const sessionIsSettled = !session.isFetching;
+  const { mutate: createSession } = useCreateSession();
+  const { mutate: endSession } = useEndSession();
+  const lastSeenPlayingRef = useRef(new Set<string>());
+  const startAwaitsSessionRef = useRef(false);
+  const staleCheckedRef = useRef<number | null>(null);
+  const busyRef = useRef(false);
 
   useEffect(() => {
-    if (attemptedRef.current) return;
-    if (session.isLoading) return;
+    const playing = whatLivePlays(isPlaying, playingClips ?? {});
+    const somethingStarted = [...playing].some((part) => !lastSeenPlayingRef.current.has(part));
+    lastSeenPlayingRef.current = playing;
+    if (somethingStarted) startAwaitsSessionRef.current = true;
+    if (busyRef.current || !sessionIsSettled) return;
 
-    if (session.data) {
-      const last = session.data.plays.at(-1)?.played_at;
-      const started = session.data.started_at;
-      const now = Date.now();
-      const isStale = last
-        ? now - new Date(last).getTime() > STALE_AFTER_LAST_PLAY_MS
-        : now - new Date(started).getTime() > STALE_AFTER_START_NO_PLAYS_MS;
-      if (isStale) {
-        // Guard against re-entering while the end is in flight, then RELEASE
-        // the guard so the normal "playing -> create" branch below can run.
-        //
-        // This used to latch `attemptedRef` permanently and create the
-        // replacement only `if (ableton.is_playing)` — evaluated against the
-        // value captured when the effect ran. Come back the next day, open
-        // the app with the transport stopped (which is how you always open
-        // it), and the stale session was ended, no replacement was made, and
-        // the guard blocked every retry for the lifetime of the mount. The
-        // whole night went unlogged and only a page reload fixed it.
-        attemptedRef.current = true;
-        endSession.mutate(session.data.id, {
-          onSuccess: () => {
-            attemptedRef.current = false;
-          },
-          onError: () => {
-            attemptedRef.current = false;
-          },
-        });
+    const release = () => {
+      busyRef.current = false;
+    };
+    if (current) {
+      const isFirstLook = staleCheckedRef.current !== current.id;
+      staleCheckedRef.current = current.id;
+      if (isFirstLook && isStale(current)) {
+        busyRef.current = true;
+        endSession(current.id, { onSettled: release });
         return;
       }
-      // Recent + active — keep using it.
-      attemptedRef.current = true;
+      startAwaitsSessionRef.current = false;
       return;
     }
-
-    if (ableton.is_playing) {
-      attemptedRef.current = true;
-      createSession.mutate(undefined);
-    }
-  }, [
-    ableton.is_playing,
-    session.data,
-    session.isLoading,
-    createSession,
-    endSession,
-  ]);
+    if (!startAwaitsSessionRef.current) return;
+    startAwaitsSessionRef.current = false;
+    busyRef.current = true;
+    createSession(undefined, { onSettled: release });
+  }, [isPlaying, playingClips, current, sessionIsSettled, createSession, endSession]);
 }
