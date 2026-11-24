@@ -811,6 +811,8 @@ export function PipelineOps() {
   const total = status.data?.total ?? 0;
   const weighted = status.data?.weighted_progress ?? 0;
   const inProgress = !!status.data?.in_progress;
+  // isError goes back to false on every new attempt while no status has loaded.
+  const serverIsNotAnswering = status.errorUpdatedAt > status.dataUpdatedAt;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -818,18 +820,24 @@ export function PipelineOps() {
       <div className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
-          <p className="text-neutral-500 text-sm">
-            {inProgress ? "Processing…" : "Idle"} · {total} tracks ·{" "}
-            <span className="text-neutral-300">
-              {weighted.toFixed(1)}% through pipeline
-            </span>
-            {status.data && status.data.complete > 0 && (
-              <span className="text-neutral-500">
-                {" "}
-                · {status.data.complete} fully complete
+          {serverIsNotAnswering ? (
+            <p className="text-rose-300 text-sm">
+              The server is not answering. Check that it is running.
+            </p>
+          ) : (
+            <p className="text-neutral-500 text-sm">
+              {inProgress ? "Processing…" : "Idle"} · {total} tracks ·{" "}
+              <span className="text-neutral-300">
+                {weighted.toFixed(1)}% through pipeline
               </span>
-            )}
-          </p>
+              {status.data && status.data.complete > 0 && (
+                <span className="text-neutral-500">
+                  {" "}
+                  · {status.data.complete} fully complete
+                </span>
+              )}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <label

@@ -327,3 +327,44 @@ describe("starting work from the Pipeline view", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+describe("the Pipeline view when the server is down", () => {
+  it("says the server is not answering instead of reporting an idle, empty library", async () => {
+    backend = new BoothBackend(() => {
+      throw new TypeError("Failed to fetch");
+    });
+    renderPipelineView();
+
+    expect(await screen.findByText(/The server is not answering/)).toBeInTheDocument();
+    expect(screen.queryByText(/Idle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 tracks/)).not.toBeInTheDocument();
+  });
+
+  it("keeps saying so while it asks again, and reports the library once the server answers", async () => {
+    let serverIsUp = false;
+    backend = new BoothBackend(
+      aLibraryOf([FINISHED], {
+        [`GET ${API}/status`]: () => {
+          if (!serverIsUp) throw new TypeError("Failed to fetch");
+          return statusOf([FINISHED]);
+        },
+        [`POST ${API}/scan`]: () => NOTHING_NEW_ON_DISK,
+      }),
+    );
+    renderPipelineView();
+    expect(await screen.findByText(/The server is not answering/)).toBeInTheDocument();
+
+    serverIsUp = true;
+    const deliverTheStatus = holdAnswersTo(`${API}/status`);
+    fireEvent.click(screen.getByRole("button", { name: "Scan" }));
+    await waitFor(() => expect(backend.sent("GET", `${API}/status`)).toHaveLength(2));
+
+    expect(screen.getByText(/The server is not answering/)).toBeInTheDocument();
+    expect(screen.queryByText(/Idle/)).not.toBeInTheDocument();
+
+    await act(deliverTheStatus);
+
+    expect(screen.getByText(/Idle/)).toBeInTheDocument();
+    expect(screen.queryByText(/The server is not answering/)).not.toBeInTheDocument();
+  });
+});
