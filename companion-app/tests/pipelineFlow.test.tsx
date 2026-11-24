@@ -220,3 +220,24 @@ describe("failed tracks in the Pipeline view", () => {
     expect(within(short).queryByRole("button", { name: FILE_IS_GONE })).not.toBeInTheDocument();
   });
 });
+
+describe("starting work from the Pipeline view", () => {
+  it("says another run is in progress when Process now is refused", async () => {
+    let answer = () => refusal(409, RUN_IN_PROGRESS);
+    backend = new BoothBackend(aLibraryOf([FINISHED], { [`POST ${API}/process`]: () => answer() }));
+    renderPipelineView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Process now" }));
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("Another run is in progress.");
+    expect(notice).toHaveTextContent(RUN_IN_PROGRESS);
+    expect(notice).not.toHaveTextContent("API 409");
+
+    answer = () => refusal(503, NO_FFMPEG);
+    fireEvent.click(await screen.findByRole("button", { name: "Process now" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(NO_FFMPEG));
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Another run is in progress.");
+  });
+});

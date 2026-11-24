@@ -711,7 +711,16 @@ export function PipelineOps() {
 
   const processMutation = useMutation({
     mutationFn: api.triggerPipelineProcess,
+    onMutate: () => setRefusal(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-status"] }),
+    onError: (err: Error) =>
+      setRefusal({
+        whatDidNotHappen:
+          err instanceof api.ApiError && err.status === 409
+            ? "Another run is in progress."
+            : "Processing did not start.",
+        reason: api.serverMessage(err),
+      }),
   });
 
   const retryMutation = useMutation({
