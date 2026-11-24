@@ -43,6 +43,21 @@ export interface Region {
   stem_file_id: number | null;
 }
 
+export type PadRole = "drums" | "bass" | "vocals" | "other" | "mix";
+export type PadTarget = PadRole | "all";
+
+export interface Pad {
+  slot: number;
+  role: PadRole;
+  stem_file_id: number | null;
+  position_ms: number;
+  length_ms: number | null;
+  length_bars: number | null;
+  section_label: string | null;
+  source: "auto" | "manual";
+  silent: boolean;
+}
+
 export interface Track {
   id: number;
   file_path: string;

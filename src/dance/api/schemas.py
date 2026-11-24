@@ -103,11 +103,28 @@ class RegionOut(_Base):
     region_type: str
     section_label: str | None = None
     length_bars: int | None = None
+    slot: int | None = None
     name: str | None = None
     color: str | None = None
     confidence: float | None = None
     source: str
     stem_file_id: int | None = None
+
+
+class PadOut(BaseModel):
+    slot: int
+    role: str
+    stem_file_id: int | None = None
+    position_ms: int
+    length_ms: int | None = None
+    length_bars: int | None = None
+    section_label: str | None = None
+    source: str
+    silent: bool
+
+
+class PadMove(BaseModel):
+    position_ms: int = Field(ge=0)
 
 
 # ---------------------------------------------------------------------------

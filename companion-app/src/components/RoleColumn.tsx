@@ -90,6 +90,7 @@ function StemRow({
   leading,
   breakdown,
   action,
+  metaAction,
   tooltip,
   accent,
   focused,
@@ -106,6 +107,7 @@ function StemRow({
   leading: string;
   breakdown?: Record<string, number>;
   action: React.ReactNode;
+  metaAction?: React.ReactNode;
   tooltip?: string;
   accent?: boolean;
   /** Under the keyboard cursor — draws the focus ring and scrolls into view. */
@@ -172,10 +174,13 @@ function StemRow({
       <div className="text-[11px] text-neutral-400 truncate leading-tight">
         {artist ?? "—"}
       </div>
-      <div className="text-[10px] text-neutral-500 truncate font-mono leading-tight">
-        {bpm != null && <span>{bpm.toFixed(0)}</span>}
-        {keyCamelot && <span className="ml-1.5">· {keyCamelot}</span>}
-        {energy != null && <span className="ml-1.5 text-neutral-600">· E{energy}</span>}
+      <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 font-mono leading-tight">
+        <span className="truncate flex-1 min-w-0">
+          {bpm != null && <span>{bpm.toFixed(0)}</span>}
+          {keyCamelot && <span className="ml-1.5">· {keyCamelot}</span>}
+          {energy != null && <span className="ml-1.5 text-neutral-600">· E{energy}</span>}
+        </span>
+        {metaAction}
       </div>
       {breakdown && Object.keys(breakdown).length > 0 && (
         <ScoreBreakdown breakdown={breakdown} size="sm" className="mt-1" />
@@ -206,6 +211,11 @@ function StemRow({
   );
 }
 
+// The grid's window key handler would take Enter/Space as commit/audition and cancel the click.
+function keepActivationKeysFromGrid(e: React.KeyboardEvent) {
+  if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+}
+
 /** A queued pick in the plan (top zone) — emerald-edged, × to remove. */
 function QueueCard({
   item,
@@ -215,6 +225,7 @@ function QueueCard({
   focused,
   onFocus,
   onRemove,
+  onOpenPads,
 }: {
   item: PlanItem;
   role: PlanRole;
@@ -223,6 +234,7 @@ function QueueCard({
   focused?: boolean;
   onFocus?: () => void;
   onRemove: () => void;
+  onOpenPads?: () => void;
 }) {
   return (
     <StemRow
@@ -238,6 +250,19 @@ function QueueCard({
       focused={focused}
       onFocus={onFocus}
       leading={`${index + 1}`}
+      metaAction={
+        onOpenPads && (
+          <button
+            type="button"
+            onClick={onOpenPads}
+            onKeyDown={keepActivationKeysFromGrid}
+            className="-my-px shrink-0 rounded border border-neutral-700/60 bg-neutral-800/70 px-1.5 font-sans text-[10px] leading-tight text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors"
+            title="Show and move this song's cue pads"
+          >
+            Pads
+          </button>
+        )
+      }
       action={
         <button
           type="button"
@@ -453,17 +478,26 @@ export function PlanBand({
   setId,
   role,
   mode,
+  onOpenPads,
 }: {
   setId: number;
   role: PlanRole;
   mode: Mode;
+  onOpenPads?: (item: PlanItem) => void;
 }) {
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
   return (
     <div className="flex h-full flex-col gap-1 min-w-0">
       <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
-      <PlanZone setId={setId} role={role} mode={mode} queue={queue} className="flex-1" />
+      <PlanZone
+        setId={setId}
+        role={role}
+        mode={mode}
+        queue={queue}
+        onOpenPads={onOpenPads}
+        className="flex-1"
+      />
     </div>
   );
 }
@@ -495,12 +529,14 @@ function PlanZone({
   role,
   mode,
   queue,
+  onOpenPads,
   className,
 }: {
   setId: number;
   role: PlanRole;
   mode: Mode;
   queue: PlanItem[];
+  onOpenPads?: (item: PlanItem) => void;
   /** Passed ``flex-1`` so the zone grows to fill a stretched plan band —
    * that's what makes the empty placeholder match the tallest queued column. */
   className?: string;
@@ -529,6 +565,7 @@ function PlanZone({
           focused={isFocused(focus, role, "plan", i)}
           onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
           onRemove={() => removeFromRole(role, i)}
+          onOpenPads={onOpenPads && (() => onOpenPads(item))}
         />
       ))}
     </div>

@@ -26,6 +26,7 @@ from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
     Region,
+    RegionType,
     StemFile,
     StemKind,
     Track,
@@ -136,7 +137,11 @@ class AlsGenerator:
 
         regions = (
             self.session.query(Region)
-            .filter(Region.track_id == track.id, Region.stem_file_id.is_(None))
+            .filter(
+                Region.track_id == track.id,
+                Region.stem_file_id.is_(None),
+                Region.region_type != RegionType.PAD.value,
+            )
             .order_by(Region.position_ms)
             .all()
         )

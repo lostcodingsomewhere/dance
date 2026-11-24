@@ -18,6 +18,14 @@ Three modes co-exist in this paradigm:
 - **Swap** — keep most stems running, swap one out for a stem from a different song. The most common move.
 - **Build** — start with one stem (just drums), layer in bass, then vocals, then a synth. Build a track from scratch, live.
 
+### Originals and their remixes
+
+The style leans on an original and its remixes: the remix's drums under the original's hook, the original's vocal over the remix's drop, and a transition made by trading one stem at a time between the two.
+
+This narrows the opening line. Each stem is still played apart from the rest of its song, and any column can hold a stem from another song. A pad is found by its place in the song, such as the intro, the hook or the drop, so that an original and its remix line up row for row. The listener is meant to recognise the song.
+
+Design detail: [`proposals/cue-pads-prepared-set.md`](proposals/cue-pads-prepared-set.md).
+
 ## Choose-your-adventure recommendations
 
 The app is **not a search box**. It is a **continuously re-scoring set of suggestions** that respond to what's currently playing.
@@ -57,7 +65,7 @@ A 30-minute set where:
 - The set evolved in ways that **surprised the user** — combinations they would not have curated in advance.
 - The set arc has a coherent shape (warmup → peak → resolve) without being pre-planned.
 - The user felt like they were **playing an instrument**, not selecting from a playlist.
-- A passive listener could not identify the source tracks.
+- A passive listener recognised the songs and heard them combined in ways no released version has, such as a remix's drums under the original's hook.
 
 ## How this shapes design
 
@@ -84,3 +92,5 @@ These decisions fall out of the vision and are locked:
 ## Provenance
 
 This vision was articulated through conversation on 2026-05-17 after the user pushed past the original "stems are first-class" framing into a more specific creative ambition. Earlier iterations of the companion app assumed song-mode performance; the live-remixing pivot is a directional refinement, not a reset — the pipeline, the DB schema, and the .als writer all still apply. What changes is the **UI's primary unit of attention** (cell, not row) and the **shape of the recommendation system** (per-column streams, not a single list).
+
+On 2026-11-23 the user added the emphasis on originals and their remixes and chose pads found by song part over loops picked per stem. The success line about source tracks a listener could not identify was replaced on that date.

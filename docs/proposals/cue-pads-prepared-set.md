@@ -1,10 +1,56 @@
 # Cue pads, a prepared Set, and version families
 
-**Status:** PROPOSAL, not implemented. Waiting for your go-ahead (CLAUDE.md rule 1: it changes the `.als` writer's emission shape, the OSC load contract, and API schemas).
+**Status:** APPROVED 2026-11-23, in progress. All eleven decisions are settled in "Decisions for you". Nothing is verified in Live yet.
 **Date:** 2026-11-23
 **Touches:** `src/dance/pipeline/stages/detect_regions.py`, `src/dance/core/database.py` (one enum value), `src/dance/als/writer.py` + `generator.py`, `src/dance/osc/bridge.py` (`push_track_to_live`), `src/dance/api/routers/{ableton,sets,tracks}.py` + `schemas.py`, `src/dance/recommender/dedup.py`, `companion-app` (`SceneGrid`, `TwoDeckStrip`, `lib/roles.ts`), `cli.py`.
 **Stacks on:** [`als-clip-elements.md`](als-clip-elements.md) option A, [`warp-guard.md`](warp-guard.md) (who owns the grid), and the library re-run that the tempo fix already requires.
 **Related:** [`../vision.md`](../vision.md), [`../dj_ux_flow.md`](../dj_ux_flow.md), [`stem-deck-pair.md`](stem-deck-pair.md), [`hardware-and-live-controls.md`](hardware-and-live-controls.md), [`analysis-provenance-loudness-identity.md`](analysis-provenance-loudness-identity.md), [`set-plan-revision.md`](set-plan-revision.md)
+
+---
+
+## Progress
+
+As of 2026-11-23. Sources are the run logs of that day and the checks named here.
+
+**Step 0, prerequisites**
+
+- Database backed up to `~/.dance/dance.db.bak-pre-reanalyze-20261123-162954`
+  (357 tracks, 29,116 regions, integrity check ok).
+- Re-analysis: 244 of 244 non-duplicate tracks, 0 errors, 730 s. The 111 rows marked
+  duplicate and the tracks in the error state were not re-run, so 113 of 357 mix
+  analyses still carry the old values.
+- Re-embedding: 715 s. All 1,750 embedding rows now carry the current scheme
+  (`win-nonsilent-mean-v1`), where all 1,765 had none before, so recommendations
+  and vibe search have their embedding signal back. `dance tag` tagged the 1 track
+  that had no tags. `dance build-graph` built 10,938 neighbour edges.
+- `als-clip-elements.md` step 1 (baseline) is done, read over OSC with nobody at the
+  screen. Live 12.4.3 kept the warp grid written in the file on all five A-side
+  clips, and the warp-marker read handlers from patch `0005` are active. Details in
+  `docs/live-compat.md`. This settles the open question of whether a Set file can
+  carry its own timing.
+- Step 2 (Save As round-trip) needs a person at the Mac. Option A is not landed.
+
+**Step 1, cues in data**
+
+- Done in code: the picker, `pad` rows, `GET`, `PUT` and `DELETE` pad routes, six
+  end-to-end tests. `dance export-als` leaves pads out of its locators.
+- Done in the app: a "Pads" button on each queued pick in the Set view opens an
+  editor with the song's waveform, five numbered flags coloured by section, a stem
+  selector, click-to-move and reset. One flow test. Checked in a browser against
+  the library copy: a move and a reset both went through and redrew.
+- Run on a private copy of the library, 244 tracks: 243 got five pads and one track
+  with two sections got two. Pad 3 is a drop on 168 of 244. Pad 1 starts more than
+  5 s into the file on 47 of 244, because the beat detector starts where the beat
+  does. Vocal pads start silent on 578 of 1,217 (47%), and on 42 of 244 tracks every
+  vocal pad starts silent.
+- Spread, same copy: the largest stretch of a song with no pad is a median of 39% of
+  its length, and over half the song on 37 of 243 tracks. A variant that anchors on
+  the first drop in place of the loudest scored the same (40%, 43 of 243), so the
+  limit is the section labels, which call long stretches "breakdown". Moving pads by
+  hand covers it for now. Better section labels are their own piece of work.
+- The real library has no pads yet. After this branch merges it needs
+  `alembic upgrade head` and one `detect_regions` pass.
+- Not done: listening to the start points on ten songs you know.
 
 ---
 
@@ -119,13 +165,19 @@ Finding pads by song part is what lets an original and its remix line up, becaus
 "remix drums under the original's hook" needs both versions cut at the same named
 places.
 
-`vision.md` leans further towards loops. It says to "play stems as independent
-loops, not as pieces of songs", and it counts a set a success when "a passive
-listener could not identify the source tracks". Playing an original against its
-remix pulls the other way, because the listener is meant to recognise the song. If
-the loop reading should win outright, two rules below change. Each stem would get
-its own five best loops in place of its track's five sections, so rows would stop
-lining up across a deck. The case for grouping columns by deck would also get weaker.
+**Decided 2026-11-23: pads are found by song part.**
+
+`vision.md` leans further towards loops in its opening line, "play stems as
+independent loops, not as pieces of songs", and until this decision it counted a
+set a success when a listener could not identify the source tracks. Playing an
+original against its remix pulls the other way, because the listener is meant to
+recognise the song. `vision.md` now has a section on originals and their remixes,
+and that success line is replaced.
+
+The loop reading would have changed two rules below. Each stem would have had its
+own five best loops in place of its track's five sections, so rows would have
+stopped lining up across a deck. The case for grouping columns by deck would also
+have been weaker.
 
 The instrument reading is left out for these reasons:
 
@@ -157,6 +209,9 @@ and holds whatever parts you placed there. This is how producers perform their o
 material. It is the most expressive and the slowest to prepare, because every pad
 is a decision. It can be built on B's clips later.
 
+**Decided 2026-11-23: B.** The app picks the five cues and any of them can be moved
+by hand.
+
 ### What B looks like
 
 Original on deck A, its remix on deck B, with the column order from decision 5:
@@ -164,32 +219,47 @@ Original on deck A, its remix on deck B, with the column order from decision 5:
 ```
             DECK A (original)                 DECK B (remix)
             Drums  Bass   Vocals Melody       Drums  Bass   Vocals Melody
-  row 1     intro  intro  v.1    intro        intro  intro  v.1    intro
-  row 2     build  build  hook   build        build  build  hook   build
-  row 3     DROP   DROP   v.2    DROP         DROP   DROP   v.2    DROP
-  row 4     break  break  hook   break        break  break  bridge break
-  row 5     drop2  drop2  outro  drop2        drop2  drop2  hook   drop2
+  row 1     intro  intro  intro  intro        intro  intro  intro  intro
+  row 2     build  build  build  build        build  build  build  build
+  row 3     DROP   DROP   DROP   DROP         DROP   DROP   DROP   DROP
+  row 4     break  break  break  break        break  break  break  break
+  row 5     drop2  drop2  drop2  drop2        drop2  drop2  drop2  drop2
   faders    1      2      3      4            5      6      7      8
 ```
 
-Remix drums under the original's hook is pad (row 3, Drums B) plus pad (row 2,
-Vocals A), with faders 1 and 5 crossing.
+Remix drums under the original's vocal is pad (row 3, Drums B) plus the Vocals A
+pad for the part you want, with faders 1 and 5 crossing.
 
 ### Which five cues
 
 Stored as `Region` rows with a new `region_type` of `pad`, one set per stem and one
 for the mix. Picked in `detect_regions`, which already holds everything needed.
 
-- **Drums, bass, melody and the mix share one list per track**, so their rows line
-  up: the intro, the first build-up, the loudest drop, the longest breakdown after
-  it, and the last drop (the outro when there is only one drop).
-- **Vocals get their own list**: the five longest vocal entrances, an entrance being
-  where the stem turns present after at least two bars of silence, moved back to the
-  bar line. Fewer than five when the song has fewer. Instrumentals get none.
+**Decided 2026-11-23: every stem and the mix share one list of five per track**, so
+all rows line up: the intro, the first build-up, the loudest drop, the longest
+breakdown after it, and the last drop (the outro when there is only one drop).
+
+Vocals share the list too. The measured cost is that vocals are absent in 46% of
+sections (1,493 of 3,256 on the 244 tracks), so close to half the vocal pads start
+with no singing. Three things soften that:
+
+- Vocals play on, so a vocal pad that starts in silence brings the singing in when
+  the song reaches it.
+- Each cue carries a flag for "this stem is silent for the first eight bars", which
+  the app shows and the pad colour can show (decision 4).
+- A vocal pad can be moved by hand on its own, without moving the other stems' pads.
+
+The alternative, not chosen, was a separate vocal list of the five longest vocal
+entrances.
 
 These rules are a starting point to tune by ear. `source` is `auto`; a pad you move
 by hand becomes `manual`, and `_clear_auto_data` already leaves manual rows alone on
 a re-run (`detect_regions.py:144`).
+
+Moving a pad is in scope. In the Set view a song's waveform shows its five cue
+flags. Drag a flag to another bar line, or click a section to give it to a pad. A
+reset puts the app's pick back. The API has no route that writes a region today, so
+this adds one.
 
 ### What happens when the section ends
 
@@ -197,7 +267,7 @@ a re-run (`detect_regions.py:144`).
 
 | | Drums, bass, melody | Vocals | Song (mix) |
 |---|---|---|---|
-| **Hold per role ← recommended** | loop the section, cut to 4, 8 or 16 bars | play on | play on |
+| **Hold per role ← decided 2026-11-23** | loop the section, cut to 4, 8 or 16 bars | play on | play on |
 | Everything plays on | play on | play on | play on |
 | Everything holds | loop | loop | loop |
 
@@ -212,9 +282,9 @@ one place, so the default can be a setting and flipped after hearing both.
 The pads are the only display on the controller. A column's position already says
 which role it is, so colour is free for something else.
 
-- **Recommended:** hue for the section type (intro and outro, build-up, drop,
+- **Decided 2026-11-23:** hue for the section type (intro and outro, build-up, drop,
   breakdown), and a dim shade when the stem is silent for the pad's first eight bars.
-- **Today:** one colour per role.
+- **Today, and not chosen:** one colour per role.
 
 The app keeps role tints on screen. The exact palette indices need a look at the
 hardware.
@@ -231,7 +301,7 @@ neighbouring pads for one hand, faders 1 to 4 are deck A, and a role swap is the
 same finger on each hand. The scene button fires both decks' cue, which is rarely
 wanted, and the stock APC40 script cannot fire half a row.
 
-- **Recommended with B:** group by deck.
+- **Decided 2026-11-23:** group by deck. Deck A is faders 1 to 4, deck B is 5 to 8.
 - **Cost:** it reverses the 2026-06-13 choice. It is cheap now and expensive once
   your hands have learned an order. Three exercises in the course already assume the
   grouped order (`docs/course/index.html` lines 849, 883, 902).
@@ -252,7 +322,7 @@ Bank button or the Shift overview and has to be confirmed on the device.
 **A. Keep creating clips during the set (today).** Every load waits on Live's
 auto-warp and can come back wrong.
 
-**B. `dance export-set` writes the whole plan as one `.als`. ← recommended.** Every
+**B. `dance export-set` writes the whole plan as one `.als`. ← decided 2026-11-23.** Every
 clip carries its warp grid and its cue markers in the file, so nothing is analysed
 at the gig. This is the path where the grid travels with the clip, which
 `als-clip-elements.md` identified as the one way to skip auto-warp.
@@ -271,7 +341,9 @@ No change to the plan's shape in this proposal.
   they share a page.
 - **Single-stem picks go on spare pages after the songs**, two per role per page.
   Firing a spare pad replaces that role on its deck, and it keeps playing when you
-  page back.
+  page back. Decided 2026-11-23, because a single stem is queued to keep handy and
+  the plan does not say which song it goes under. Putting it in a song's own column
+  was the other choice, and it needs a plan that pairs a stem with a song.
 - **The Song A and Song B tracks** hold each song's full mix with the same five cues,
   playing on. They are tracks 9 and 10, outside the eight pad columns, so reaching
   them from the controller means banking right.
@@ -300,8 +372,9 @@ Both paths pin every clip to Beats (`writer.py:526`, `bridge.py:1841`). Beats su
 drums. When an original and its remix differ in tempo, a vocal stretched in Beats
 mode sounds chopped.
 
-- **Recommended:** Beats for drums and bass, Complex Pro for vocals, Complex for
-  melody and the mix. The CPU cost with eight stems playing is not measured.
+- **Decided 2026-11-23:** Beats for drums and bass, Complex Pro for vocals, Complex
+  for melody and the mix. The CPU cost with eight stems playing is not measured, so
+  the first Live session checks it by ear and on the CPU meter.
 
 ### Loading during the set still works
 
@@ -316,7 +389,7 @@ expose it.
 
 ### Options
 
-**A. Compute the family when asked. ← recommended.** A pure function beside
+**A. Compute the family when asked. ← default taken 2026-11-23.** A pure function beside
 `title_key` in `recommender/dedup.py`: same base title (brackets, "- X Remix" tails
 and featuring credits removed), at least one shared credited artist, and a different
 title or a length more than 5 s apart. No schema change. It is fast at this library's
@@ -354,13 +427,13 @@ work first and this is its own step.
 
 | Contract (rule 1) | Change |
 |---|---|
-| SQLAlchemy models | One value added to `RegionType`: `pad`. `region_type` is `String(16)` with no constraint, so no Alembic revision. |
+| SQLAlchemy models | One value added to `RegionType`: `pad`. One nullable column added, `regions.slot`, which says which of the five pads a row is. It came with hand-picking: a moved pad has to keep its number when the app's picks are rebuilt around it. Alembic revision `a1c5d9e3f7b2`, additive. |
 | Stage protocol | None. `detect_regions` emits more rows. |
 | `.als` emission | Several clips per deck track with their own start and loop markers, warp mode per role, named scenes, more than one song per Set. A new export beside the per-track one, which stays. |
 | OSC load contract | A load creates five clips per column and sets `start_marker`, `loop_start`, `loop_end`, `looping`, `color_index` (all handled by the installed script). Clip names stay `{title} ({kind} {side})` so `/decks/resync` keeps working (`ableton.py:701`); the cue is the row within the page. |
-| API schemas | Deck cells gain a cue number and label. New `POST /sets/{id}/als` and `GET /tracks/{id}/versions`. `load-track` accepts a page. |
+| API schemas | Deck cells gain a cue number and label. New `POST /sets/{id}/als` and `GET /tracks/{id}/versions`. New `GET /tracks/{id}/pads`, and `PUT` and `DELETE /tracks/{id}/pads/{stem}/{n}` to move a pad and to reset it. `{stem}` is `drums`, `bass`, `vocals`, `other`, `mix`, or `all` for the whole song. The silent flag is worked out on read from the stem's presence data. `load-track` accepts a page. |
 | Plan shape | Unchanged. |
-| Column order (if decision 5 is yes) | `_DECK_KINDS`, `DECK_ORDER`, `TWO_DECK_COLUMN_ORDER`, the template's track order, docs and course. |
+| Column order (decision 5, decided) | `_DECK_KINDS`, `DECK_ORDER`, `TWO_DECK_COLUMN_ORDER`, the template's track order, docs and course. |
 
 ## Order of work
 
@@ -371,41 +444,43 @@ Each step lands on its own and is checked in Live before the next one starts.
    `dance tag`, `dance build-graph` (take the provenance proposal's duration snapshot
    first if that proposal is going ahead). Run `als-clip-elements.md` verification
    steps 1 and 2, then land its option A.
-1. **Cues in data.** The picker, the `pad` rows, the API field, and five cue flags on
-   the waveform. Nothing changes in Live. Check: read the cues for ten songs you
-   know and listen to each start point.
+1. **Cues in data.** The picker, the `pad` rows, the API field, five cue flags on
+   the waveform, and moving a flag by hand. Nothing changes in Live. Check: read the
+   cues for ten songs you know, listen to each start point, and move one.
 2. **`dance export-set`.** Pages, cue clips, the shared grid, warp modes, and the
    column order if chosen. Check: the Live session in the verification plan.
 3. **The Booth reads pages.** `SceneGrid` shows the current page with cue labels,
    resync adopts a prepared Set, deck play takes a cue.
 4. **Live loads build the same clips.** Only after patch `0005` is seen working.
-5. **Families, read side.** Then "find versions" once a set has been played.
+5. **Families, read side.**
+6. **"Find versions".** Repair the Spotify module first, then the search and the
+   queue action. Decided 2026-11-23 to build it in this round, because the library
+   holds three original and remix pairs and the style needs more.
 
 ## Decisions for you
 
-1. **What a pad is:** A, B or C. I recommend B. Under that sits what a pad stands
-   for: found by song part with the rhythm stems looping, as written here, or loops
-   chosen per stem, as `vision.md` reads. I recommend song part, because of the
-   original and remix pairing. A yes means the "could not identify the source
-   tracks" line in `vision.md` needs a matching edit, which this proposal leaves
-   alone.
-2. **Section end:** hold per role, everything plays on, or everything holds. I
-   recommend hold per role, as a setting.
-3. **The five-cue rule**, including separate cues for vocals. I recommend yes to both.
-4. **Pad colour:** section type with a dim shade for silent stems, or role colour as
-   today. I recommend section type.
-5. **Column order:** grouped by deck, or interleaved by role as today. I recommend
-   grouped if decision 1 is B. Otherwise leave it.
-6. **Prepared Set:** export (B), build over OSC (C), or neither. I recommend B.
-7. **Single-stem picks in the Set:** spare pages after the songs, in place of a
-   song's own stem on its page, or left out. I recommend spare pages.
-8. **Warp mode per role**, or Beats everywhere as today. I recommend per role, judged
-   by ear at a 6% tempo change.
-9. **Families:** computed (A), stored (B), or external ids (C). I recommend A.
-10. **"Find versions":** build it with step 5, or after the first played set. I
-    recommend after.
-11. **Scope of the go-ahead.** Step 0 includes landing `als-clip-elements.md` option
-    A and re-running the library. Say if a yes here covers those.
+1. **What a pad is.** Decided 2026-11-23: B, found by song part, with `vision.md`
+   edited to match. The app's five cues are the default and any pad can be moved by
+   hand.
+2. **Section end.** Decided 2026-11-23: hold per role. Drums, bass and melody loop
+   their section, vocals and Song play on. It stays a setting.
+3. **The five-cue rule.** Decided 2026-11-23: one list of five per track, shared by
+   every stem including vocals.
+4. **Pad colour.** Decided 2026-11-23: section type, with a dim shade for silent
+   stems.
+5. **Column order.** Decided 2026-11-23: grouped by deck. `vision.md` design
+   decision 6 still describes the alternating order and changes with the code.
+6. **Prepared Set.** Decided 2026-11-23: B, one exported `.als` for the whole plan.
+7. **Single-stem picks in the Set.** Decided 2026-11-23: spare pages after the
+   songs.
+8. **Warp mode per role.** Decided 2026-11-23: per role, judged by ear at a 6% tempo
+   change.
+9. **Families.** A, computed. Taken as the default on 2026-11-23 without a separate
+   question, because nothing you see or hear depends on it. Easy to reverse.
+10. **"Find versions".** Decided 2026-11-23: build it in this round, as the last
+    step.
+11. **Scope of the go-ahead.** Decided 2026-11-23: go ahead, covering the library
+    re-run, `als-clip-elements.md` option A, and the Live check.
 
 ## Migration cost
 
@@ -416,8 +491,10 @@ Each step lands on its own and is checked in Live before the next one starts.
   are estimates.
 - **Frontend:** `SceneGrid` paged with cue labels, cue flags in `TwoDeckStrip`, a
   version chip and grouping in `RoleColumn` and `CommandBar`. About 300 lines.
-- **Data:** none migrated. Pads appear when regions are regenerated, which the
-  step 0 re-run does for every track. Existing `.als` exports stay as they are.
+- **Data:** one additive migration (`alembic upgrade head`, for `regions.slot`).
+  Pads appear when regions are regenerated, so after the step 0 re-run the library
+  needs `dance reprocess --from detect_regions --all --skip-embeddings`, which took
+  about half a second a track on 2026-11-23. Existing `.als` exports stay as they are.
 - **Docs:** `vision.md` items 3 and 6, `dj_ux_flow.md`, `als-export.md`,
   `live-compat.md` (matrix rows and a log line), `CLAUDE.md` (grid description and
   the "let's DJ" row), and the course's fader map.
@@ -441,7 +518,11 @@ fail on today's code.
 - `GET /tracks/{id}/versions` on a seeded library holding an original, its remix, an
   extended cut, and a same-title track by another artist.
 - The pipeline run on a synthetic track with a silent vocal intro, with the cues
-  read back through `GET /tracks/{id}/regions`. No vocal cue starts in the silence.
+  read back through `GET /tracks/{id}/pads`. Every stem has the same five
+  positions, and the vocal cue at the intro carries the silent flag.
+- `PUT /tracks/{id}/pads/{stem}/{n}` on a pipeline-built track, then the pipeline
+  run again from `detect_regions`. The moved pad is still where it was put, and
+  `DELETE` brings the app's pick back.
 - One UI flow in the existing vitest harness: load a song on deck A, see five cue
   cells on the page, fire one, the right slot is requested.
 
@@ -465,7 +546,7 @@ fail on today's code.
 
 - An explicit page-by-page arrangement in the plan. The derived layout comes first;
   a new plan shape would get its own proposal.
-- Moving or renaming cues in the app. The `manual` source is reserved for it.
+- Renaming cues in the app.
 - Hold and release, loop length, or loading from the controller. Each needs a MIDI
   listener beside the OSC bridge.
 - Pads played as an instrument, meaning hits and chops that sound while held. See
@@ -478,4 +559,4 @@ fail on today's code.
 - Flagging two rows that hold the same audio under different titles, such as ids 79
   and 176.
 
-Per CLAUDE.md, implementation waits for your go-ahead.
+The go-ahead was given on 2026-11-23.

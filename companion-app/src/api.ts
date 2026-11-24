@@ -9,6 +9,8 @@ import type {
   IngestPreviewResponse,
   IngestTrackResult,
   Job,
+  Pad,
+  PadTarget,
   PipelineRecentTrack,
   PipelineStatus,
   PreviewRequest,
@@ -37,6 +39,19 @@ export class ApiError extends Error {
     super(message ?? `API ${status}: ${body || "(empty body)"}`);
     this.name = "ApiError";
   }
+}
+
+function detailOf(body: string): unknown {
+  try {
+    return JSON.parse(body).detail;
+  } catch {
+    return undefined;
+  }
+}
+
+export function serverMessage(error: Error): string {
+  const detail = error instanceof ApiError ? detailOf(error.body) : undefined;
+  return typeof detail === "string" ? detail : error.message;
 }
 
 async function request<T>(
@@ -101,6 +116,26 @@ export function searchTracks(filters: SearchTracksFilters = {}): Promise<Track[]
 
 export function getRegions(trackId: number): Promise<Region[]> {
   return request<Region[]>(`/tracks/${trackId}/regions`);
+}
+
+export function getPads(trackId: number): Promise<Pad[]> {
+  return request<Pad[]>(`/tracks/${trackId}/pads`);
+}
+
+export function movePad(
+  trackId: number,
+  target: PadTarget,
+  slot: number,
+  positionMs: number,
+): Promise<Pad> {
+  return request<Pad>(`/tracks/${trackId}/pads/${target}/${slot}`, {
+    method: "PUT",
+    body: JSON.stringify({ position_ms: positionMs }),
+  });
+}
+
+export function resetPad(trackId: number, target: PadTarget, slot: number): Promise<Pad[]> {
+  return request<Pad[]>(`/tracks/${trackId}/pads/${target}/${slot}`, { method: "DELETE" });
 }
 
 export function getStems(trackId: number): Promise<StemFile[]> {
