@@ -5,6 +5,7 @@ import {
   LIVE_TRACK_OF,
   SONG_ROLES,
   songOn,
+  type Answer,
   type Cell,
   type SeenRequest,
 } from "./boothHarness";
@@ -128,8 +129,14 @@ export class SessionLog {
   }
 }
 
-export function boothWith(log: SessionLog, inLive: () => Cell[]): BoothBackend {
+export function boothWith(
+  log: SessionLog,
+  inLive: () => Cell[],
+  answersFirst: Answer = () => undefined,
+): BoothBackend {
   return new BoothBackend((request) => {
+    const answeredFirst = answersFirst(request);
+    if (answeredFirst !== undefined) return answeredFirst;
     const { path, body } = request;
     if (path.endsWith("/ableton/decks")) return { columns: LIVE_TRACK_OF, cells: inLive() };
     if (path.endsWith("/recommend/by-column")) {
