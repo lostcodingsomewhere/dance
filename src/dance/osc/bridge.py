@@ -130,6 +130,9 @@ class AbletonBridge:
         # their replies. See ``scan_live_for_cells``.
         self._clip_names_batch: dict[int, list[str | None]] = {}
         self._clip_names_lock = threading.Lock()
+        self._clip_values: dict[str, dict[tuple[int, int], Any]] = {}
+        self._clip_values_lock = threading.Lock()
+        self._set_opened_callbacks: list[Callable[[], None]] = []
 
         # Indices of the 5 reusable "Deck" tracks in Live (mix, drums, bass,
         # vocals, other). ``None`` means we haven't created them yet; populated
@@ -176,6 +179,7 @@ class AbletonBridge:
         # where all 4 stem cells in a row point at the same track. The API
         # exposes this map as the cell-level deck view.
         self._deck_cells: dict[tuple[int, str], int] = {}
+        self._deck_cell_starts: dict[tuple[int, str], float] = {}
 
         # track_index -> bool, the raw Solo state Live pushed for each deck
         # column. Populated by per-deck solo subscriptions (see
@@ -233,6 +237,9 @@ class AbletonBridge:
         self.listener.on("/live/clip/get/is_playing", self._on_clip_is_playing)
         self.listener.on("/live/song/get/crossfader", self._on_crossfader)
         self.listener.on("/live/track/get/solo", self._on_track_solo)
+        for clip_property in self._SCANNED_CLIP_PROPERTIES:
+            self.listener.on(f"/live/clip/get/{clip_property}", self._on_clip_value)
+        self.listener.on("/live/startup", self._on_live_startup)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -246,10 +253,7 @@ class AbletonBridge:
         self._load_state()
         # Ask AbletonOSC to start pushing the things we care about.
         try:
-            self.client.start_listen_tempo()
-            self.client.start_listen_beat()
-            self.client.start_listen_is_playing()
-            self.client.start_listen_crossfader()
+            self._listen_to_song()
             # NOTE: we do NOT try to set Live's Solo/Cue switch here any more.
             #
             # This used to send /live/song/set/solo_cue_mode and claim it was
@@ -293,6 +297,32 @@ class AbletonBridge:
         except Exception:  # noqa: BLE001 — never let recovery crash boot
             logger.exception("Deck-column recovery failed")
 
+    def _listen_to_song(self) -> None:
+        self.client.start_listen_tempo()
+        self.client.start_listen_beat()
+        self.client.start_listen_is_playing()
+        self.client.start_listen_crossfader()
+
+    def on_set_opened(self, callback: Callable[[], None]) -> None:
+        self._set_opened_callbacks.append(callback)
+
+    def _on_live_startup(self, address: str, args: tuple[Any, ...]) -> None:
+        threading.Thread(
+            target=self._set_was_opened, name="live-set-opened", daemon=True
+        ).start()
+
+    def _set_was_opened(self) -> None:
+        # Live builds a new AbletonOSC for every Set it opens, so the old listeners are gone.
+        try:
+            self._listen_to_song()
+        except OSError as exc:
+            logger.info("Could not subscribe to the Set Live just opened (%s)", exc)
+        for callback in list(self._set_opened_callbacks):
+            try:
+                callback()
+            except Exception:  # noqa: BLE001
+                logger.exception("A set-opened callback failed")
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
@@ -311,6 +341,9 @@ class AbletonBridge:
                 # Tuples aren't JSON; serialize as list-of-triples.
                 "deck_cells": [
                     [s, k, tid] for (s, k), tid in self._deck_cells.items()
+                ],
+                "deck_cell_starts": [
+                    [s, k, beats] for (s, k), beats in self._deck_cell_starts.items()
                 ],
                 "cue_track_idx": self._cue_track_idx,
             }
@@ -355,6 +388,12 @@ class AbletonBridge:
                 self._deck_cells = {
                     (int(s), self._migrate_deck_kind(str(k))): int(tid)
                     for s, k, tid in cells
+                }
+            starts = data.get("deck_cell_starts", [])
+            if isinstance(starts, list):
+                self._deck_cell_starts = {
+                    (int(s), self._migrate_deck_kind(str(k))): float(beats)
+                    for s, k, beats in starts
                 }
             cue = data.get("cue_track_idx")
             if isinstance(cue, int):
@@ -834,6 +873,7 @@ class AbletonBridge:
                 logger.warning("delete_track(%d) failed: %s", idx, exc)
         self._deck_columns = None
         self._deck_cells = {}
+        self._deck_cell_starts = {}
         self._cue_track_idx = None
         self._cue_idx_verified = False
         self._deck_columns_verified = False
@@ -982,6 +1022,7 @@ class AbletonBridge:
         """
         self._deck_columns = None
         self._deck_cells = {}
+        self._deck_cell_starts = {}
         self._recompute_soloed_kinds()
         self._persist_state()
         self._bump_deck_revision()
@@ -992,11 +1033,16 @@ class AbletonBridge:
         surfaces this so the FE can render the SceneGrid + ComboStrip in
         sync with the bridge's view of Live.
 
-        ``cells`` is a list of ``{"scene_index": int, "kind": str, "track_id": int}``
-        rows — one per loaded cell.
+        ``cells`` is a list of ``{"scene_index": int, "kind": str, "track_id": int,
+        "start_beats": float | None}`` rows — one per loaded cell.
         """
         cells = [
-            {"scene_index": s, "kind": k, "track_id": tid}
+            {
+                "scene_index": s,
+                "kind": k,
+                "track_id": tid,
+                "start_beats": self._deck_cell_starts.get((s, k)),
+            }
             for (s, k), tid in sorted(self._deck_cells.items())
         ]
         return {
@@ -1047,7 +1093,7 @@ class AbletonBridge:
             return []
         batched = self._scan_cells_batched(timeout=batch_timeout)
         if batched is not None:
-            return batched
+            return self._with_clip_details(batched)
         logger.warning(
             "Bulk clip-name scan got no reply; falling back to the slow "
             "per-slot walk (~%.0f s). Is AbletonOSC current?",
@@ -1063,7 +1109,64 @@ class AbletonBridge:
                     found.append(
                         {"scene_index": slot, "kind": kind, "clip_name": name}
                     )
-        return found
+        return self._with_clip_details(found)
+
+    _SCANNED_CLIP_PROPERTIES: tuple[str, ...] = ("start_marker", "file_path")
+
+    def _with_clip_details(self, cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        columns = self._deck_columns or {}
+        slots = [(columns[cell["kind"]], cell["scene_index"]) for cell in cells]
+        starts = self._read_clip_values("start_marker", slots)
+        paths = self._read_clip_values("file_path", slots) if starts else {}
+        for cell, slot in zip(cells, slots, strict=True):
+            start = starts.get(slot)
+            cell["start_beats"] = float(start) if isinstance(start, (int, float)) else None
+            cell["file_path"] = str(paths[slot]) if paths.get(slot) else None
+        return cells
+
+    def _read_clip_values(
+        self,
+        clip_property: str,
+        slots: list[tuple[int, int]],
+        *,
+        timeout: float = 1.5,
+        poll: float = 0.01,
+    ) -> dict[tuple[int, int], Any]:
+        address = f"/live/clip/get/{clip_property}"
+        slots_by_track: dict[int, list[tuple[int, int]]] = {}
+        for slot in slots:
+            slots_by_track.setdefault(slot[0], []).append(slot)
+        values: dict[tuple[int, int], Any] = {}
+        # One track at a time, so a long Set never sends Live more than a column in one burst.
+        for track_slots in slots_by_track.values():
+            with self._clip_values_lock:
+                self._clip_values[address] = {}
+            try:
+                for track, row in track_slots:
+                    self.client.get_clip_property(clip_property, track, row)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                with self._clip_values_lock:
+                    if len(self._clip_values[address]) >= len(track_slots):
+                        break
+                time.sleep(poll)
+            with self._clip_values_lock:
+                answered = self._clip_values.pop(address)
+            if not answered:
+                logger.warning("Live did not answer %s; skipping the rest", address)
+                break
+            values.update(answered)
+        return values
+
+    def _on_clip_value(self, address: str, args: tuple[Any, ...]) -> None:
+        if len(args) < 3:
+            return
+        with self._clip_values_lock:
+            in_flight = self._clip_values.get(address)
+            if in_flight is not None:
+                in_flight[(int(args[0]), int(args[1]))] = args[2]
 
     def _scan_cells_batched(
         self, *, timeout: float = 1.5, poll: float = 0.01
@@ -1270,11 +1373,18 @@ class AbletonBridge:
             time.sleep(0.2)
         return False
 
-    def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
+    def adopt_cells(
+        self,
+        cells: dict[tuple[int, str], int],
+        start_beats: dict[tuple[int, str], float] | None = None,
+    ) -> None:
         """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
         and persist. Caller pre-resolves track_ids via DB lookup; we just
         store + persist."""
         self._deck_cells = dict(cells)
+        self._deck_cell_starts = {
+            cell: beats for cell, beats in (start_beats or {}).items() if cell in cells
+        }
         self._persist_state()
         self._bump_deck_revision()
 
@@ -1327,6 +1437,7 @@ class AbletonBridge:
         # we don't KeyError when the cache was already empty for that slot
         # (e.g. user clicked X on a stale UI).
         removed = self._deck_cells.pop((slot_index, kind), None)
+        self._deck_cell_starts.pop((slot_index, kind), None)
         self._persist_state()
         self._bump_deck_revision()
         return {
@@ -1370,10 +1481,14 @@ class AbletonBridge:
                 return i
             i += 1
 
-    def fire_deck(self, side: str, scene_index: int) -> dict[str, Any]:
+    def fire_deck(
+        self, side: str, scene_index: int, *, loaded_only: bool = False
+    ) -> dict[str, Any]:
         """Fire every cell on a deck side at one scene — the per-deck
         "play" button. Fires all 5 of the side's tracks (4 stems + mix)
-        at the given scene; quiet on empty slots (Live ignores them).
+        at the given scene. With ``loaded_only`` it fires only the cells
+        the deck map holds there: firing an empty slot presses that
+        track's stop button in Live.
 
         ``side`` must be ``"a"`` or ``"b"``. Returns
         ``{"ok": bool, "side": str, "scene_index": int, "fired": int}``.
@@ -1385,6 +1500,8 @@ class AbletonBridge:
         fired = 0
         for kind, idx in self._deck_columns.items():
             if not kind.endswith(f"_{side}"):
+                continue
+            if loaded_only and (scene_index, kind) not in self._deck_cells:
                 continue
             try:
                 self.client.fire_clip(idx, scene_index)
@@ -2408,6 +2525,7 @@ class AbletonBridge:
                 # not a deck. See _force_warp.
                 self._force_warp(t_idx, scene_index)
                 self._deck_cells[(scene_index, deck_kind)] = track.id
+                self._deck_cell_starts[(scene_index, deck_kind)] = 0.0
                 loaded_cells.append((deck_kind, t_idx))
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
@@ -2428,6 +2546,7 @@ class AbletonBridge:
                         mix_idx, scene_index, f"{title} (mix {side.upper()})"
                     )
                     self._deck_cells[(scene_index, mix_kind)] = track.id
+                    self._deck_cell_starts[(scene_index, mix_kind)] = 0.0
                 except OSError as exc:  # pragma: no cover - best-effort
                     warnings.append(f"OSC send for {mix_kind} failed: {exc}")
             else:

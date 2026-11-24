@@ -5,34 +5,14 @@ import { useMovePad, usePads, useResetPad } from "../hooks/usePads";
 import { useTrackWaveform } from "../hooks/useWaveform";
 import { formatDurationMs } from "../lib/format";
 import { roleLabel, STEM_COLUMNS } from "../lib/roles";
+import { sectionTone, type SectionTone } from "../lib/sectionTones";
 import type { Pad, PadRole, PadTarget } from "../types";
 import { Waveform } from "./Waveform";
 
 const TARGETS: readonly PadTarget[] = ["all", ...STEM_COLUMNS];
 
-interface Tone {
-  head: string;
-  pole: string;
-}
-
-const INTRO_OUTRO_TONE: Tone = {
-  head: "bg-violet-400 text-neutral-950",
-  pole: "border-violet-400",
-};
-const NEUTRAL_TONE: Tone = {
-  head: "bg-neutral-400 text-neutral-950",
-  pole: "border-neutral-400",
-};
-const SECTION_TONES: Record<string, Tone> = {
-  intro: INTRO_OUTRO_TONE,
-  outro: INTRO_OUTRO_TONE,
-  buildup: { head: "bg-yellow-400 text-neutral-950", pole: "border-yellow-400" },
-  drop: { head: "bg-red-500 text-white", pole: "border-red-500" },
-  breakdown: { head: "bg-cyan-400 text-neutral-950", pole: "border-cyan-400" },
-};
-
-function toneOf(pad: Pad): Tone {
-  return SECTION_TONES[pad.section_label ?? ""] ?? NEUTRAL_TONE;
+function toneOf(pad: Pad): SectionTone {
+  return sectionTone(pad.section_label);
 }
 
 function targetLabel(target: PadTarget): string {

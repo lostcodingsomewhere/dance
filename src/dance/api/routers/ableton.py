@@ -7,6 +7,7 @@ Live's actual state arrives asynchronously via the bridge listener.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,12 +30,22 @@ from dance.api.schemas import (
 )
 from dance.core.database import AudioAnalysis, StemFile, Track
 from dance.osc.bridge import AbletonBridge
+from dance.pipeline.utils.pads import (
+    MIX_ROLE,
+    PAD_COUNT,
+    TrackPad,
+    load_track_pads,
+    pad_start_beats,
+    track_bpm,
+)
 
 logger = logging.getLogger(__name__)
 
 # Land this far inside the loop rather than exactly on loop_end — Live
 # refuses a marker written at the boundary just as it does one past it.
 _SEEK_END_MARGIN_BEATS = 0.25
+
+CUE_START_TOLERANCE_BEATS = 0.05
 
 # Deck kinds carry a side suffix ("drums_a"); StemFile.kind never does.
 _DECK_SIDE_SUFFIXES = ("_a", "_b")
@@ -66,16 +77,18 @@ def stop(bridge: AbletonBridge = Depends(get_bridge)) -> dict:
 def fire_deck(
     side: str,
     scene_index: int,
+    loaded_only: bool = False,
     bridge: AbletonBridge = Depends(get_bridge),
 ) -> dict:
     """Fire all 5 cells (4 stems + mix) on Deck ``side`` (``a`` or
-    ``b``) at the given scene. Per-deck play."""
+    ``b``) at the given scene. Per-deck play. ``loaded_only`` leaves
+    the side's empty slots at that scene alone."""
     if side not in ("a", "b"):
         raise HTTPException(
             status_code=400,
             detail=f"side must be 'a' or 'b', got {side!r}",
         )
-    return bridge.fire_deck(side, scene_index)
+    return bridge.fire_deck(side, scene_index, loaded_only=loaded_only)
 
 
 @router.post("/transport/stop-deck/{side}")
@@ -642,10 +655,30 @@ def deck_map(
         stem_cache[key] = stem.id if stem else None
         return stem_cache[key]
 
+    pads_cache: dict[int, tuple[float, dict[tuple[str, int], TrackPad]]] = {}
+
+    def _cue_pad(cell: dict[str, Any]) -> TrackPad | None:
+        start_beats = cell.get("start_beats")
+        if start_beats is None:
+            return None
+        track_id = cell["track_id"]
+        if track_id not in pads_cache:
+            pads_cache[track_id] = (
+                track_bpm(session, track_id),
+                {(pad.role, pad.slot): pad for pad in load_track_pads(session, track_id)},
+            )
+        bpm, pads = pads_cache[track_id]
+        pad = pads.get((_source_kind(cell["kind"]), cell["scene_index"] % PAD_COUNT + 1))
+        if pad is None:
+            return None
+        off_by = abs(pad_start_beats(pad.position_ms, bpm) - start_beats)
+        return pad if off_by <= CUE_START_TOLERANCE_BEATS else None
+
     cells: list[DeckCellOut] = []
     for cell in raw_cells:
         track_id = cell["track_id"]
         track, analysis = _lookup(track_id)
+        cue_pad = _cue_pad(cell)
         cells.append(
             DeckCellOut(
                 scene_index=cell["scene_index"],
@@ -658,6 +691,9 @@ def deck_map(
                 key_camelot=getattr(analysis, "key_camelot", None),
                 floor_energy=getattr(analysis, "floor_energy", None),
                 duration_seconds=getattr(track, "duration_seconds", None),
+                cue=cue_pad.slot if cue_pad else None,
+                cue_label=cue_pad.section_label if cue_pad else None,
+                cue_silent=cue_pad.silent if cue_pad else False,
             )
         )
     return DeckMapOut(columns=state["columns"], cells=cells)
@@ -717,16 +753,16 @@ def _title_from_clip_name(clip_name: str, kind: str) -> str:
     return clip_name
 
 
-def _resolve_titles(session: Session, titles: set[str]) -> dict[str, int]:
-    """Map clip titles to Track ids in ONE query.
+def _tracks_by_title(session: Session, titles: set[str]) -> dict[str, list[int]]:
+    """Map clip titles to Track ids in ONE query, best candidate first.
 
     Titles are not unique — this library has 80 titles carried by more than
     one row, so the per-clip ``.one_or_none()`` this replaced raised
     ``MultipleResultsFound`` and turned resync into a 500 for any of them.
 
-    Ambiguity resolves toward the canonical row: a track not marked as a
-    duplicate wins, then lowest id, so the choice is deterministic across
-    runs rather than dependent on row order.
+    Candidates are ordered toward the canonical row: a track not marked as a
+    duplicate comes first, then lowest id, so the choice is deterministic
+    across runs rather than dependent on row order.
     """
     if not titles:
         return {}
@@ -735,12 +771,72 @@ def _resolve_titles(session: Session, titles: set[str]) -> dict[str, int]:
         .filter(Track.title.in_(titles))
         .all()
     )
-    best: dict[str, tuple[int, int]] = {}  # title -> (is_duplicate, id)
+    ranked: dict[str, list[tuple[int, int]]] = {}
     for track_id, title, duplicate_of in rows:
-        rank = (1 if duplicate_of is not None else 0, int(track_id))
-        if title not in best or rank < best[title]:
-            best[title] = rank
-    return {title: rank[1] for title, rank in best.items()}
+        ranked.setdefault(title, []).append((1 if duplicate_of is not None else 0, int(track_id)))
+    return {title: [track_id for _, track_id in sorted(ranks)] for title, ranks in ranked.items()}
+
+
+def _track_owning_file(
+    session: Session, track_ids: list[int], source_kind: str, file_path: str
+) -> int | None:
+    wanted = Path(file_path).resolve()
+    if source_kind == MIX_ROLE:
+        rows = session.query(Track.id, Track.file_path).filter(Track.id.in_(track_ids)).all()
+    else:
+        rows = (
+            session.query(StemFile.track_id, StemFile.path)
+            .filter(StemFile.track_id.in_(track_ids), StemFile.kind == source_kind)
+            .all()
+        )
+    for track_id, path in rows:
+        if path and Path(path).resolve() == wanted:
+            return int(track_id)
+    return None
+
+
+def adopt_live_decks(bridge: AbletonBridge, session: Session) -> dict[str, Any]:
+    bridge.recover_deck_columns()
+    scanned = bridge.scan_live_for_cells()
+    adopted: dict[tuple[int, str], int] = {}
+    start_beats: dict[tuple[int, str], float] = {}
+    unmatched: list[dict[str, Any]] = []
+
+    titles = {_title_from_clip_name(e["clip_name"], e["kind"]) for e in scanned}
+    candidates_by_title = _tracks_by_title(session, titles)
+
+    for entry in scanned:
+        clip_name: str = entry["clip_name"]
+        kind: str = entry["kind"]  # deck-column kind, e.g. "drums_a", "mix_b"
+        # Reverse the load-format set in bridge.push_track_to_live:
+        # stems -> "{title} ({source} {side})" e.g. "Bad Memories (drums a)";
+        # mix   -> "{title} (mix {side})"      e.g. "Bad Memories (mix a)".
+        # The trailing parenthetical is "{source} {side}"; reconstruct the deck
+        # kind as "{source}_{side}" and require it to match this cell's column.
+        # (Also accept the legacy "({kind})" form where the paren already equals
+        # the deck kind, e.g. "(drums_a)".)
+        title = _title_from_clip_name(clip_name, kind)
+        candidates = candidates_by_title.get(title, [])
+        if not candidates:
+            unmatched.append({**entry, "tried_title": title})
+            continue
+        track_id = candidates[0]
+        file_path = entry.get("file_path")
+        if len(candidates) > 1 and file_path:
+            owner = _track_owning_file(session, candidates, _source_kind(kind), file_path)
+            track_id = owner if owner is not None else track_id
+        cell = (entry["scene_index"], kind)
+        adopted[cell] = track_id
+        if entry.get("start_beats") is not None:
+            start_beats[cell] = entry["start_beats"]
+
+    bridge.adopt_cells(adopted, start_beats)
+    return {
+        "ok": True,
+        "scanned": len(scanned),
+        "adopted": len(adopted),
+        "unmatched": unmatched,
+    }
 
 
 @router.post("/decks/resync")
@@ -765,37 +861,7 @@ def resync_decks(
     surface "we found 12 clips, matched 10 to your library" — the user
     knows which clips couldn't be resolved.
     """
-    scanned = bridge.scan_live_for_cells()
-    adopted: dict[tuple[int, str], int] = {}
-    unmatched: list[dict[str, Any]] = []
-
-    titles = {_title_from_clip_name(e["clip_name"], e["kind"]) for e in scanned}
-    by_title = _resolve_titles(session, titles)
-
-    for entry in scanned:
-        clip_name: str = entry["clip_name"]
-        kind: str = entry["kind"]  # deck-column kind, e.g. "drums_a", "mix_b"
-        # Reverse the load-format set in bridge.push_track_to_live:
-        # stems -> "{title} ({source} {side})" e.g. "Bad Memories (drums a)";
-        # mix   -> "{title} (mix {side})"      e.g. "Bad Memories (mix a)".
-        # The trailing parenthetical is "{source} {side}"; reconstruct the deck
-        # kind as "{source}_{side}" and require it to match this cell's column.
-        # (Also accept the legacy "({kind})" form where the paren already equals
-        # the deck kind, e.g. "(drums_a)".)
-        title = _title_from_clip_name(clip_name, kind)
-        track_id = by_title.get(title)
-        if track_id is None:
-            unmatched.append({**entry, "tried_title": title})
-            continue
-        adopted[(entry["scene_index"], kind)] = track_id
-
-    bridge.adopt_cells(adopted)
-    return {
-        "ok": True,
-        "scanned": len(scanned),
-        "adopted": len(adopted),
-        "unmatched": unmatched,
-    }
+    return adopt_live_decks(bridge, session)
 
 
 # ---------------------------------------------------------------------------

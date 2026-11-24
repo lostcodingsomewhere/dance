@@ -19,6 +19,7 @@ from dance.pipeline.utils.pads import (
     PAD_COUNT,
     TrackPad,
     load_track_pads,
+    pad_start_beats,
     track_bpm,
 )
 
@@ -135,7 +136,7 @@ def _clips_for_load(
                     entry=entry,
                     bpm=bpm,
                     name=f"{title} ({role} {load.side.upper()})",
-                    start_beats=pad.position_ms / 60_000 * bpm,
+                    start_beats=pad_start_beats(pad.position_ms, bpm),
                     loop_beats=loop_beats or None,
                     color_index=pad_color_index(pad),
                     muted=role == MIX_ROLE,

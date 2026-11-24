@@ -561,6 +561,9 @@ class DeckCellOut(BaseModel):
     # ("3:45") without a second /tracks/{id} fetch per cell. Comes from
     # Track.duration_seconds, set during the analyze stage.
     duration_seconds: float | None = None
+    cue: int | None = None
+    cue_label: str | None = None
+    cue_silent: bool = False
 
 
 class DeckMapOut(BaseModel):

@@ -197,6 +197,10 @@ class TrackPad:
     silent: bool
 
 
+def pad_start_beats(position_ms: int, bpm: float) -> float:
+    return position_ms / 60_000 * bpm
+
+
 def track_bpm(session: Session, track_id: int) -> float:
     bpm = (
         session.query(AudioAnalysis.bpm)

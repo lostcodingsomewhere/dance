@@ -10,7 +10,15 @@ import {
   useStopCell,
 } from "../hooks/useTransport";
 import { formatDuration } from "../lib/format";
-import { store } from "../store";
+import {
+  cueText,
+  pageCount,
+  pagesPlaying,
+  scenesOnPage,
+  songTitlesOnPage,
+} from "../lib/pages";
+import { sectionTone } from "../lib/sectionTones";
+import { store, useAppStore } from "../store";
 import {
   ROLE_STYLES,
   TWO_DECK_COLUMN_ORDER,
@@ -21,9 +29,6 @@ import {
   type StemRole,
 } from "../lib/roles";
 import type { DeckCell } from "../types";
-
-const COLLAPSED_ROWS = 3;
-const EXPANDED_ROWS = 8;
 
 /**
  * The 8-column scene grid — the canonical mirror of what the APC40 is
@@ -69,7 +74,7 @@ export function SceneGrid() {
       store.armDeck(result.side, result.scene_index);
     },
   });
-  const [expanded, setExpanded] = useState(false);
+  const boothPage = useAppStore((s) => s.boothPage);
   // Soft "mud" warning — a transient, non-blocking chip shown when the DJ
   // fires a 2nd bass (or 2nd lead-vocal) while one is already playing.
   // Stacked basslines / lead vocals fight each other; the product
@@ -117,18 +122,10 @@ export function SceneGrid() {
     return m;
   }, [cells]);
 
-  // Default to 4 visible rows; expand to 8 if user wants more headroom.
-  // If they've loaded cells in higher rows, auto-bump the visible count so
-  // loaded scenes are never hidden behind the collapse.
-  const highestLoadedIdx = useMemo(() => {
-    if (cells.length === 0) return -1;
-    return Math.max(...cells.map((c) => c.scene_index));
-  }, [cells]);
-  const visibleRows = expanded
-    ? EXPANDED_ROWS
-    : Math.max(COLLAPSED_ROWS, highestLoadedIdx + 1);
-  const rows = Array.from({ length: visibleRows }, (_, i) => i);
-  const hiddenRows = EXPANDED_ROWS - visibleRows;
+  const pages = pageCount(cells);
+  const shownPage = Math.min(boothPage, pages - 1);
+  const rows = scenesOnPage(shownPage);
+  const playingPages = columns ? pagesPlaying(columns, playing) : new Set<number>();
 
   // Beat-pulse animation duration in ms. One pulse per beat.
   const beatMs = Math.max(200, Math.round(60_000 / Math.max(40, tempo)));
@@ -159,6 +156,35 @@ export function SceneGrid() {
           instead?
         </div>
       )}
+      <nav aria-label="Pages" className="flex items-center gap-1">
+        <span className="mr-1 text-[10px] uppercase tracking-widest text-neutral-500">
+          Page
+        </span>
+        {Array.from({ length: pages }, (_, page) => {
+          const isShown = page === shownPage;
+          const isPlaying = playingPages.has(page);
+          return (
+            <button
+              key={page}
+              type="button"
+              onClick={() => store.setBoothPage(page)}
+              aria-pressed={isShown}
+              aria-label={`Page ${page + 1}${isPlaying ? ", playing" : ""}`}
+              title={songTitlesOnPage(cells, page) || `Page ${page + 1}`}
+              className={`relative h-6 min-w-6 rounded border px-1.5 text-[11px] font-mono tabular-nums transition-colors ${
+                isShown
+                  ? "border-violet-400 bg-violet-500/25 text-violet-50"
+                  : "border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-100"
+              }`}
+            >
+              {page + 1}
+              {isPlaying && (
+                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              )}
+            </button>
+          );
+        })}
+      </nav>
       {/* Rows — column headers + solo buttons live in BoothColumnHeaders
           one level up, so the same 8 column labels can sit above the
           TwoDeckStrip + SceneGrid + the rec banner row instead of being
@@ -238,25 +264,6 @@ export function SceneGrid() {
         );
       })}
 
-      {/* Expand / collapse — saves vertical space for the recs banners
-          when you only have a few rows in play. Loaded rows always show
-          (highestLoadedIdx+1 floor), so collapse never hides content. */}
-      {(hiddenRows > 0 || expanded) && (
-        <button
-          type="button"
-          onClick={() => setExpanded((e) => !e)}
-          className="mt-1 mx-auto text-[10px] uppercase tracking-widest text-neutral-500 hover:text-neutral-300 transition-colors"
-          title={
-            expanded
-              ? "Show fewer rows"
-              : `Show all ${EXPANDED_ROWS} rows (currently showing ${visibleRows})`
-          }
-        >
-          {expanded
-            ? "▴ show fewer"
-            : `▾ show all ${EXPANDED_ROWS} rows`}
-        </button>
-      )}
     </div>
   );
 }
@@ -298,6 +305,13 @@ function Cell({
   const styles = ROLE_STYLES[role];
   const sideBadge = sideOf(deckKind);
   const badgeText = sideBadge?.toUpperCase() ?? "";
+  const cue = cell ? cueText(cell) : null;
+  const cueInTooltip =
+    cell && cell.cue != null
+      ? ` — cue ${[cell.cue, cell.cue_label, cell.cue_silent ? "silent here" : null]
+          .filter((part) => part != null)
+          .join(", ")}`
+      : "";
 
   if (shadow && cell) {
     return (
@@ -368,7 +382,7 @@ function Cell({
           playing
             ? `Stop ${deckColumnLabel(deckKind).toLowerCase()} (${cell?.title ?? "loaded"})`
             : cell
-            ? `${deckColumnLabel(deckKind)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""} — tap to fire`
+            ? `${deckColumnLabel(deckKind)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}${cueInTooltip} — tap to fire`
             : `${deckColumnLabel(deckKind)} (loaded)`
         }
         className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
@@ -389,9 +403,16 @@ function Cell({
             <div className={`text-xs truncate font-medium leading-tight ${playing ? "text-emerald-50" : "text-neutral-100"}`}>
               {cell.title ?? `Track #${cell.track_id}`}
             </div>
-            {cell.artist && (
-              <div className={`text-[10px] truncate leading-tight ${playing ? "text-emerald-100/80" : "text-neutral-400"}`}>
-                {cell.artist}
+            {(cue || cell.artist) && (
+              <div className={`flex items-center gap-1 text-[10px] leading-tight ${playing ? "text-emerald-100/80" : "text-neutral-400"}`}>
+                {cue && (
+                  <span
+                    className={`shrink-0 rounded px-1 text-[9px] font-semibold uppercase leading-[14px] tracking-wide ${sectionTone(cell.cue_label).head} ${cell.cue_silent ? "opacity-40" : ""}`}
+                  >
+                    {cue}
+                  </span>
+                )}
+                {cell.artist && <span className="truncate">{cell.artist}</span>}
               </div>
             )}
             {(cell.bpm != null || cell.key_camelot || cell.floor_energy != null || cell.duration_seconds != null) && (

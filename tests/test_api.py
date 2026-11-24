@@ -169,8 +169,18 @@ class FakeAbletonBridge:
         # Tests set ``scan_return`` to simulate clips found in Live's slots.
         return getattr(self, "scan_return", [])
 
-    def adopt_cells(self, cells: dict[tuple[int, str], int]) -> None:
+    def adopt_cells(
+        self,
+        cells: dict[tuple[int, str], int],
+        start_beats: dict[tuple[int, str], float] | None = None,
+    ) -> None:
         self.adopted_cells = dict(cells)
+
+    def recover_deck_columns(self, timeout: float = 1.0) -> dict[str, int] | None:
+        return None
+
+    def on_set_opened(self, callback: Callable[[], None]) -> None:
+        self.set_opened_callbacks = [*getattr(self, "set_opened_callbacks", []), callback]
 
 
 # ---------------------------------------------------------------------------

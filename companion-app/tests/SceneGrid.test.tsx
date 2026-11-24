@@ -108,26 +108,15 @@ describe("SceneGrid", () => {
     expect(screen.getByText(/Waiting for Ableton deck columns/i)).toBeInTheDocument();
   });
 
-  it("renders 3 rows by default once deck columns exist, with an expand toggle", () => {
+  it("renders one page of five rows once deck columns exist", () => {
     state.columns = DECK_COLUMNS;
     renderGrid();
-    // 8 columns × 3 visible rows = 24 empty cells by default; rows 4..8
-    // hidden behind the expand toggle. There's no on-screen scene-number
-    // column anymore (scene launch lives on the APC40's hardware buttons).
-    expect(screen.getAllByLabelText(/\(empty\)/i).length).toBe(24);
-    expect(
-      screen.getByRole("button", { name: /show all 8 rows/i }),
-    ).toBeInTheDocument();
-  });
-
-  it("expands to 8 rows when the toggle is clicked", () => {
-    state.columns = DECK_COLUMNS;
-    renderGrid();
-    fireEvent.click(
-      screen.getByRole("button", { name: /show all 8 rows/i }),
+    expect(screen.getAllByLabelText(/\(empty\)/i).length).toBe(40);
+    expect(screen.getByRole("button", { name: "Page 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
-    // 8 columns × 8 rows = 64 empty cells once fully expanded.
-    expect(screen.getAllByLabelText(/\(empty\)/i).length).toBe(64);
+    expect(screen.queryByRole("button", { name: "Page 2" })).not.toBeInTheDocument();
   });
 
   it("shows the loaded track title on each A-side cell of an anchor row", () => {

@@ -394,6 +394,9 @@ class AbletonOSCClient:
         Reply args: (track, slot, name) or no reply if the slot is empty."""
         self._send("/live/clip/get/name", track, slot)
 
+    def get_clip_property(self, clip_property: str, track: int, slot: int) -> None:
+        self._send(f"/live/clip/get/{clip_property}", track, slot)
+
     def get_track_clip_names(self, track: int) -> None:
         """Ask Live for EVERY clip name on one track in a single reply.
 

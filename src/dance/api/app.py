@@ -24,6 +24,7 @@ from dance.api.routers import (
     tracks,
     ws,
 )
+from dance.api.routers.ableton import adopt_live_decks
 from dance.api.routers.pipeline import start_watch_thread
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
@@ -86,6 +87,12 @@ def create_app(
             ws_manager.broadcast_latest_threadsafe(state.to_dict)
 
         bridge.subscribe(_on_state)
+
+        def _adopt_the_set_live_opened() -> None:
+            with session_factory() as session:
+                adopt_live_decks(bridge, session)
+
+        bridge.on_set_opened(_adopt_the_set_live_opened)
         if own_bridge:
             try:
                 bridge.start()

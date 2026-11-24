@@ -388,6 +388,9 @@ export interface DeckCell {
   /** Total track duration in seconds. Lets the cell render a length badge
    *  ("3:45") without a separate /tracks/{id} fetch. */
   duration_seconds: number | null;
+  cue: number | null;
+  cue_label: string | null;
+  cue_silent: boolean;
 }
 
 export interface DeckMap {

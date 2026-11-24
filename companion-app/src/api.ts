@@ -504,9 +504,10 @@ export function abletonSetPfl(
 export function abletonFireDeck(
   side: "a" | "b",
   sceneIndex: number,
+  loadedOnly = false,
 ): Promise<{ ok: boolean; side: string; scene_index: number; fired: number }> {
   return request(
-    `/ableton/transport/fire-deck/${side}/${sceneIndex}`,
+    `/ableton/transport/fire-deck/${side}/${sceneIndex}${loadedOnly ? "?loaded_only=true" : ""}`,
     { method: "POST" },
   );
 }
