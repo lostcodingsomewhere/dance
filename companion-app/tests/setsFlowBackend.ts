@@ -43,10 +43,15 @@ export function rec(song: Song, score = 0.82) {
   };
 }
 
+export function refusalSaying(detail: string, status: number): Response {
+  return json({ detail }, status);
+}
+
 export class SetsOnTheServer {
   public recs: (role: Role, setId: number) => unknown[] = () => [];
   public unreachableFor: (request: SeenRequest) => boolean = () => false;
   public refuses: (request: SeenRequest) => boolean = () => false;
+  public refusal: () => Response = () => new Response("Internal Server Error", { status: 500 });
   private readonly sets: StoredSet[] = [];
   private readonly titles = new Map<number, string>();
   private nextId = 1;
@@ -75,7 +80,7 @@ export class SetsOnTheServer {
 
   answer = (request: SeenRequest): unknown => {
     if (this.unreachableFor(request)) throw new TypeError("Failed to fetch");
-    if (this.refuses(request)) return json({ detail: "Internal Server Error" }, 500);
+    if (this.refuses(request)) return this.refusal();
     const { method, path, query, body } = request;
 
     if (path === `${API}/sets`) {

@@ -1,6 +1,7 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { serverMessage } from "../api";
 import { useColumnRecs } from "../hooks/useColumnRecs";
 import { useLoadToDeck } from "../hooks/useLoadToDeck";
 import { useSetPlan, usePlanMutations, usePlanRecs } from "../hooks/useSetPlan";
@@ -32,6 +33,12 @@ function picksOf(plan: SetPlan | null | undefined): string {
 
 function titleOf(item: PlanItem): string {
   return item.title ?? `Track #${item.track_id}`;
+}
+
+function whyNotSaved(error: Error): string {
+  const reason = serverMessage(error);
+  const serverGaveAReason = reason !== error.message;
+  return serverGaveAReason ? `The server said: ${reason}` : "Could not reach the server.";
 }
 
 /**
@@ -762,7 +769,7 @@ function PlanZone({
    * that's what makes the empty placeholder match the tallest queued column. */
   className?: string;
 }) {
-  const { removeFromRole, restoreToRole, moveInRole } = usePlanMutations(setId);
+  const { put, removeFromRole, restoreToRole, moveInRole } = usePlanMutations(setId);
   const focus = useAppStore((s) => s.gridFocus);
   const [removed, setRemoved] = useState<RemovedPick | null>(null);
   // Read here, not passed down: a prop would still hold the plan from before the save.
@@ -781,6 +788,12 @@ function PlanZone({
     const timer = window.setTimeout(forget, UNDO_SECONDS * 1000);
     return () => window.clearTimeout(timer);
   }, [removed, planNow]);
+
+  // A failed save stops mattering once the plan changes.
+  useEffect(() => {
+    if (put.isError) put.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planNow]);
 
   const remove = (item: PlanItem, index: number) =>
     removeFromRole(role, index, item.track_id, (saved) =>
@@ -823,6 +836,14 @@ function PlanZone({
   }
   return (
     <div className={`flex flex-col gap-1 ${className ?? ""}`}>
+      {put.isError && (
+        <p
+          role="alert"
+          className="rounded-md border border-dashed border-rose-500/40 px-2 py-1 text-xs leading-snug text-rose-200"
+        >
+          Change not saved. {whyNotSaved(put.error)}
+        </p>
+      )}
       {rows}
       {queue.length === 0 && (
         <div className="flex min-h-[3rem] flex-1 items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700">

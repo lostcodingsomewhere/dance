@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { createSet, deleteSet, getPlan, putPlan } from "../api";
+import { createSet, deleteSet, getPlan, putPlan, serverMessage } from "../api";
 import {
   useActivateSet,
   useCreateSet,
@@ -45,8 +45,13 @@ async function copyWithItsPlan(source: DanceSet, name: string): Promise<DanceSet
 class CopyNotOpened extends Error {}
 
 function duplicateFailureWords(error: Error): string {
-  return error instanceof CopyNotOpened
-    ? "The copy was made but could not be opened. Pick it under Switch to."
+  if (error instanceof CopyNotOpened) {
+    return "The copy was made but could not be opened. Pick it under Switch to.";
+  }
+  const reason = serverMessage(error);
+  const serverGaveAReason = reason !== error.message;
+  return serverGaveAReason
+    ? `Could not duplicate this set. The server said: ${reason}`
     : "Could not duplicate this set. Try again.";
 }
 

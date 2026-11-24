@@ -2,7 +2,13 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BoothBackend } from "./boothHarness";
-import { API, SetsOnTheServer, holdAnswersTo, type Role } from "./setsFlowBackend";
+import {
+  API,
+  SetsOnTheServer,
+  holdAnswersTo,
+  refusalSaying,
+  type Role,
+} from "./setsFlowBackend";
 import {
   HALF_LIGHT,
   LIBRARY,
@@ -111,13 +117,27 @@ describe("duplicating a set from the set menu", () => {
     expect(backend.sent("POST", `${API}/sets/${copyId}/activate`)).toEqual([]);
     expect(server.idOf("Friday night (copy)")).toBeUndefined();
 
+    const secondTry = copyId + 1;
+    server.refuses = ({ method, path }) =>
+      method === "PUT" && path === `${API}/sets/${secondTry}/plan`;
+    server.refusal = () => refusalSaying("unknown track ids in plan: [12]", 404);
+    fireEvent.click(create);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Could not duplicate this set. The server said: unknown track ids in plan: [12]",
+      ),
+    );
+    expect(server.activeName()).toBe("Friday night");
+    expect(server.idOf("Friday night (copy)")).toBeUndefined();
+
     server.refuses = () => false;
     fireEvent.click(create);
 
     await screen.findByRole("button", { name: "Friday night (copy)" });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    const secondCopy = server.idOf("Friday night (copy)")!;
-    expect(server.planOf(secondCopy)).toEqual(SEVEN_PICKS);
+    const theCopyThatWorked = server.idOf("Friday night (copy)")!;
+    expect(server.planOf(theCopyThatWorked)).toEqual(SEVEN_PICKS);
   });
 });
 
@@ -148,6 +168,39 @@ describe("reordering picks in the Set view", () => {
       queues: { ...SEVEN_PICKS, song: [HALF_LIGHT.track_id, NIGHT_DRIVE.track_id, LOW_TIDE.track_id] },
     });
     expect(picksIn("drums")).toEqual(["Half Light", "Night Drive"]);
+  });
+});
+
+describe("a change to the plan that cannot be saved", () => {
+  it("is reported in its column, with the server's reason when it gave one", async () => {
+    const { server, setId } = await theSetViewWithSevenPicks();
+    const song = within(planned("song"));
+    server.refuses = ({ method }) => method === "PUT";
+
+    fireEvent.click(song.getByRole("button", { name: "Move Half Light up" }));
+
+    expect(await song.findByRole("alert")).toHaveTextContent(
+      "Change not saved. Could not reach the server.",
+    );
+    expect(picksIn("song")).toEqual(["Night Drive", "Low Tide", "Half Light"]);
+    expect(within(planned("drums")).queryByRole("alert")).not.toBeInTheDocument();
+
+    server.refusal = () => refusalSaying("unknown track ids in plan: [12]", 404);
+    fireEvent.click(pick("song", "Low Tide").getByTitle("Remove from plan"));
+
+    await waitFor(() =>
+      expect(song.getByRole("alert")).toHaveTextContent(
+        "Change not saved. The server said: unknown track ids in plan: [12]",
+      ),
+    );
+    expect(song.queryByText("Removed Low Tide")).not.toBeInTheDocument();
+    expect(server.planOf(setId)).toEqual(SEVEN_PICKS);
+
+    server.refuses = () => false;
+    fireEvent.click(within(planned("drums")).getByRole("button", { name: "Move Night Drive up" }));
+
+    await waitFor(() => expect(picksIn("drums")).toEqual(["Night Drive", "Half Light"]));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 });
 
