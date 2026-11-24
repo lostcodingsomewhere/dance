@@ -191,14 +191,13 @@ def _deactivate_others(session: Session, keep_id: int | None) -> None:
 @router.get("", response_model=list[SetSummaryOut])
 def list_sets(session: Session = Depends(get_session)) -> list[dict]:
     sets = session.query(Set).order_by(Set.updated_at.desc()).all()
-    counts = dict(session.query(SetTrack.set_id, _count_func()).group_by(SetTrack.set_id).all())
     return [
         {
             "id": int(s.id),
             "name": s.name,
             "notes": s.notes,
             "is_active": bool(s.is_active),
-            "track_count": int(counts.get(s.id, 0)),
+            "track_count": sum(len(queue) for queue in sq.parse_plan(s.plan).values()),
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
