@@ -328,6 +328,26 @@ export interface SpotifySearchResponse {
   hits: SpotifyTrackHit[];
 }
 
+export interface SpotifyVersion {
+  spotify_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration_ms: number | null;
+  image_url: string | null;
+  explicit: boolean;
+  label: string;
+  library_track_id: number | null;
+  library_state: string | null;
+  download_failed: boolean;
+}
+
+export interface SpotifyVersionsResponse {
+  track_id: number;
+  query: string;
+  versions: SpotifyVersion[];
+}
+
 export interface IngestTrackResult {
   track_id: number;
   state: string;

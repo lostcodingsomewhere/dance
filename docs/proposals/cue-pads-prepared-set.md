@@ -1,6 +1,6 @@
 # Cue pads, a prepared Set, and version families
 
-**Status:** APPROVED 2026-11-23, in progress. All eleven decisions are settled in "Decisions for you". Nothing is verified in Live yet.
+**Status:** APPROVED 2026-11-23. All eleven decisions are settled in "Decisions for you". Steps 0 to 6 are built as of 2026-11-24, step 6 on the branch. The checks so far ran over OSC and in a browser: nobody has listened to a pad or used the APC40, and no version has been downloaded for real.
 **Date:** 2026-11-23
 **Touches:** `src/dance/pipeline/stages/detect_regions.py`, `src/dance/core/database.py` (one enum value), `src/dance/als/writer.py` + `generator.py`, `src/dance/osc/bridge.py` (`push_track_to_live`), `src/dance/api/routers/{ableton,sets,tracks}.py` + `schemas.py`, `src/dance/recommender/dedup.py`, `companion-app` (`SceneGrid`, `TwoDeckStrip`, `lib/roles.ts`), `cli.py`.
 **Stacks on:** [`als-clip-elements.md`](als-clip-elements.md) option A, [`warp-guard.md`](warp-guard.md) (who owns the grid), and the library re-run that the tempo fix already requires.
@@ -274,8 +274,77 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   TH;EN Remix). The first browser run offered 206 as "the original" of the remix
   just queued beside 79. A second copy of a planned or loaded song is no longer
   offered; the copies themselves are for `dance dedupe`, not this step.
-- Not done: step 6. With 6 families of real interest, the read side has little
-  to show until "find versions" brings more in.
+- With 6 families of real interest, the read side has little to show until step 6
+  brings more in.
+
+**Step 6, find versions**
+
+- Built on 2026-11-24, on the branch. Live is not involved. Checked against real
+  Spotify and in a browser on a copy of the library. No download has completed for
+  real: YouTube refused it on this Mac (see the last points).
+- What Spotify answers today, measured with this repo's app credentials: track
+  search works but gives at most 10 results a request; `/playlists/{id}/tracks`
+  answers 403 and its replacement `/playlists/{id}/items` answers 401 without a
+  user's token. The table is in `docs/troubleshooting.md`.
+- The Spotify module (`spotify/search.py`):
+  - Search reads as many pages of 10 as the caller's limit needs. Before, any
+    limit above 10 failed with "Invalid limit".
+  - The playlist reader calls `/playlists/{id}/items`, reads each entry's `item`,
+    and needs a user token. Spotify's changelog says it answers only for a playlist
+    that user owns or collaborates on. No token, an expired token and someone
+    else's playlist each get their own message, shown in the Pipeline form.
+  - A server error from Spotify is tried twice more. One of about 85 real searches
+    that day answered 502 "Please try again later".
+- The search (`GET /spotify/versions?track_id=…`, `spotify/versions.py`) asks
+  Spotify for `track:"<title without version text>" artist:"<first credited
+  artist>"` and reads up to 50 results. Two things differ from "Getting the
+  versions in" below:
+  - It keeps a result by the family rule of step 5 (same base title, a shared
+    credited artist), where the text below says "titles carry a version word". A
+    longer cut under the plain title is a version too (*Surrender* at 3:20 and at
+    6:13 on Spotify).
+  - Spotify lists one recording once per release. Results with the same version
+    text and a length within 5 s are one row. A result with the asked track's own
+    version text and a length within max(30 s, 10 %) of the library file is that
+    track and is left out, so a file a few seconds off Spotify's length is not
+    offered back as another cut. The same test marks a version the library
+    already has.
+- Getting one in is the existing `POST /pipeline/ingest/track`. It hands the
+  title to the download matcher as Spotify has it, so the version words count as
+  asked for. Asking again for a track whose download failed now queues the
+  download again. Before, a failed download left a row that could never be
+  retried.
+- In the app: **Versions** on a queued song in the Set view's Song column opens the
+  list. Each row says what the version is and how long, and whether the library
+  has it. **Get** downloads it and queues it right after the song
+  (`after_track_id`). A failed download shows **Try again**.
+- Tests: `tests/test_find_versions_e2e.py` (3) and `tests/test_spotify_reads_e2e.py`
+  (4), through the API with Spotify and YouTube stood in for
+  (`tests/spotify_stand_in.py` answers as Spotify did on 2026-11-24) and the rest
+  real: the library built by the pipeline, the matcher, ffprobe and ffmpeg. One
+  test finds a remix, downloads it, runs the pipeline on it and sees it listed as
+  a version of its original. Three app flow tests (`findVersionsFlow.test.tsx`).
+  Twelve deliberate breakages of the new code were each caught by a test.
+- Real Spotify, 14 library songs on the library copy: 11 had at least one other
+  version listed and 3 had none. 7 of the 14 had versions the library lacks, 33
+  in total (*Strobe* 15, *The Age of Love* 7, *Ghosts Again* 5, *Need U (100%)* 3,
+  and one each for *Spektrum*, *Music Sounds Better With You* and *Waste*). The 8
+  rows the library already holds were all marked as held. One search took 1 to 5
+  requests and 0.2 to 2.3 s.
+- In a browser on the library copy: **Versions** on *Strobe (Lane 8 remix)* listed
+  15 versions. **Get** on the Layton Giordani Remix (3:35) queued it after the
+  song. The matcher accepted "deadmau5 - Strobe (Layton Giordani Remix)" (216 s
+  against Spotify's 215 s, score 0.98) and rejected 8 of the 10 uploads YouTube's
+  search returned, 7 on length and 1 as a live take. YouTube then refused the
+  audio itself with HTTP 403 for both accepted uploads, so no file arrived and the
+  row showed "download failed" with **Try again**.
+- Why the download fails on this Mac: `docs/troubleshooting.md` lists what YouTube
+  needs. This Mac has yt-dlp 2026.3.17 (2026.11.23 is current), no PO-token helper
+  answering on port 4416 and no `~/.dance/cookies.txt`. Until that is set up,
+  **Get** and ⌘K's "Add from Spotify" both stop at the download.
+- Not checked: a real download from start to finish, the pipeline on a really
+  downloaded version, and the playlist read with a real user token (none is
+  configured).
 
 
 ---
@@ -654,7 +723,9 @@ whose titles carry a version word (`api/dedup.py` `VERSION_WORDS`), and queue th
 ones you choose as explicitly requested, which is what lets the matcher accept a
 remix. It needs Spotify's track search. The playlist reader in the same module still
 calls an endpoint Spotify removed (`spotify/search.py:216`), so that module needs
-work first and this is its own step.
+work first and this is its own step. (Built in step 6. It keeps results by the
+family rule above, so a longer cut under the plain title is listed too; see
+Progress.)
 
 ## What changes, by contract
 

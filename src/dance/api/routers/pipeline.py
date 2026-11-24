@@ -64,6 +64,7 @@ from dance.spotify.csv_importer import (
     parse_csv,
 )
 from dance.spotify.download_pool import get_download_pool
+from dance.spotify.versions import NEVER_DOWNLOADED
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +475,42 @@ def _claim_target_path(session: Session, path: Path, spotify_id: str) -> Path:
 # Single-track optimistic ingest (Cmd-K "ADD FROM SPOTIFY" path)
 # ---------------------------------------------------------------------------
 
+def _download_ahead_of_bulk_work(
+    track_id: int, csv_row: CsvRow, settings: Settings, expected_path: Path
+) -> str:
+    job = get_job_registry().create("spotify_ingest", [f"{csv_row.artist} - {csv_row.title}"])
+    get_download_pool(settings.download_workers).submit_interactive(
+        _run_spotify_ingest_job,
+        job.id,
+        track_id,
+        csv_row,
+        settings.library_dir,
+        settings.db_url,
+        settings.youtube_cookies_file,
+        settings.audio_format,
+        expected_path,
+    )
+    return job.id
+
+
+def _download_again_if_it_failed(session: Session, track: Track, settings: Settings) -> str | None:
+    failed = track.state == TrackState.ERROR.value
+    if not failed or not str(track.file_hash).startswith(NEVER_DOWNLOADED):
+        return None
+    session.query(Track).filter(Track.id == track.id).update(
+        {Track.state: TrackState.PENDING.value, Track.error_message: None}
+    )
+    session.commit()
+    session.refresh(track)
+    csv_row = CsvRow(
+        artist=str(track.artist or "Unknown"),
+        title=str(track.title or "(untitled)"),
+        album="",
+        duration_s=int(track.duration_seconds) if track.duration_seconds else 0,
+    )
+    return _download_ahead_of_bulk_work(int(track.id), csv_row, settings, Path(track.file_path))
+
+
 
 @router.post("/ingest/track", response_model=IngestTrackResult)
 def ingest_track(
@@ -488,6 +525,7 @@ def ingest_track(
     existing pipeline picks up the row from there.
 
     Idempotent on ``spotify_id`` — calling twice returns the existing Track.
+    Asking again for a track whose download failed queues the download again.
     """
     spotify_id = body.spotify_id.strip()
     if not spotify_id:
@@ -495,10 +533,11 @@ def ingest_track(
 
     existing = session.query(Track).filter(Track.spotify_id == spotify_id).first()
     if existing is not None:
+        job_id = _download_again_if_it_failed(session, existing, settings)
         return IngestTrackResult(
             track_id=int(existing.id),
             state=str(existing.state),
-            job_id=None,
+            job_id=job_id,
             already_existed=True,
         )
 
@@ -550,7 +589,7 @@ def ingest_track(
     # Placeholder file_hash so the row passes the unique constraint;
     # the download worker replaces it with the real SHA256 once the file
     # exists on disk. ``pending:<spotify_id>`` is unique per spotify_id.
-    placeholder_hash = f"pending:{spotify_id}"[:64]
+    placeholder_hash = f"{NEVER_DOWNLOADED}{spotify_id}"[:64]
 
     track = Track(
         file_hash=placeholder_hash,
@@ -567,27 +606,14 @@ def ingest_track(
     session.commit()
     session.refresh(track)
 
-    registry = get_job_registry()
-    job = registry.create("spotify_ingest", [f"{artist} - {title}"])
-
     # Shared bounded pool — the job sits in ``queued`` until a slot frees,
     # ahead of any bulk playlist / CSV downloads still waiting.
-    get_download_pool(settings.download_workers).submit_interactive(
-        _run_spotify_ingest_job,
-        job.id,
-        int(track.id),
-        csv_row,
-        settings.library_dir,
-        settings.db_url,
-        settings.youtube_cookies_file,
-        settings.audio_format,
-        expected_path,
-    )
+    job_id = _download_ahead_of_bulk_work(int(track.id), csv_row, settings, expected_path)
 
     return IngestTrackResult(
         track_id=int(track.id),
         state=str(track.state),
-        job_id=job.id,
+        job_id=job_id,
         already_existed=False,
     )
 
@@ -621,6 +647,7 @@ def ingest_playlist(
     flow does.
     """
     from dance.spotify.search import (
+        PLAYLIST_NEEDS_A_USER,
         SpotifyAuthError,
         SpotifySearchError,
         extract_playlist_id,
@@ -639,28 +666,16 @@ def ingest_playlist(
         )
 
     client = get_default_client(settings)
-    # Playlist reads need *some* auth — Client Credentials usually 403s
-    # on /tracks for non-owned playlists post-Nov 2024, so a user OAuth
-    # token is the practical path. Fail early if nothing's configured AND
-    # the caller didn't paste a token.
     if not client.configured and not body.user_token:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Spotify not configured — set DANCE_SPOTIFY_CLIENT_ID and "
-                "DANCE_SPOTIFY_CLIENT_SECRET in ~/.dance/.env (or paste a "
-                "user OAuth token from exportify.net DevTools into the form)"
-            ),
-        )
+        raise HTTPException(status_code=503, detail=PLAYLIST_NEEDS_A_USER)
 
     try:
         hits = client.get_playlist_tracks(
             body.playlist_url, user_token=body.user_token
         )
     except SpotifyAuthError as exc:
-        # User-token-required errors (401 expired, 403 needs user token)
-        # both surface as SpotifyAuthError — return 401 so the FE can
-        # prompt for a fresh token specifically.
+        # No token, an expired one, and a playlist the token's user does not
+        # own all surface as SpotifyAuthError, each with its own message.
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except SpotifySearchError as exc:
         raise HTTPException(status_code=502, detail=f"Spotify: {exc}") from exc
@@ -748,7 +763,7 @@ def ingest_playlist(
             expected_target(settings.library_dir, csv_row, settings.audio_format),
             hit.spotify_id,
         )
-        placeholder_hash = f"pending:{hit.spotify_id}"[:64]
+        placeholder_hash = f"{NEVER_DOWNLOADED}{hit.spotify_id}"[:64]
         try:
             track = Track(
                 file_hash=placeholder_hash,

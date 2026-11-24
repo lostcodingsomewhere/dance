@@ -551,10 +551,8 @@ export function PipelineOps() {
   const [playlistToast, setPlaylistToast] = useState<PlaylistToast | null>(null);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [playlistUrl, setPlaylistUrl] = useState("");
-  // Spotify user OAuth token — pasted from exportify.net DevTools (any
-  // /me/playlists request → copy Bearer header value). Required in
-  // practice since Spotify's Nov 2024 API policy blocks Client Creds
-  // from reading playlist tracks. Lives in memory only.
+  // Spotify user OAuth token. Spotify lists a playlist's songs only for the
+  // account that owns it or collaborates on it. Lives in memory only.
   const [playlistToken, setPlaylistToken] = useState("");
   const [viewMode, setViewMode] = useState<OpsViewMode>(() => {
     if (typeof window === "undefined") return "grid";
@@ -812,7 +810,7 @@ export function PipelineOps() {
       {playlistOpen && (
         <div className="px-6 py-3 border-b border-neutral-800 bg-neutral-900/40 flex flex-col gap-3">
           <div className="text-xs text-neutral-500 max-w-3xl leading-relaxed">
-            Paste a public Spotify playlist URL. We fetch the track list,
+            Paste the URL of a Spotify playlist you own or collaborate on. We fetch the track list,
             dedupe against your library on Spotify ID, and queue yt-dlp
             downloads for everything new. Re-running the same URL later picks
             up newly-added tracks (the rest skip).
@@ -859,11 +857,12 @@ export function PipelineOps() {
             <summary className="cursor-pointer hover:text-neutral-200">
               {playlistToken
                 ? `Spotify user token set (${playlistToken.length} chars) — click to edit`
-                : "Spotify user token (required since Nov 2024) ▸"}
+                : "Spotify user token (required) ▸"}
             </summary>
             <div className="mt-2 leading-relaxed text-neutral-500">
-              Spotify's Client Credentials flow can't read playlist tracks
-              anymore (returns 403). Paste a USER OAuth token here:
+              Spotify lists a playlist's songs only for the account that
+              owns it or collaborates on it. Paste that account's user token
+              here. One way to get one:
               <ol className="ml-4 mt-1 list-decimal space-y-0.5">
                 <li>Open <a className="underline hover:text-neutral-300" href="https://exportify.net" target="_blank" rel="noopener noreferrer">exportify.net</a> and log in.</li>
                 <li>Open DevTools → Network → click any playlist.</li>

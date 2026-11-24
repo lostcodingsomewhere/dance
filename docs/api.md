@@ -131,6 +131,22 @@ A **Set is its plan**. The plan is per-role queues of source tracks the DJ inten
 
 ---
 
+## Spotify — `src/dance/api/routers/spotify.py`
+
+| Method | Path                         | Query               | Response                                  | 4xx / 5xx          |
+|--------|------------------------------|---------------------|-------------------------------------------|--------------------|
+| GET    | `/api/v1/spotify/search`     | `q, limit` (1–20)   | `{query, hits}`                           | 502, 503           |
+| GET    | `/api/v1/spotify/versions`   | `track_id`          | `SpotifyVersionsOut` (`query`, `versions`) | 404, 422, 502, 503 |
+
+Both read Spotify's catalog with the app's own credentials (`DANCE_SPOTIFY_CLIENT_ID` / `DANCE_SPOTIFY_CLIENT_SECRET`; 503 when they are not set). A rate limit is waited out as Spotify asks, a server error is tried twice more, and what still fails comes back as 502.
+
+- **Search.** Spotify gives at most 10 results a request (measured 2026-11-24: `limit=11` answers 400 "Invalid limit"), so a larger `limit` is read in pages.
+- **Versions** looks for other versions of a library track on Spotify. It searches `track:"<title without version text>" artist:"<first credited artist>"` and reads up to 50 results. A result counts when it has the same base title and shares a credited artist with the track, the same rule as `GET /tracks/{id}/versions`. Spotify lists one recording once per release, so results with the same version text and a length within 5 s are one row. The track asked about is left out: a result with its version text whose length is within max(30 s, 10 %) of the library file, the download matcher's own gate, is that track, so a file a few seconds off Spotify's length is not offered back as a longer cut. Each row has a `label` as in `/tracks/{id}/versions`, and `library_track_id` with `library_state` when the library already holds it (same Spotify id, or the same version text within that gate). `download_failed` is true when its download was tried and no file arrived. A track with no title or no artist answers 422.
+- **Getting a version in** is `POST /api/v1/pipeline/ingest/track` with the row's `spotify_id`, `title`, `artist` and `duration_ms`. The title goes to the download matcher as Spotify has it, so its version words count as asked for: a request that names a remix accepts the remix upload and the original upload scores too low. Asking again for a track whose download failed queues the download again and answers with a `job_id` and `already_existed: true`.
+- **A playlist's songs** (`POST /api/v1/pipeline/ingest/playlist`) need a Spotify user token, pasted in the form or set as `DANCE_SPOTIFY_USER_TOKEN`. Since Spotify's February 2026 change the read is `GET /playlists/{id}/items`, answered only for a playlist the token's user owns or collaborates on. No token, an expired one and someone else's playlist each answer 401 with their own message.
+
+---
+
 ## Ableton — `src/dance/api/routers/ableton.py`
 
 All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/decks*`, `/preview`, and `/transport/stop-scene` (which wait or return structured data).

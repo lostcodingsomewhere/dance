@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from mutagen.flac import FLAC
 
 from dance.api import create_app
-from dance.config import get_settings
+from dance.config import Settings, get_settings
 from dance.core.database import (
     Track,
     TrackState,
@@ -63,6 +63,18 @@ def library_with_a_second_copy(monkeypatch):
 
 
 def _through_the_pipeline(monkeypatch, songs: list[Song]):
+    settings, ids = build_library(monkeypatch, songs)
+    app = create_app(
+        settings=settings,
+        bridge=FakeAbletonBridge(),
+        session_factory=get_session_factory(settings.db_url),
+    )
+    with TestClient(app) as client:
+        yield client, ids
+    _reset_engine_for_tests()
+
+
+def build_library(monkeypatch, songs: list[Song]) -> tuple[Settings, dict[str, int]]:
     monkeypatch.setattr(dispatcher_mod, "_IDLE_GRACE_S", 0.3)
     monkeypatch.setattr(dispatcher_mod, "_POLL_INTERVAL_S", 0.02)
     monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/ffmpeg")
@@ -88,15 +100,7 @@ def _through_the_pipeline(monkeypatch, songs: list[Song]):
         assert track.state == TrackState.COMPLETE.value, track.error_message
         ids[Path(track.file_path).stem] = track.id
     session.close()
-
-    app = create_app(
-        settings=settings,
-        bridge=FakeAbletonBridge(),
-        session_factory=get_session_factory(settings.db_url),
-    )
-    with TestClient(app) as client:
-        yield client, ids
-    _reset_engine_for_tests()
+    return settings, ids
 
 
 def _versions(client: TestClient, track_id: int) -> list[tuple[int, str]]:

@@ -22,6 +22,7 @@ import type {
   SetSummary,
   SpotifySearchResponse,
   SpotifyTrackHit,
+  SpotifyVersionsResponse,
   StemFile,
   Track,
   TrackFilters,
@@ -340,8 +341,12 @@ export function spotifySearch(
   );
 }
 
+export function findVersionsOnSpotify(trackId: number): Promise<SpotifyVersionsResponse> {
+  return request<SpotifyVersionsResponse>(`/spotify/versions${qs({ track_id: trackId })}`);
+}
+
 export function ingestSpotifyTrack(
-  hit: SpotifyTrackHit,
+  hit: Pick<SpotifyTrackHit, "spotify_id" | "title" | "artist" | "duration_ms">,
 ): Promise<IngestTrackResult> {
   return request<IngestTrackResult>("/pipeline/ingest/track", {
     method: "POST",
@@ -372,11 +377,9 @@ export interface IngestPlaylistResult {
  *  API, dedupes against the existing library, and spawns a yt-dlp
  *  download job for every new ID. See ``POST /pipeline/ingest/playlist``.
  *
- *  ``userToken``: optional Spotify USER OAuth token. Required in practice
- *  because Spotify's Nov 2024 API policy blocks Client Credentials apps
- *  from reading playlist tracks. Grab one from exportify.net DevTools
- *  (any /me/playlists request → Authorization header → copy Bearer
- *  value). Lives in memory only — never persisted to localStorage. */
+ *  ``userToken``: a Spotify USER OAuth token. Spotify lists a playlist's
+ *  songs only for the account that owns it or collaborates on it, so one
+ *  is needed. Lives in memory only — never persisted to localStorage. */
 export function ingestSpotifyPlaylist(
   playlistUrl: string,
   userToken?: string,

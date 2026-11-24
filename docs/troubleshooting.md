@@ -94,6 +94,19 @@ On **2024-11-27** Spotify restricted dozens of Web API endpoints to apps with "E
 - `Get Featured Playlists`
 - Related-Artists / category playlists / etc.
 
+**What Spotify answered on 2026-11-24** with this repo's app credentials (Client Credentials flow), after its February 2026 Web API change:
+
+| Request | Answer |
+|---|---|
+| `GET /search?type=track&limit=10` | 200. `limit=11` and above: 400 "Invalid limit" |
+| `GET /tracks/{id}` | 200. Track objects no longer carry `popularity` or `preview_url` |
+| `GET /tracks?ids=…` | 403 |
+| `GET /playlists/{id}` | 200, without the song list |
+| `GET /playlists/{id}/tracks` | 403 |
+| `GET /playlists/{id}/items` | 401 "Valid user authentication required" |
+
+The playlist read is now `/playlists/{id}/items`. Per Spotify's changelog it answers a user token only, and only for a playlist that user owns or collaborates on. The backend's playlist ingest calls it and needs `DANCE_SPOTIFY_USER_TOKEN` or a token pasted in the Pipeline form; that path has not been run against real Spotify with a user token. `spotdl save` (spotDL 4.5.0) still listed the configured playlist's 200 songs the same day, so `dance sync` can still read a playlist.
+
 Extended Quota Mode requires a formal Spotify review with stated commercial intent. Hobbyist requests have been routinely rejected since the policy change. **There is currently no way to make a new spotDL install talk to a new Spotify dev app.**
 
 Diagnostic: direct curl against the API isolates the block.
@@ -105,7 +118,7 @@ TOKEN=$(curl -sS -X POST "https://accounts.spotify.com/api/token" \
   -u "<your_id>:<your_secret>" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # /playlists/{id}        -> HTTP 200 (works on new apps)
-# /playlists/{id}/tracks -> HTTP 403 (broken on new apps since 2024-11-27)
+# /playlists/{id}/tracks -> HTTP 403 (broken on new apps since 2024-11-27, removed in February 2026)
 curl -H "Authorization: Bearer $TOKEN" \
   "https://api.spotify.com/v1/playlists/<id>/tracks?limit=5"
 ```
