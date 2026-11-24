@@ -500,8 +500,9 @@ function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
  * Two regimes, and which one applies is decided by whether there is anything
  * to score against — not by a mode flag:
  *
- * - **Something playing** (or a tempo / trailing plays): re-score against the
- *   live combo. This is the choose-your-adventure stream from docs/vision.md.
+ * - **Something playing** (or trailing plays, or a tempo with no planned pick
+ *   to score against): re-score against the live combo. This is the
+ *   choose-your-adventure stream from docs/vision.md.
  * - **Nothing playing**: score against the *plan* instead. Without this the
  *   scorer has zero computable features, so all five columns return the same
  *   arbitrary tracks at score 0.00 — which is precisely what the Booth showed
@@ -511,14 +512,20 @@ function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
  * so we say that instead of faking it.
  */
 function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole }) {
+  const plan = useSetPlan(setId);
   // ``visRole`` maps the plan role "song" onto the recommender's "mix" feed.
   // Passing the raw role asked the backend for a column it doesn't have, so
   // the SONG column silently showed "no candidates" — the one column a
   // whole-track A/B set is built from.
-  const recs = useColumnRecs(visRole(role), { k: 4 });
+  const recs = useColumnRecs(visRole(role), { k: 4, planHasPicks: hasPicks(plan.data) });
   const { addToRole } = usePlanMutations(setId);
   const cold = !recs.hasContext;
   const planRecs = usePlanRecs(setId, role, { k: 4, enabled: cold && setId != null });
+  const deckBesideTheOriginal = (rec: ColumnRec): DeckSide | undefined => {
+    const original = rec.version_of == null ? undefined : recs.deckOfSong.get(rec.version_of);
+    if (original == null) return undefined;
+    return original === "a" ? "b" : "a";
+  };
 
   if (cold && setId != null) {
     return (
@@ -531,6 +538,7 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
         mode="live"
         onAdd={(tid) => addToRole(role, tid)}
         note="from your plan"
+        deckBesideTheOriginal={deckBesideTheOriginal}
       />
     );
   }
@@ -541,11 +549,6 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
       </div>
     );
   }
-  const deckBesideTheOriginal = (rec: ColumnRec): DeckSide | undefined => {
-    const original = rec.version_of == null ? undefined : recs.deckOfSong.get(rec.version_of);
-    if (original == null) return undefined;
-    return original === "a" ? "b" : "a";
-  };
   return (
     <RecsList
       loading={recs.isLoading}

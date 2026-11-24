@@ -33,7 +33,10 @@ const TRAILING_WINDOW = 8;
  * combo (nothing playing) still falls back to key + BPM against master
  * tempo. No banner changes are needed — the cards just re-score.
  */
-export function useColumnRecs(column: string, opts: { k?: number } = {}) {
+export function useColumnRecs(
+  column: string,
+  opts: { k?: number; planHasPicks?: boolean } = {},
+) {
   const ableton = useAbletonState();
   const deckMap = useDeckMap();
   const session = useCurrentSession();
@@ -104,10 +107,15 @@ export function useColumnRecs(column: string, opts: { k?: number } = {}) {
   // arbitrary tracks at score 0.00. That is the exact state the Booth opens
   // in. Callers use this to fall back to the plan instead of rendering five
   // identical unscored lists.
+  //
+  // Live reports a tempo whenever it runs, so until something has played a
+  // plan with picks counts for more than the tempo alone.
+  const nothingPlayedYet = combo.excludeTracks.length === 0 && trailingTrackIds.length === 0;
+  const planIsTheBetterContext = nothingPlayedYet && (opts.planHasPicks ?? false);
   const hasContext =
     combo.stemIds.length > 0
     || trailingTrackIds.length > 0
-    || (ableton.tempo ?? 0) > 0;
+    || ((ableton.tempo ?? 0) > 0 && !planIsTheBetterContext);
 
   const query = useQuery({
     // Cache key includes the combo so it re-runs on combo change.
