@@ -13,11 +13,16 @@ export function tabTo(control: HTMLElement): void {
   control.focus();
 }
 
-export function clickWithTheMouse(control: HTMLElement): void {
-  fireEvent.mouseDown(control);
-  control.focus();
-  fireEvent.mouseUp(control);
-  fireEvent.click(control);
+const TAKES_FOCUS_ON_CLICK = "button, a[href], input, select, textarea, [tabindex]";
+
+// A mouse press moves focus to the nearest thing that can take it, or off whatever had it.
+export function clickWithTheMouse(target: HTMLElement): void {
+  fireEvent.mouseDown(target);
+  const taker = target.closest<HTMLElement>(TAKES_FOCUS_ON_CLICK);
+  if (taker) taker.focus();
+  else (document.activeElement as HTMLElement | null)?.blur();
+  fireEvent.mouseUp(target);
+  fireEvent.click(target);
 }
 
 // A browser takes focus off the page while its window is in the background, then hands it back.

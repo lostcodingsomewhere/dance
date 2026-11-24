@@ -32,6 +32,7 @@ const MISSING_STEM = "The bass stem is missing on disk.";
 const LOAD = "/api/v1/ableton/load-track";
 const PREVIEW = "/api/v1/ableton/preview";
 const STOP_PREVIEW = "/api/v1/ableton/preview/stop";
+const TEMPO = "/api/v1/ableton/tempo";
 const STOP_ALL_CLIPS = "/api/v1/ableton/transport/stop-all";
 const FIRE_DECK_A_CUE_3 = "/api/v1/ableton/transport/fire-deck/a/2";
 const SEEK_ON_DECK_A = `/api/v1/ableton/transport/seek/${LIVE_TRACK_OF.mix_a}/0`;
@@ -66,6 +67,7 @@ function boothWithBothDecksLoaded({ method, path, body }: SeenRequest): unknown 
   if (/\/tracks\/\d+\/waveform$/.test(path)) {
     return { peaks: [0.2, 0.8, 0.5, 0.3], duration_seconds: SONG_SECONDS, num_peaks: 4 };
   }
+  if (path.endsWith("/tracks/search")) return [];
   if (path.endsWith("/recommend/by-column")) {
     const column = (body as { column: string }).column;
     return { column, combo_size: 0, recs: column === SONG_COLUMN ? [recommendation()] : [] };
@@ -117,6 +119,20 @@ async function openBoothWithTheCursorOnTheRecommendedSong(): Promise<void> {
   backend.liveNowPlays({});
   await screen.findByRole("group", { name: RECOMMENDED.title });
   press("ArrowDown");
+}
+
+async function openBpmPopoverWithADraftOf(bpm: number): Promise<HTMLElement> {
+  renderApp();
+  await screen.findByRole("button", { name: "Page 1" });
+  backend.liveNowPlays({});
+  fireEvent.click(await screen.findByRole("button", { name: "128.0" }));
+  const slider = screen.getByRole("slider", { name: "Master BPM" });
+  fireEvent.change(slider, { target: { value: String(bpm) } });
+  return slider;
+}
+
+function tempoChanges(): unknown[] {
+  return backend.sent("POST", TEMPO).map((sent) => sent.body);
 }
 
 function startFromACleanBooth(): void {
@@ -357,5 +373,58 @@ describe("Enter and Space on the Booth's plan grid", () => {
 
     await waitFor(() => expect(decksLoaded()).toEqual(["b"]));
     expect(backend.sent("POST", PREVIEW)).toEqual([]);
+  });
+});
+
+describe("Enter with the BPM popover open", () => {
+  it("applies the draft tempo only when it is pressed inside the popover", async () => {
+    const slider = await openBpmPopoverWithADraftOf(120);
+    expect(slider).toHaveFocus();
+
+    press("k", { metaKey: true });
+    const search = await screen.findByRole("textbox");
+    await waitFor(() => expect(search).toHaveFocus());
+    press("Enter");
+    await letRequestsGoOut();
+    expect(tempoChanges()).toEqual([]);
+    expect(slider).toBeInTheDocument();
+
+    slider.focus();
+    press("Enter");
+    await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }]));
+    expect(slider).not.toBeInTheDocument();
+  });
+
+  it("still applies the draft after a click on the popover's own background", async () => {
+    await openBpmPopoverWithADraftOf(120);
+
+    clickWithTheMouse(within(screen.getByTestId("bpm-slider")).getByText("120.0"));
+    press("Enter");
+
+    await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }]));
+  });
+
+  it("applies the draft without also loading the pick under the plan grid's cursor", async () => {
+    await openBpmPopoverWithADraftOf(120);
+    await screen.findByRole("group", { name: RECOMMENDED.title });
+    clickWithTheMouse(within(screen.getByTestId("bpm-slider")).getByText("120.0"));
+    press("ArrowDown");
+
+    press("Enter");
+
+    await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }]));
+    await letRequestsGoOut();
+    expect(backend.sent("POST", LOAD)).toEqual([]);
+  });
+
+  it("cancels, and applies nothing, when it is pressed on Cancel", async () => {
+    const slider = await openBpmPopoverWithADraftOf(120);
+
+    tabTo(within(screen.getByTestId("bpm-slider")).getByRole("button", { name: "Cancel" }));
+    press("Enter");
+
+    await letRequestsGoOut();
+    expect(slider).not.toBeInTheDocument();
+    expect(tempoChanges()).toEqual([]);
   });
 });
