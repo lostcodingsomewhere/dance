@@ -1,52 +1,86 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DeckMap } from "../types";
 import { useAbletonState } from "./useAbletonState";
+import { useDeckMap } from "./useDeckMap";
 import { useCurrentSession } from "./useSession";
-import { useAppStore } from "../store";
 
-/**
- * Figure out which dance Track is *actually playing in Ableton right now* by
- * cross-referencing two sources:
- *
- *   1. ``loadedDecks`` — set by us when the user hits "Load to Live". Maps a
- *      scene_index in Live to one of our track ids, plus the set of ableton
- *      track indices that host its stems.
- *   2. ``AbletonState.playing_clips`` — pushed by the OSC bridge: ``{
- *      ableton_track_idx -> scene_idx }``. A clip is playing iff a track is
- *      firing one of its scenes.
- *
- * For each loaded deck, we say "this deck is playing" if any of its
- * stem_track_indices currently has a playing clip whose scene equals
- * deck.scene_index. Most recently-loaded deck wins ties.
- *
- * Falls back to the most recent SessionPlay's track_id when nothing in the
- * loaded-decks map matches (covers the "you started a clip Live-side without
- * going through Load to Live" case during early adoption).
- */
+interface PlayingSong {
+  trackId: number;
+  stems: number;
+  lowestScene: number;
+}
+
+type SongOfCell = Map<string, number>;
+type StartOrder = Map<number, number>;
+
+function cellKey(scene: number, kind: string): string {
+  return `${scene}:${kind}`;
+}
+
+function songsByCell(deckMap: DeckMap | undefined): SongOfCell {
+  return new Map(
+    (deckMap?.cells ?? []).map((cell) => [cellKey(cell.scene_index, cell.kind), cell.track_id]),
+  );
+}
+
+function songsPlaying(
+  columns: DeckMap["columns"] | undefined,
+  songOfCell: SongOfCell,
+  playingClips: Record<string, number>,
+): PlayingSong[] {
+  const songs = new Map<number, PlayingSong>();
+  for (const [kind, liveTrack] of Object.entries(columns ?? {})) {
+    const scene = playingClips[liveTrack];
+    if (scene == null) continue;
+    const trackId = songOfCell.get(cellKey(scene, kind));
+    if (trackId == null) continue;
+    const song = songs.get(trackId);
+    songs.set(trackId, {
+      trackId,
+      stems: (song?.stems ?? 0) + 1,
+      lowestScene: Math.min(song?.lowestScene ?? scene, scene),
+    });
+  }
+  return [...songs.values()];
+}
+
+function rememberStarts(startOrder: StartOrder, songs: PlayingSong[]): void {
+  const playing = new Set(songs.map((song) => song.trackId));
+  for (const trackId of [...startOrder.keys()]) {
+    if (!playing.has(trackId)) startOrder.delete(trackId);
+  }
+  const justStarted = songs.filter((song) => !startOrder.has(song.trackId));
+  const latest = Math.max(0, ...startOrder.values());
+  for (const song of justStarted) startOrder.set(song.trackId, latest + 1);
+}
+
+function leadingSong(songs: PlayingSong[], startOrder: StartOrder): PlayingSong | undefined {
+  return [...songs].sort(
+    (a, b) =>
+      b.stems - a.stems ||
+      (startOrder.get(b.trackId) ?? 0) - (startOrder.get(a.trackId) ?? 0) ||
+      a.lowestScene - b.lowestScene,
+  )[0];
+}
+
 export function useNowPlayingTrack(): {
   trackId: number | null;
   source: "ableton" | "session" | "none";
 } {
-  const ableton = useAbletonState();
-  const loadedDecks = useAppStore((s) => s.loadedDecks);
-  const session = useCurrentSession();
+  const playingClips = useAbletonState().playing_clips;
+  const deckMap = useDeckMap().data;
+  const lastPlay = useCurrentSession().data?.plays.at(-1);
+  const songOfCell = useMemo(() => songsByCell(deckMap), [deckMap]);
+  const startOrder = useRef<StartOrder>(new Map());
+  const [playingTrackId, setPlayingTrackId] = useState<number | null>(null);
 
-  return useMemo(() => {
-    // 1) Ableton-derived.
-    const decks = Object.values(loadedDecks).sort(
-      (a, b) => b.loaded_at - a.loaded_at,
-    );
-    const playing = ableton.playing_clips ?? {};
-    for (const deck of decks) {
-      for (const tIdx of deck.stem_track_indices) {
-        const playingScene = playing[tIdx];
-        if (playingScene != null && playingScene === deck.scene_index) {
-          return { trackId: deck.track_id, source: "ableton" };
-        }
-      }
-    }
-    // 2) Fall back to session.
-    const lastPlay = session.data?.plays.at(-1);
-    if (lastPlay) return { trackId: lastPlay.track_id, source: "session" };
-    return { trackId: null, source: "none" };
-  }, [ableton.playing_clips, loadedDecks, session.data]);
+  useEffect(() => {
+    const songs = songsPlaying(deckMap?.columns, songOfCell, playingClips ?? {});
+    rememberStarts(startOrder.current, songs);
+    setPlayingTrackId(leadingSong(songs, startOrder.current)?.trackId ?? null);
+  }, [deckMap, songOfCell, playingClips]);
+
+  if (playingTrackId != null) return { trackId: playingTrackId, source: "ableton" };
+  if (lastPlay) return { trackId: lastPlay.track_id, source: "session" };
+  return { trackId: null, source: "none" };
 }
