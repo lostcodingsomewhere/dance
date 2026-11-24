@@ -121,7 +121,7 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
 **Step 4, live loads build the same clips**
 
 - Built on 2026-11-24 and checked against Live 12.4.3 over OSC the same day. Nobody
-  has listened to it or used the APC40 on it. It is on the branch, not in `main`.
+  has listened to it or used the APC40 on it. Merged to `main` on 2026-11-24.
 - A song loaded from the app during a set lands on a page as five cue pads per
   column, as a prepared Set would hold it: the same start and loop markers, warp
   mode per stem, section colours, and the song's own tempo grid. One difference
