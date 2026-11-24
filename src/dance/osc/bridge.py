@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 # Live's own grid lands up to 9 s after a clip is made (12.4.3), so grids are read back for a while.
 GRID_GUARD_DELAYS: tuple[float, ...] = (*range(1, 13), 14.0, 16.0, 18.0, 20.0, 25.0, 30.0)
 GRID_TEMPO_TOLERANCE_BPM = 0.01
+# Live answers nothing while it makes a clip: about 0.6 s per file it has warped before (12.4.3).
+SECONDS_TO_WAIT_FOR_NEW_CLIPS = 10.0
+SECONDS_TO_WAIT_FOR_LIVE_UNDER_A_LOAD = 2.0
+# AbletonOSC empties its socket once per tick, so a long run of messages is sent in batches.
+MESSAGES_PER_TICK = 400
+TICK_SECONDS = 0.12
 GRID_ORIGIN_TOLERANCE = 1e-4
 STRAIGHT_GRID_MARKERS = 3
 SECONDS_KEPT_CLEAR_OF_THE_SAMPLE_END = 1.0
@@ -144,9 +150,11 @@ class AbletonBridge:
         listen_port: int = ABLETON_SEND_PORT,
         state_file: Path | None = None,
         grid_guard_delays: tuple[float, ...] = GRID_GUARD_DELAYS,
+        seconds_to_wait_for_new_clips: float = SECONDS_TO_WAIT_FOR_NEW_CLIPS,
     ) -> None:
         self.client = AbletonOSCClient(host=host, port=send_port)
         self._grid_guard_delays = grid_guard_delays
+        self._seconds_to_wait_for_new_clips = seconds_to_wait_for_new_clips
         self.listener = AbletonOSCListener(host=host, port=listen_port)
         self.state = AbletonState()
         self._subscribers: list[StateListener] = []
@@ -176,6 +184,7 @@ class AbletonBridge:
         self._warp_marker_replies: dict[tuple[int, int], list[WarpMarker]] | None = None
         self._warp_marker_lock = threading.Lock()
         self._grid_lock = threading.Lock()
+        self._sent_this_tick = 0
         self._stopped = threading.Event()
 
         # Indices of the 5 reusable "Deck" tracks in Live (mix, drums, bass,
@@ -2443,6 +2452,10 @@ class AbletonBridge:
         # Live ends every grid with a marker of its own that cannot be removed.
         for beat, _ in reversed(markers[1:-1]):
             self.client.remove_warp_marker(track_index, row, beat)
+            self._sent_this_tick += 1
+            if self._sent_this_tick >= MESSAGES_PER_TICK:
+                self._sent_this_tick = 0
+                time.sleep(TICK_SECONDS)
         self.client.add_warp_marker(track_index, row, far_seconds * clip.bpm / 60.0, far_seconds)
         self.client.remove_warp_marker(track_index, row, markers[0][0])
         self.client.add_warp_marker(track_index, row, 0.0, 0.0)
@@ -2451,11 +2464,19 @@ class AbletonBridge:
         track_index, row = clip.slot
         cue = clip.cue
         if cue.loop_beats:
+            end = cue.start_beats + cue.loop_beats
+            # Live gives a clip that never looped a 4-beat loop, so the end is widened first.
             self.client.set_clip_looping(track_index, row, True)
-            self.client.set_clip_loop(
-                track_index, row, cue.start_beats, cue.start_beats + cue.loop_beats
-            )
-        self.client.set_clip_start_marker(track_index, row, cue.start_beats)
+            self.client.set_clip_loop_end(track_index, row, end)
+            self.client.set_clip_loop_start(track_index, row, cue.start_beats)
+            self.client.set_clip_end_marker(track_index, row, end)
+            self.client.set_clip_start_marker(track_index, row, cue.start_beats)
+        else:
+            end = clip.seconds * clip.bpm / 60.0
+            # Live moves an unlooped clip's start only through loop_start, and never past its end.
+            self.client.set_clip_loop_end(track_index, row, end)
+            self.client.set_clip_end_marker(track_index, row, end)
+            self.client.set_clip_loop_start(track_index, row, cue.start_beats)
         if cue.color_index is not None:
             self.client.set_clip_color(track_index, row, cue.color_index)
 
@@ -2476,17 +2497,26 @@ class AbletonBridge:
                 except OSError:  # pragma: no cover - best-effort
                     pass
                 rewritten.append(clip)
+        if rewritten:
+            logger.warning(
+                "Live had changed the warp grid of %d clip(s), now rewritten: %s",
+                len(rewritten),
+                ", ".join(f"{clip.deck_kind} row {clip.row + 1}" for clip in rewritten),
+            )
         return unanswered, rewritten
 
     def _grid_check_warnings(self, clips: Sequence[GridClip]) -> list[str]:
         unanswered, rewritten = self._put_grids_right(clips)
         refused: list[GridClip] = []
         if rewritten:
-            read = self._read_warp_markers([clip.slot for clip in rewritten])
+            read = self._read_warp_markers(
+                [clip.slot for clip in rewritten], timeout=self._seconds_to_wait_for_new_clips
+            )
+            unanswered += [clip for clip in rewritten if clip.slot not in read]
             refused = [
                 clip
                 for clip in rewritten
-                if not on_straight_grid(read.get(clip.slot, ()), clip.bpm)
+                if clip.slot in read and not on_straight_grid(read[clip.slot], clip.bpm)
             ]
         warnings: list[str] = []
         if unanswered:
@@ -2509,11 +2539,14 @@ class AbletonBridge:
         return f"{len(clips)} pad{'s' if len(clips) != 1 else ''} ({named}{more})"
 
     def _guard_grids(self, clips: Sequence[GridClip]) -> None:
-        waited = 0.0
+        loaded_at = time.monotonic()
+        last = self._grid_guard_delays[-1] if self._grid_guard_delays else 0.0
         for delay in self._grid_guard_delays:
-            if self._stopped.wait(max(delay - waited, 0.0)):
+            wait = loaded_at + delay - time.monotonic()
+            if wait < 0 and delay != last:
+                continue
+            if self._stopped.wait(max(wait, 0.0)):
                 return
-            waited = delay
             still_loaded = [
                 clip for clip in clips if self._grid_clips.get((clip.row, clip.deck_kind)) is clip
             ]
@@ -2522,12 +2555,9 @@ class AbletonBridge:
             with self._grid_lock:
                 self._put_grids_right(still_loaded)
 
-    def _cells_taken(self, live_reachable: bool) -> set[tuple[int, str]]:
-        taken = set(self._deck_cells)
-        if live_reachable:
-            in_live = self._scan_cells_batched(timeout=1.0) or []
-            taken |= {(cell["scene_index"], cell["kind"]) for cell in in_live}
-        return taken
+    def _cells_taken(self) -> set[tuple[int, str]]:
+        in_live = self._scan_cells_batched(timeout=SECONDS_TO_WAIT_FOR_LIVE_UNDER_A_LOAD) or []
+        return set(self._deck_cells) | {(cell["scene_index"], cell["kind"]) for cell in in_live}
 
     @staticmethod
     def _free_page(
@@ -2572,86 +2602,117 @@ class AbletonBridge:
         kinds: list[str] | None = None,
         side: str | None = None,
         page: int = 0,
-        num_tracks_timeout: float = 0.5,
+        num_tracks_timeout: float = SECONDS_TO_WAIT_FOR_LIVE_UNDER_A_LOAD,
     ) -> dict[str, Any]:
+        # One load at a time: Live answers nothing while it makes the clips of the load before.
+        with self._grid_lock:
+            result, built = self._load_cue_pads(
+                track, stems, cues, bpm, kinds, side, max(page, 0), num_tracks_timeout
+            )
+        if built:
+            threading.Thread(
+                target=self._guard_grids, args=(built,), name="grid-guard", daemon=True
+            ).start()
+            self._persist_state()
+            self._bump_deck_revision()
+        return result
+
+    def _load_cue_pads(
+        self,
+        track: Track,
+        stems: list[StemFile],
+        cues: Mapping[str, Sequence[CueClip]],
+        bpm: float,
+        kinds: list[str] | None,
+        side: str | None,
+        page: int,
+        num_tracks_timeout: float,
+    ) -> tuple[dict[str, Any], list[GridClip]]:
         warnings: list[str] = []
-        deck_columns, live_reachable = self._deck_columns_for_load(warnings, num_tracks_timeout)
+        deck_columns, live_reachable = self._deck_columns_for_load(num_tracks_timeout)
+        asked_side = side if side in ("a", "b") else None
+        if not live_reachable:
+            warnings.append("Live did not answer, so nothing was loaded.")
+            return self._cue_load_result(page, asked_side or "a", deck_columns, [], warnings), []
+
         audio = self._audio_for_load(track, stems, kinds, warnings)
         roles = [role for role in audio if cues.get(role)]
         track_id = int(track.id)
         title = (track.title or track.file_name or f"Track {track_id}").strip()
         seconds = float(track.duration_seconds or 0.0)
 
-        with self._grid_lock:
-            page, side = self._free_page(
-                roles,
-                side if side in ("a", "b") else None,
-                max(page, 0),
-                self._cells_taken(live_reachable),
+        page, landed_side = self._free_page(roles, asked_side, page, self._cells_taken())
+        first_row = page * PADS_PER_PAGE
+        last_row = first_row + PADS_PER_PAGE - 1
+        if roles and self.ensure_scene_exists(last_row) is False:
+            warnings.append(
+                f"Live has no scene {last_row + 1} and would not create one; "
+                "this load would land nowhere."
             )
-            first_row = page * PADS_PER_PAGE
-            last_row = first_row + PADS_PER_PAGE - 1
-            if roles and live_reachable and self.ensure_scene_exists(last_row) is False:
-                warnings.append(
-                    f"Live has no scene {first_row + PADS_PER_PAGE} and would not create "
-                    "one; this load would land nowhere."
+
+        asked: list[list[GridClip]] = []
+        for role in roles:
+            deck_kind = f"{role}_{landed_side}"
+            column = [
+                GridClip(
+                    deck_kind=deck_kind,
+                    track_index=deck_columns[deck_kind],
+                    row=first_row + cue.slot - 1,
+                    bpm=bpm,
+                    seconds=seconds,
+                    cue=cue,
                 )
+                for cue in sorted(cues[role], key=lambda cue: cue.slot)
+            ]
+            name = f"{title} ({role} {landed_side.upper()})"
+            try:
+                self._create_first_pad(column[0], audio[role], name)
+            except OSError as exc:  # pragma: no cover - best-effort
+                warnings.append(f"OSC send for {deck_kind} failed: {exc}")
+                continue
+            asked.append(column)
 
-            columns: list[list[GridClip]] = []
-            for role in roles:
-                deck_kind = f"{role}_{side}"
-                column = [
-                    GridClip(
-                        deck_kind=deck_kind,
-                        track_index=deck_columns[deck_kind],
-                        row=first_row + cue.slot - 1,
-                        bpm=bpm,
-                        seconds=seconds,
-                        cue=cue,
-                    )
-                    for cue in sorted(cues[role], key=lambda cue: cue.slot)
-                ]
-                name = f"{title} ({role} {side.upper()})"
-                try:
-                    self._create_first_pad(column[0], audio[role], name)
-                except OSError as exc:  # pragma: no cover - best-effort
-                    warnings.append(f"OSC send for {deck_kind} failed: {exc}")
-                    continue
-                columns.append(column)
-                for clip in column:
-                    cell = (clip.row, deck_kind)
-                    self._deck_cells[cell] = track_id
-                    self._deck_cell_starts[cell] = clip.cue.start_beats
-                    self._grid_clips[cell] = clip
-                    self._auto_warped_cells.discard(cell)
-
-            built = [clip for column in columns for clip in column]
-            if live_reachable and built:
-                self._finish_columns(columns)
-                warnings.extend(self._grid_check_warnings(built))
-
-        if live_reachable and built:
-            threading.Thread(
-                target=self._guard_grids, args=(built,), name="grid-guard", daemon=True
-            ).start()
-        stems_loaded = len(
-            [column for column in columns if not column[0].deck_kind.startswith(MIX_ROLE)]
+        columns = self._finish_columns(asked)
+        warnings.extend(
+            f"Live did not make the {column[0].deck_kind} pads, so that column is empty."
+            for column in asked
+            if column not in columns
         )
+        built = [clip for column in columns for clip in column]
+        for clip in built:
+            cell = (clip.row, clip.deck_kind)
+            self._deck_cells[cell] = track_id
+            self._deck_cell_starts[cell] = clip.cue.start_beats
+            self._grid_clips[cell] = clip
+            self._auto_warped_cells.discard(cell)
+        warnings.extend(self._grid_check_warnings(built))
+
+        result = self._cue_load_result(page, landed_side, deck_columns, columns, warnings)
         try:
             self.client.show_message(
-                f"Dance: {title} → page {page + 1} deck {side.upper()} "
-                f"({stems_loaded} stem{'s' if stems_loaded != 1 else ''} loaded)"
+                f"Dance: {title} → page {page + 1} deck {landed_side.upper()} "
+                f"({result['stems_loaded']} of {len(roles)} columns loaded)"
             )
         except OSError:  # pragma: no cover - best-effort UI
             pass
-        self._persist_state()
-        self._bump_deck_revision()
+        return result, built
+
+    @staticmethod
+    def _cue_load_result(
+        page: int,
+        side: str,
+        deck_columns: dict[str, int],
+        columns: Sequence[Sequence[GridClip]],
+        warnings: list[str],
+    ) -> dict[str, Any]:
         return {
-            "scene_index": first_row,
+            "scene_index": page * PADS_PER_PAGE,
             "page": page,
             "side": side,
             "track_indices": deck_columns,
-            "stems_loaded": stems_loaded,
+            "stems_loaded": len(
+                [column for column in columns if not column[0].deck_kind.startswith(MIX_ROLE)]
+            ),
             "warnings": warnings,
         }
 
@@ -2662,30 +2723,28 @@ class AbletonBridge:
         self.client.set_clip_name(track_index, row, name)
         self._force_warp(track_index, row, role)
 
-    def _finish_columns(self, columns: Sequence[Sequence[GridClip]]) -> None:
-        markers = self._read_warp_markers([column[0].slot for column in columns])
-        for column in columns:
+    def _finish_columns(self, columns: Sequence[list[GridClip]]) -> list[list[GridClip]]:
+        markers = self._read_warp_markers(
+            [column[0].slot for column in columns], timeout=self._seconds_to_wait_for_new_clips
+        )
+        made = [column for column in columns if column[0].slot in markers]
+        for column in made:
             first = column[0]
             try:
-                if first.slot in markers:
-                    self._stamp_grid(first, markers[first.slot])
+                self._stamp_grid(first, markers[first.slot])
+                # Copies of a clip Live is still analysing stay deactivated unless it is active.
+                self.client.set_clip_muted(*first.slot, False)
                 for clip in column[1:]:
                     self.client.duplicate_clip_to(*first.slot, *clip.slot)
                 for clip in column:
                     self._place_cue(clip)
             except OSError:  # pragma: no cover - best-effort
                 pass
+        return made
 
-    def _deck_columns_for_load(
-        self, warnings: list[str], num_tracks_timeout: float
-    ) -> tuple[dict[str, int], bool]:
+    def _deck_columns_for_load(self, num_tracks_timeout: float) -> tuple[dict[str, int], bool]:
         base = self.get_num_tracks(timeout=num_tracks_timeout)
         live_reachable = base is not None
-        if not live_reachable:
-            warnings.append(
-                "Could not read song num_tracks from Live (timeout); "
-                "deck-column indices below are best-effort."
-            )
 
         # Provision the 10 deck columns if we don't have them cached, or — only
         # when Live is reachable — if the cached indices no longer fit Live's
@@ -2765,9 +2824,12 @@ class AbletonBridge:
         # full-track audio and we never duplicate it into the deck row).
         valid_kinds = [k for k in kinds if k in ("drums", "bass", "vocals", "other")]
 
-        deck_columns, live_reachable = self._deck_columns_for_load(
-            warnings, num_tracks_timeout
-        )
+        deck_columns, live_reachable = self._deck_columns_for_load(num_tracks_timeout)
+        if not live_reachable:
+            warnings.append(
+                "Could not read song num_tracks from Live (timeout); "
+                "deck-column indices below are best-effort."
+            )
 
         # Resolve where this load lands. All stems of one push_track_to_live
         # call go to the SAME side so anchor-detection (4-of-4 same track in

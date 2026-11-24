@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -74,10 +75,9 @@ def _differences(got: dict, want: dict) -> list[str]:
         found.append("the clip is deactivated")
     if Path(got["file_path"]).resolve() != Path(want["file_path"]).resolve():
         found.append(f"plays {got['file_path']}, not {want['file_path']}")
-    edges = ("start_marker", "loop_start", "loop_end") if want["looping"] else ("start_marker",)
     found += [
         f"{edge} is {got[edge]:.3f}, a prepared Set has {want[edge]:.3f}"
-        for edge in edges
+        for edge in ("start_marker", "end_marker", "loop_start", "loop_end")
         if abs(got[edge] - want[edge]) > 1e-3
     ]
     return found + _off_the_grid(got, clip_tempo(want))
@@ -114,6 +114,7 @@ def test_a_song_loaded_during_the_set_gets_the_pads_a_prepared_set_would_give_it
     first, second = ids["first_song"], ids["second_song"]
     prepared = SetFile(_exported(client, {"song": [first, second]})["out_path"])
     opened = _open_in_live(client, live, {"song": [first]})
+    live.takes_to_make_a_clip(seconds=0.4)
 
     loaded = _load(client, track_id=second, side="b", page=0)
 
@@ -185,13 +186,15 @@ def test_live_plays_the_songs_own_grid_when_its_auto_warp_is_wrong_or_late(booth
     prepared = SetFile(_exported(client, {"song": [first, second]})["out_path"])
     opened = _open_in_live(client, live, {"song": [first]})
     song_file = client.get(f"{API}/tracks/{second}").json()["file_path"]
-    live.auto_warps(_stem_path(client, second, "drums"), HALF_TEMPO_FROM_A_LATE_FIRST_BEAT)
-    live.auto_warps(
-        _stem_path(client, second, "bass"), HALF_TEMPO_FROM_A_LATE_FIRST_BEAT, after=0.35
+    live.has_warped_before(_stem_path(client, second, "drums"), HALF_TEMPO_FROM_A_LATE_FIRST_BEAT)
+    live.has_warped_before(_stem_path(client, second, "vocals"), HALF_TEMPO_FROM_A_LATE_FIRST_BEAT)
+    live.has_never_analysed(
+        _stem_path(client, second, "bass"), HALF_TEMPO_FROM_A_LATE_FIRST_BEAT, analysis_seconds=0.35
     )
-    live.auto_warps(song_file, HALF_TEMPO_FROM_A_LATE_FIRST_BEAT, after=0.9)
+    live.has_never_analysed(song_file, HALF_TEMPO_FROM_A_LATE_FIRST_BEAT, analysis_seconds=0.5)
 
     _load(client, track_id=second, side="b", page=0)
+    live.rewarps_later("Other B", 3, HALF_TEMPO_FROM_A_LATE_FIRST_BEAT, after=0.9)
     time.sleep(GRID_GUARD_DELAYS[-1])
 
     _settles(lambda: not _unlike_a_prepared_set(live, prepared, "b"))
@@ -203,6 +206,39 @@ def test_live_plays_the_songs_own_grid_when_its_auto_warp_is_wrong_or_late(booth
     assert (checked.json()["checked"], checked.json()["warnings"]) == (opened["clip_count"], [])
     _settles(lambda: not _unlike_a_prepared_set(live, prepared, "b"))
     assert _unlike_a_prepared_set(live, prepared, "b") == []
+
+
+def test_a_second_load_waits_while_live_is_still_making_the_first(booth):
+    client, ids, live = booth
+    first, second, third = ids["first_song"], ids["second_song"], ids["third_song"]
+    _open_in_live(client, live, {"song": [first]})
+    live.takes_to_make_a_clip(seconds=0.6)
+
+    with ThreadPoolExecutor(max_workers=2) as side_by_side:
+        one = side_by_side.submit(_load, client, track_id=second, side="b", page=0)
+        time.sleep(0.6)
+        two = side_by_side.submit(_load, client, track_id=third, side="b", page=0)
+
+    assert (_landed(one.result()), one.result()["warnings"]) == ((0, "b", 0), [])
+    assert (_landed(two.result()), two.result()["warnings"]) == ((1, "b", PADS_PER_PAGE), [])
+    assert (one.result()["stems_loaded"], two.result()["stems_loaded"]) == (4, 4)
+
+
+def test_a_column_live_cannot_make_is_left_out_and_named(booth):
+    client, ids, live = booth
+    first, second = ids["first_song"], ids["second_song"]
+    opened = _open_in_live(client, live, {"song": [first]})
+    live.cannot_read(_stem_path(client, second, "bass"))
+
+    loaded = _load(client, track_id=second, side="b", page=0)
+
+    assert (_landed(loaded), loaded["stems_loaded"]) == ((0, "b", 0), 3)
+    assert loaded["warnings"] == ["Live did not make the bass_b pads, so that column is empty."]
+    assert _settles(lambda: live.has_clip("Mix B", PADS_PER_PAGE - 1))
+    assert not any(live.has_clip("Bass B", row) for row in range(PADS_PER_PAGE))
+    cells = _cells(client)
+    assert len(cells) == 2 * opened["clip_count"] - PADS_PER_PAGE
+    assert not any(kind == "bass_b" for _, kind in cells)
 
 
 def test_the_check_says_when_live_no_longer_answers(booth):
@@ -219,6 +255,12 @@ def test_the_check_says_when_live_no_longer_answers(booth):
     assert checked.json()["checked"] == opened["clip_count"]
     (warning,) = checked.json()["warnings"]
     assert "did not report" in warning and f"{opened['clip_count']} pads" in warning
+
+    shown_before = _cells(client)
+    into_a_silent_live = _load(client, track_id=ids["third_song"], side="a", page=1)
+    assert into_a_silent_live["stems_loaded"] == 0
+    assert into_a_silent_live["warnings"] == ["Live did not answer, so nothing was loaded."]
+    assert _cells(client) == shown_before
 
 
 def test_a_song_with_no_pads_yet_loads_whole_on_its_own_grid_and_says_so(booth):
@@ -243,8 +285,12 @@ def test_a_song_with_no_pads_yet_loads_whole_on_its_own_grid_and_says_so(booth):
 
     assert _settles(lambda: all(live.has_clip(_deck_track(role, "b"), 0) for role in SONG_ROLES))
     assert _settles(lambda: not any(_off_the_grid(clip, song_bpm) for clip in whole_stems()))
+    song_seconds = client.get(f"{API}/tracks/{third}").json()["duration_seconds"]
+    whole_song_beats = song_seconds * song_bpm / 60
     for role, clip in zip(SONG_ROLES, whole_stems(), strict=True):
-        assert (clip["start_marker"], clip["looping"]) == (0.0, False)
+        assert (clip["start_marker"], clip["loop_start"], clip["looping"]) == (0.0, 0.0, False)
+        assert clip["loop_end"] == pytest.approx(whole_song_beats, abs=1e-3)
+        assert clip["end_marker"] == pytest.approx(whole_song_beats, abs=1e-3)
         assert clip["warp_mode"] == WARP_MODE_BY_ROLE[role]
         assert not clip["muted"]
     below_the_first_row = range(1, PADS_PER_PAGE)

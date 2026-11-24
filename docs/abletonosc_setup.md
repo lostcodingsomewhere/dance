@@ -103,7 +103,7 @@ sample that's still decoding can't leave a "song" preview silent.)
 
 ## One-time AbletonOSC patch for crossfader assignment
 
-> Applied by `scripts/abletonosc_patch.py` (patch `0003`). Patch `0004` adds the master-crossfader get/set/listen handlers and `0005` the warp-marker handlers used by `scripts/warp_probe.py` — see [`vendor/abletonosc/README.md`](../vendor/abletonosc/README.md).
+> Applied by `scripts/abletonosc_patch.py` (patch `0003`). Patch `0004` adds the master-crossfader get/set/listen handlers and `0005` the warp-marker handlers that every live load uses to write a song's tempo grid (and `scripts/warp_probe.py`) — see [`vendor/abletonosc/README.md`](../vendor/abletonosc/README.md).
 
 Stock AbletonOSC exposes a track's mixer `volume`, `panning`, and `send`, but **not** `mixer_device.crossfade_assign` — the property that decides which side of Live's master crossfader a track follows. Without it, the crossfader has no effect on app-loaded stems (every track defaults to "None"), so the static `.als` export gets crossfader blending but a live-loaded deck doesn't. We add a small handler to our local fork to close that gap.
 

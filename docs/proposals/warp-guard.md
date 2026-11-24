@@ -1,6 +1,6 @@
 # Warp guard — Live's auto-warp is wrong on stems
 
-**Status:** PARTIALLY IMPLEMENTED (detection shipped; Option C is built into live loads since 2026-11-24 but its marker write has not run against Live, see `cue-pads-prepared-set.md` step 4)
+**Status:** IMPLEMENTED for songs with a tempo analysis (Option C is built into live loads and was checked against Live 12.4.3 on 2026-11-24, see `cue-pads-prepared-set.md` step 4). Not listened to yet.
 **Date:** 2026-08-01
 **Touches:** the OSC load contract (`bridge.push_track_to_live`), a new API endpoint
 
@@ -151,13 +151,14 @@ unverified capability does not get wired into the performance path.
 
 **2026-11-24:** tried against Live 12.4.3. Reading and removing markers work.
 `add_warp_marker` does not take a dict on this build (`TypeError`, no converter
-to `TWarpMarker`), so the claim above that it does is wrong for 12.4.3; patch
-`0005` builds a `Live.Clip.WarpMarker`, which has not run yet. The repair is now
-part of the live load on the `cue-pads-prepared-set.md` step 4 branch, which
-stays unmerged until it has run in Live. Three more findings from that day
-replace the "13 to 15 s" rule: a stem with no `.asd` gets Live's grid within
-9 s, a stem Live auto-warped before gets the same guess back within 1.6 s, and
-a stem Live first met inside an exported Set is not auto-warped at all.
+to `TWarpMarker`), so the claim above that it does is wrong for 12.4.3; it takes
+a `Live.Clip.WarpMarker`, which patch `0005` builds. The repair is now part of
+every live load: the grid is written as the clip is made, and 235 loaded clips
+read back on their song's grid. Three more findings from that day replace the
+"13 to 15 s" rule: a stem with no `.asd` gets Live's grid within 9 s unless a
+grid is written first, a stem Live auto-warped before gets the same guess back
+as the clip is made, and a stem Live first met inside an exported Set is not
+auto-warped at all.
 
 ## Recommendation
 

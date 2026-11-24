@@ -320,6 +320,15 @@ class AbletonOSCClient:
     def set_clip_looping(self, track: int, slot: int, looping: bool) -> None:
         self._send("/live/clip/set/looping", track, slot, 1 if looping else 0)
 
+    def set_clip_muted(self, track: int, slot: int, muted: bool) -> None:
+        self._send("/live/clip/set/muted", track, slot, 1 if muted else 0)
+
+    def set_clip_loop_end(self, track: int, slot: int, beats: float) -> None:
+        self._send("/live/clip/set/loop_end", track, slot, beats)
+
+    def set_clip_end_marker(self, track: int, slot: int, beats: float) -> None:
+        self._send("/live/clip/set/end_marker", track, slot, beats)
+
     def set_clip_warp(self, track: int, slot: int, warp: bool) -> None:
         self._send("/live/clip/set/warping", track, slot, 1 if warp else 0)
 
@@ -335,10 +344,9 @@ class AbletonOSCClient:
 
     # -- Warp markers -------------------------------------------------------
     #
-    # Handlers from vendor/abletonosc patch 0005. On Live 12.4.3 reading and
-    # removing are confirmed. ``add_warp_marker`` refuses a dict there, so the
-    # patch builds a ``Live.Clip.WarpMarker``; that form had not run against
-    # Live when this was written (docs/live-compat.md, 2026-11-24).
+    # Handlers from vendor/abletonosc patch 0005, checked on Live 12.4.3
+    # (docs/live-compat.md, 2026-11-24). ``add_warp_marker`` refuses a dict
+    # there, so the patch builds a ``Live.Clip.WarpMarker``.
 
     def add_warp_marker(
         self, track: int, slot: int, beat_time: float, sample_time: float

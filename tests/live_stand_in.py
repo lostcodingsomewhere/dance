@@ -4,6 +4,7 @@ import copy
 import gzip
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,10 @@ from dance.osc.bridge import AbletonBridge
 from tests.test_export_set_e2e import three_songs_through_the_pipeline
 
 GRID_GUARD_DELAYS = (0.2, 0.6, 1.2)
+SECONDS_TO_WAIT_FOR_NEW_CLIPS = 4.0
 
 SHADOW_BEATS = 1 / 32
+LOOP_LIVE_GIVES_A_CLIP_THAT_NEVER_LOOPED = (0.0, 4.0)
 Marker = tuple[float, float]
 Slot = tuple[int, int]
 PROPERTIES_LIVE_ANSWERS = (
@@ -65,10 +68,15 @@ def _clip_in_file(clip: etree._Element) -> dict[str, Any]:
     return {
         "name": value("Name"),
         "file_path": value("SampleRef/FileRef/Path"),
+        "being_analysed": False,
         "start_marker": loop_start + float(value("Loop/StartRelative")),
-        "end_marker": float(value("CurrentEnd")),
+        "end_marker": float(value("Loop/OutMarker")),
         "loop_start": loop_start,
         "loop_end": float(value("Loop/LoopEnd")),
+        "other_loop_state": (
+            float(value("Loop/HiddenLoopStart")),
+            float(value("Loop/HiddenLoopEnd")),
+        ),
         "looping": value("Loop/LoopOn") == "true",
         "warping": value("IsWarped") == "true",
         "warp_mode": int(value("WarpMode")),
@@ -112,6 +120,8 @@ class LiveStandIn:
         self._tempo_listener_registered = False
         self._auto_warps: dict[str, tuple[list[Marker], float]] = {}
         self._answering = True
+        self._seconds_to_make_a_clip = 0.0
+        self._unreadable_files: set[str] = set()
         self._timers: list[threading.Timer] = []
         self._lock = threading.RLock()
         in_the_order_sent = osc_dispatcher.Dispatcher()
@@ -166,16 +176,37 @@ class LiveStandIn:
         with self._lock:
             self._clips[(self.track_index(track_name), row)] = clip
 
-    def auto_warps(self, file_path: str | Path, markers: list[Marker], after: float = 0.0) -> None:
+    def has_warped_before(self, file_path: str | Path, guess: list[Marker]) -> None:
         with self._lock:
-            self._auto_warps[str(Path(file_path).resolve())] = (markers, after)
+            self._auto_warps[str(Path(file_path).resolve())] = (guess, 0.0)
+
+    def has_never_analysed(
+        self, file_path: str | Path, guess: list[Marker], analysis_seconds: float
+    ) -> None:
+        with self._lock:
+            self._auto_warps[str(Path(file_path).resolve())] = (guess, analysis_seconds)
 
     def rewarp(self, track_name: str, row: int, markers: list[Marker]) -> None:
         with self._lock:
             self._clips[(self.track_index(track_name), row)]["markers"] = list(markers)
 
+    def rewarps_later(self, track_name: str, row: int, markers: list[Marker], after: float) -> None:
+        self._later(after, self.rewarp, track_name, row, markers)
+
+    def _later(self, after: float, action: Any, *args: Any) -> None:
+        timer = threading.Timer(after, action, args)
+        timer.daemon = True
+        self._timers.append(timer)
+        timer.start()
+
     def stop_answering(self) -> None:
         self._answering = False
+
+    def takes_to_make_a_clip(self, seconds: float) -> None:
+        self._seconds_to_make_a_clip = seconds
+
+    def cannot_read(self, file_path: str | Path) -> None:
+        self._unreadable_files.add(str(Path(file_path).resolve()))
 
     def change_tempo(self, bpm: float) -> None:
         if self._tempo_listener_registered:
@@ -221,45 +252,58 @@ class LiveStandIn:
         if action == "has_clip":
             self._reply.send_message(address, [*slot, slot in self._clips])
         elif action == "create_audio_clip" and in_range and slot not in self._clips:
-            self._clips[slot] = self._new_clip(str(args[2]))
+            time.sleep(self._seconds_to_make_a_clip)
+            if str(Path(str(args[2])).resolve()) not in self._unreadable_files:
+                self._clips[slot] = self._new_clip(str(args[2]))
         elif action == "duplicate_clip_to" and slot in self._clips:
-            self._clips[(int(args[2]), int(args[3]))] = copy.deepcopy(self._clips[slot])
+            source = self._clips[slot]
+            duplicate = copy.deepcopy(source)
+            if source.get("being_analysed"):
+                duplicate["muted_once_analysed"] = source["muted"]
+                duplicate["muted"] = True
+            self._clips[(int(args[2]), int(args[3]))] = duplicate
         elif action == "delete_clip":
             self._clips.pop(slot, None)
 
     def _new_clip(self, file_path: str) -> dict[str, Any]:
         seconds = sf.info(file_path).duration
-        beats = seconds * self._tempo / 60.0
-        clip = {
+        guess, analysis_seconds = self._auto_warps.get(str(Path(file_path).resolve()), (None, 0.0))
+        being_analysed = guess is not None and analysis_seconds > 0
+        placeholder = straight_grid(self._tempo)
+        grid = placeholder if being_analysed or guess is None else list(guess)
+        end = _beat_at(grid, seconds)
+        if being_analysed:
+            self._later(analysis_seconds, self._analysis_finished, file_path, guess, placeholder)
+        return {
             "name": Path(file_path).stem,
             "file_path": file_path,
             "seconds": seconds,
             "start_marker": 0.0,
-            "end_marker": beats,
+            "end_marker": end,
             "loop_start": 0.0,
-            "loop_end": beats,
+            "loop_end": end,
+            "other_loop_state": LOOP_LIVE_GIVES_A_CLIP_THAT_NEVER_LOOPED,
             "looping": False,
             "warping": True,
             "warp_mode": 0,
             "color_index": 1,
-            "muted": False,
-            "markers": straight_grid(self._tempo),
+            "muted": being_analysed,
+            "being_analysed": being_analysed,
+            "muted_once_analysed": False,
+            "markers": grid,
         }
-        markers, after = self._auto_warps.get(str(Path(file_path).resolve()), (None, 0.0))
-        if markers is not None and after <= 0:
-            clip["markers"] = list(markers)
-        elif markers is not None:
-            timer = threading.Timer(after, self._auto_warp_lands, (file_path, markers))
-            timer.daemon = True
-            self._timers.append(timer)
-            timer.start()
-        return clip
 
-    def _auto_warp_lands(self, file_path: str, markers: list[Marker]) -> None:
+    def _analysis_finished(
+        self, file_path: str, guess: list[Marker], placeholder: list[Marker]
+    ) -> None:
         with self._lock:
             for clip in self._clips.values():
-                if clip["file_path"] == file_path:
-                    clip["markers"] = list(markers)
+                if clip["file_path"] != file_path or not clip.get("being_analysed"):
+                    continue
+                clip["being_analysed"] = False
+                clip["muted"] = clip["muted_once_analysed"]
+                if clip["markers"] == placeholder:
+                    clip["markers"] = list(guess)
 
     def _clip(self, address: str, args: tuple[Any, ...]) -> None:
         slot = (int(args[0]), int(args[1]))
@@ -270,8 +314,8 @@ class LiveStandIn:
         if parts == ["get", "warp_marker_times"]:
             flat = [value for marker in clip["markers"] for value in marker]
             self._reply.send_message(address, [*slot, *flat])
-        elif parts[0] == "get" and parts[1] in PROPERTIES_LIVE_ANSWERS:
-            self._reply.send_message(address, [*slot, _read(clip, parts[1])])
+        elif parts[0] == "get" and parts[1] in PROPERTIES_LIVE_ANSWERS and parts[1] in clip:
+            self._reply.send_message(address, [*slot, clip[parts[1]]])
         elif parts[0] == "set":
             _write(clip, parts[1], args[2])
         elif parts == ["remove_warp_marker"]:
@@ -280,32 +324,43 @@ class LiveStandIn:
             _add_marker(clip, float(args[2]), float(args[3]))
 
 
-def _edge(clip: dict[str, Any], edge: str) -> str:
-    if clip.get("looping", True):
-        return edge
-    return {"loop_start": "start_marker", "loop_end": "end_marker"}.get(edge, edge)
-
-
-def _read(clip: dict[str, Any], prop: str) -> Any:
-    return clip[_edge(clip, prop)]
+def _beat_at(markers: list[Marker], second: float) -> float:
+    (beat, sec), (next_beat, next_sec) = markers[-2], markers[-1]
+    return beat + (second - sec) * (next_beat - beat) / (next_sec - sec)
 
 
 def _write(clip: dict[str, Any], prop: str, value: Any) -> None:
-    key = _edge(clip, prop)
-    if key in ("start_marker", "loop_start"):
-        end = clip["end_marker" if key == "start_marker" else "loop_end"]
-        if float(value) < end:
-            clip[key] = float(value)
-    elif key in ("end_marker", "loop_end"):
-        start = clip["start_marker" if key == "end_marker" else "loop_start"]
-        if float(value) > start:
-            clip[key] = float(value)
-    elif key in ("looping", "warping", "muted"):
-        clip[key] = bool(value)
-    elif key in ("warp_mode", "color_index"):
-        clip[key] = int(value)
-    elif key == "name":
-        clip[key] = str(value)
+    if prop == "looping":
+        _set_looping(clip, bool(value))
+    elif prop == "loop_start" and float(value) < clip["loop_end"]:
+        clip["loop_start"] = float(value)
+        if not clip["looping"]:
+            clip["start_marker"] = float(value)
+    elif prop == "loop_end" and float(value) > clip["loop_start"]:
+        clip["loop_end"] = float(value)
+    elif prop == "start_marker" and clip["looping"] and float(value) < clip["end_marker"]:
+        clip["start_marker"] = float(value)
+    elif prop == "end_marker" and float(value) > clip["start_marker"]:
+        clip["end_marker"] = float(value)
+    elif prop in ("warping", "muted"):
+        clip[prop] = bool(value)
+    elif prop in ("warp_mode", "color_index"):
+        clip[prop] = int(value)
+    elif prop == "name":
+        clip[prop] = str(value)
+
+
+def _set_looping(clip: dict[str, Any], looping: bool) -> None:
+    if looping == clip["looping"]:
+        return
+    start, end = clip["loop_start"], clip["loop_end"]
+    clip["loop_start"], clip["loop_end"] = clip["other_loop_state"]
+    clip["other_loop_state"] = (start, end)
+    clip["looping"] = looping
+    if looping:
+        clip["end_marker"] = end
+    else:
+        clip["start_marker"] = clip["loop_start"]
 
 
 def _remove_marker(clip: dict[str, Any], beat: float) -> None:
@@ -350,6 +405,7 @@ def booth_with_live(monkeypatch) -> Iterator[tuple[TestClient, dict[str, int], L
             listen_port=live.reply_port,
             state_file=settings.data_dir / "deck_state.json",
             grid_guard_delays=GRID_GUARD_DELAYS,
+            seconds_to_wait_for_new_clips=SECONDS_TO_WAIT_FOR_NEW_CLIPS,
         )
         app = create_app(
             settings=settings,
