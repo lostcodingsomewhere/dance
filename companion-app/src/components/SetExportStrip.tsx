@@ -1,5 +1,5 @@
-import { serverMessage, type SetAlsExportResult, type SkippedPick } from "../api";
-import { useOpenInLive, useRevealInFinder } from "../hooks/useSetExport";
+import { serverMessage, type SkippedPick } from "../api";
+import { useRevealInFinder, type SetSentToLive } from "../hooks/useSetExport";
 import { useSetPlan } from "../hooks/useSetPlan";
 import { roleLabel } from "../lib/roles";
 import type { SetPlan } from "../types";
@@ -31,22 +31,22 @@ function skippedLine(pick: SkippedPick, titles: Map<number, string>): string {
 
 interface Props {
   setId: number;
-  exported: SetAlsExportResult | undefined;
+  sent: SetSentToLive | undefined;
   failure: Error | null;
   onDismiss: () => void;
 }
 
-export function SetExportStrip({ setId, exported, failure, onDismiss }: Props) {
+export function SetExportStrip({ setId, sent, failure, onDismiss }: Props) {
   return (
     <section
-      aria-label="Export result"
+      aria-label="Live Set result"
       className="flex items-start gap-3 border-b border-neutral-800 bg-neutral-900/50 px-6 py-2 text-xs"
     >
       <div className="min-w-0 flex-1">
-        {exported && <ExportedSet setId={setId} exported={exported} />}
+        {sent && <WrittenSet setId={setId} sent={sent} />}
         {failure && (
           <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className={`${STRIP_LABEL} text-rose-400/80`}>Not exported</span>
+            <span className={`${STRIP_LABEL} text-rose-400/80`}>Not opened</span>
             <Failure error={failure} />
           </p>
         )}
@@ -54,7 +54,7 @@ export function SetExportStrip({ setId, exported, failure, onDismiss }: Props) {
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="Dismiss export result"
+        aria-label="Dismiss Live Set result"
         title="Dismiss"
         className="-my-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-sm text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
       >
@@ -64,14 +64,20 @@ export function SetExportStrip({ setId, exported, failure, onDismiss }: Props) {
   );
 }
 
-function ExportedSet({ setId, exported }: { setId: number; exported: SetAlsExportResult }) {
-  const openInLive = useOpenInLive();
+function WrittenSet({ setId, sent }: { setId: number; sent: SetSentToLive }) {
   const revealInFinder = useRevealInFinder();
+  const { exported, openedIn, openFailure } = sent;
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span className={`${STRIP_LABEL} text-emerald-400`}>Exported</span>
+        {openedIn ? (
+          <span role="status" className="shrink-0 text-emerald-400">
+            {`Opened in ${openedIn}`}
+          </span>
+        ) : (
+          <span className={`${STRIP_LABEL} text-amber-300`}>Written, not opened</span>
+        )}
         <span title={exported.out_path} className="max-w-full truncate font-medium text-neutral-100">
           {fileNameOf(exported.out_path)}
         </span>
@@ -80,25 +86,12 @@ function ExportedSet({ setId, exported }: { setId: number; exported: SetAlsExpor
         </span>
         <button
           type="button"
-          onClick={() => openInLive.mutate(exported.out_path)}
-          disabled={openInLive.isPending}
-          className={ACTION_BUTTON}
-        >
-          Open in Live
-        </button>
-        <button
-          type="button"
           onClick={() => revealInFinder.mutate(exported.out_path)}
           className={ACTION_BUTTON}
         >
           Show in Finder
         </button>
-        {openInLive.isSuccess && (
-          <span role="status" className="text-emerald-400">
-            {`Opened in ${openInLive.data.app}`}
-          </span>
-        )}
-        {openInLive.isError && <Failure error={openInLive.error} />}
+        {openFailure && <Failure error={openFailure} />}
         {revealInFinder.isError && <Failure error={revealInFinder.error} />}
       </div>
       {exported.skipped.length > 0 && <SkippedPicks setId={setId} skipped={exported.skipped} />}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -159,14 +160,32 @@ def _scene_names(loads: list[DeckLoad], titles: dict[int, str], page_count: int)
     return names
 
 
+def _default_path(directory: Path, set_name: str, new_file: bool) -> Path:
+    stem = _safe_filename(set_name)
+    if not new_file:
+        return directory / f"{stem}.als"
+    # Live saves an open Set over its own file when asked, so that file is never rewritten.
+    stamp = datetime.now().strftime("%Y-%m-%d %H.%M.%S")
+    unused = directory / f"{stem} {stamp}.als"
+    copy = 2
+    while unused.exists():
+        unused = directory / f"{stem} {stamp} ({copy}).als"
+        copy += 1
+    return unused
+
+
 def export_set(
-    session: Session, settings: Settings, set_row: Set, out_path: Path | None = None
+    session: Session,
+    settings: Settings,
+    set_row: Set,
+    out_path: Path | None = None,
+    new_file: bool = False,
 ) -> SetExport:
     loads = plan_loads(parse_plan(set_row.plan))
     if not loads:
         raise AlsExportError(f"set {set_row.id} has an empty plan")
     target = AlsGenerator(session, settings)._validate_in_output_dir(
-        out_path or settings.als_output_dir / f"{_safe_filename(set_row.name)}.als"
+        out_path or _default_path(settings.als_output_dir, set_row.name, new_file)
     )
 
     clips: list[PlacedClip] = []

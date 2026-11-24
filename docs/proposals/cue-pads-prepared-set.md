@@ -76,6 +76,11 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   a third song and one vocal stem): 15 scenes, clips on the 80 expected slots, loop
   lengths and start points as written, warp modes 0, 6 and 4. Details in
   `docs/live-compat.md`.
+- Done in the app on 2026-11-23: an "Open in Live" button in the Set view. One click
+  writes the plan to a new file and opens it in Live Standard. Checked on a copy of
+  the library: Live switched to the new plan each time. Not checked: what Live does
+  when the Set it has open has unsaved changes. A new file per click is there so
+  that a save in that case cannot land on the file just written.
 - Not done: the Live session in the verification plan. Nobody has looked at the
   screen, listened, or touched the APC40. The palette indices for pad colours are a
   guess. The live-load path still uses Beats for every stem.

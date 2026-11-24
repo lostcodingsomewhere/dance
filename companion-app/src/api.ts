@@ -818,10 +818,10 @@ export interface SetAlsExportResult {
   skipped: SkippedPick[];
 }
 
-export function exportSetAls(setId: number): Promise<SetAlsExportResult> {
+export function writeSetAsNewLiveSet(setId: number): Promise<SetAlsExportResult> {
   return request<SetAlsExportResult>(`/sets/${setId}/als`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ new_file: true }),
   });
 }
 

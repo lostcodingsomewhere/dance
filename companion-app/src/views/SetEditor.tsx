@@ -14,7 +14,7 @@ import { CueStrip } from "../components/CueStrip";
 import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
 import { SetExportStrip } from "../components/SetExportStrip";
 import { SetMenu } from "../components/SetMenu";
-import { useExportSetToLive } from "../hooks/useSetExport";
+import { useOpenSetInLive } from "../hooks/useSetExport";
 import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
 import { store } from "../store";
 import type { DanceSet } from "../types";
@@ -40,14 +40,14 @@ export function SetEditor() {
 }
 
 function Header({ set }: { set: DanceSet }) {
-  const exportToLive = useExportSetToLive();
-  const exportButton = useRef<HTMLButtonElement>(null);
-  const exportFinishedForThisSet =
-    exportToLive.variables === set.id && (exportToLive.isSuccess || exportToLive.isError);
+  const openSetInLive = useOpenSetInLive();
+  const openButton = useRef<HTMLButtonElement>(null);
+  const finishedForThisSet =
+    openSetInLive.variables === set.id && (openSetInLive.isSuccess || openSetInLive.isError);
 
-  function dismissExportResult() {
-    exportToLive.reset();
-    exportButton.current?.focus();
+  function dismissResult() {
+    openSetInLive.reset();
+    openButton.current?.focus();
   }
 
   return (
@@ -68,23 +68,23 @@ function Header({ set }: { set: DanceSet }) {
           queue stems per role · ＋ from recs or ⌘K
         </span>
         <button
-          ref={exportButton}
+          ref={openButton}
           type="button"
-          onClick={() => exportToLive.mutate(set.id)}
-          disabled={exportToLive.isPending}
-          title="Write this set's whole plan as one Ableton Live Set"
+          onClick={() => openSetInLive.mutate(set.id)}
+          disabled={openSetInLive.isPending}
+          title="Write this plan as a new Live Set file and open it in Ableton Live"
           className="h-7 px-3 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs shrink-0 disabled:opacity-50"
         >
-          {exportToLive.isPending ? "Exporting…" : "Export to Live"}
+          {openSetInLive.isPending ? "Opening…" : "Open in Live"}
         </button>
       </div>
-      {exportFinishedForThisSet && (
+      {finishedForThisSet && (
         <SetExportStrip
-          key={exportToLive.submittedAt}
+          key={openSetInLive.submittedAt}
           setId={set.id}
-          exported={exportToLive.data}
-          failure={exportToLive.error}
-          onDismiss={dismissExportResult}
+          sent={openSetInLive.data}
+          failure={openSetInLive.error}
+          onDismiss={dismissResult}
         />
       )}
     </>

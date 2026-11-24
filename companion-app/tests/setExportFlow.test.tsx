@@ -11,6 +11,7 @@ const REVEAL_PATH = "/api/v1/files/reveal";
 const OUT_PATH = "/Users/x/Music/Dance/Sets/Friday night.als";
 const LIVE_APP = "Ableton Live 12 Standard";
 const EMPTY_PLAN_MESSAGE = "the plan is empty, queue a pick first";
+const NO_LIVE_MESSAGE = "No Ableton Live Standard or Suite that can open this Set was found.";
 
 const EXPORTED = {
   ok: true,
@@ -38,6 +39,7 @@ interface Reply {
 
 let requests: SeenRequest[];
 let exportReply: Reply;
+let openReply: Reply;
 let exportHeld: Promise<void>;
 
 function json(body: unknown, status = 200): Response {
@@ -95,7 +97,7 @@ async function fakeBackend(url: string, init: RequestInit = {}): Promise<Respons
     await exportHeld;
     return json(exportReply.body, exportReply.status);
   }
-  if (path === OPEN_PATH && method === "POST") return json({ ok: true, app: LIVE_APP });
+  if (path === OPEN_PATH && method === "POST") return json(openReply.body, openReply.status);
   if (path === REVEAL_PATH && method === "POST") return json({ ok: true });
   return json({ detail: `no fake for ${method} ${path}` }, 404);
 }
@@ -113,8 +115,8 @@ function requestsTo(path: string): SeenRequest[] {
   return requests.filter((request) => request.path === path);
 }
 
-function exportResult(): Promise<HTMLElement> {
-  return screen.findByRole("region", { name: "Export result" });
+function liveSetResult(): Promise<HTMLElement> {
+  return screen.findByRole("region", { name: "Live Set result" });
 }
 
 const originalFetch = globalThis.fetch;
@@ -122,6 +124,7 @@ const originalFetch = globalThis.fetch;
 beforeEach(() => {
   requests = [];
   exportReply = { status: 200, body: EXPORTED };
+  openReply = { status: 200, body: { ok: true, app: LIVE_APP } };
   exportHeld = Promise.resolve();
   globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
     fakeBackend(typeof input === "string" ? input : input.toString(), init),
@@ -133,19 +136,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("exporting a set to Live from the Set view", () => {
-  it("writes the plan as one Live Set, opens it in Live, and shows a refused export", async () => {
+describe("opening a set in Live from the Set view", () => {
+  it("writes the plan as one Live Set and opens it in one click, and says what went wrong", async () => {
     renderSetView();
     await screen.findByText("Night Drive");
 
     const answerExport = holdExportAnswer();
-    fireEvent.click(screen.getByRole("button", { name: "Export to Live" }));
-    expect(await screen.findByRole("button", { name: "Exporting…" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Open in Live" }));
+    expect(await screen.findByRole("button", { name: "Opening…" })).toBeDisabled();
+    expect(requestsTo(OPEN_PATH)).toEqual([]);
     answerExport();
 
-    const result = await exportResult();
-    expect(requestsTo(EXPORT_PATH)).toEqual([{ method: "POST", path: EXPORT_PATH, body: {} }]);
-    expect(screen.getByRole("button", { name: "Export to Live" })).toBeEnabled();
+    const result = await liveSetResult();
+    expect(within(result).getByRole("status")).toHaveTextContent(`Opened in ${LIVE_APP}`);
+    expect(requestsTo(EXPORT_PATH)).toEqual([
+      { method: "POST", path: EXPORT_PATH, body: { new_file: true } },
+    ]);
+    expect(requestsTo(OPEN_PATH)).toEqual([
+      { method: "POST", path: OPEN_PATH, body: { path: OUT_PATH } },
+    ]);
+    expect(screen.getAllByRole("button", { name: "Open in Live" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Open in Live" })).toBeEnabled();
     expect(within(result).getByText("Friday night.als")).toHaveAttribute("title", OUT_PATH);
     expect(within(result).getByText("3 pages · 80 clips")).toBeInTheDocument();
 
@@ -157,12 +168,6 @@ describe("exporting a set to Live from the Set view", () => {
     expect(skippedWithTitle).toBeVisible();
     expect(within(result).getByText("track 15 (song): no stems on disk")).toBeVisible();
 
-    fireEvent.click(within(result).getByRole("button", { name: "Open in Live" }));
-    expect(await within(result).findByText(`Opened in ${LIVE_APP}`)).toBeInTheDocument();
-    expect(requestsTo(OPEN_PATH)).toEqual([
-      { method: "POST", path: OPEN_PATH, body: { path: OUT_PATH } },
-    ]);
-
     fireEvent.click(within(result).getByRole("button", { name: "Show in Finder" }));
     await waitFor(() =>
       expect(requestsTo(REVEAL_PATH)).toEqual([
@@ -170,18 +175,30 @@ describe("exporting a set to Live from the Set view", () => {
       ]),
     );
 
-    exportReply = { status: 400, body: { detail: EMPTY_PLAN_MESSAGE } };
-    fireEvent.click(screen.getByRole("button", { name: "Export to Live" }));
+    openReply = { status: 409, body: { detail: NO_LIVE_MESSAGE } };
+    fireEvent.click(screen.getByRole("button", { name: "Open in Live" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(EMPTY_PLAN_MESSAGE);
-    expect(screen.queryByText("Friday night.als")).not.toBeInTheDocument();
-    expect(screen.queryByText(`Opened in ${LIVE_APP}`)).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(NO_LIVE_MESSAGE);
+    const writtenOnly = await liveSetResult();
+    expect(within(writtenOnly).getByText("Friday night.als")).toBeInTheDocument();
+    expect(within(writtenOnly).getByRole("button", { name: "Show in Finder" })).toBeEnabled();
+    expect(within(writtenOnly).queryByRole("status")).not.toBeInTheDocument();
     expect(requestsTo(EXPORT_PATH)).toHaveLength(2);
+    expect(requestsTo(OPEN_PATH)).toHaveLength(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss export result" }));
+    exportReply = { status: 400, body: { detail: EMPTY_PLAN_MESSAGE } };
+    fireEvent.click(screen.getByRole("button", { name: "Open in Live" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(EMPTY_PLAN_MESSAGE));
+    expect(screen.queryByText("Friday night.als")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(requestsTo(EXPORT_PATH)).toHaveLength(3);
+    expect(requestsTo(OPEN_PATH)).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Live Set result" }));
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Export result" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("region", { name: "Live Set result" })).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("button", { name: "Export to Live" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Open in Live" })).toHaveFocus();
   });
 });

@@ -1,12 +1,25 @@
 import { useMutation } from "@tanstack/react-query";
 import * as api from "../api";
 
-export function useExportSetToLive() {
-  return useMutation({ mutationFn: (setId: number) => api.exportSetAls(setId) });
+export interface SetSentToLive {
+  exported: api.SetAlsExportResult;
+  openedIn: string | null;
+  openFailure: Error | null;
 }
 
-export function useOpenInLive() {
-  return useMutation({ mutationFn: (path: string) => api.openInLive(path) });
+async function writeSetAndOpenIt(setId: number): Promise<SetSentToLive> {
+  const exported = await api.writeSetAsNewLiveSet(setId);
+  try {
+    const opened = await api.openInLive(exported.out_path);
+    return { exported, openedIn: opened.app, openFailure: null };
+  } catch (error) {
+    const openFailure = error instanceof Error ? error : new Error(String(error));
+    return { exported, openedIn: null, openFailure };
+  }
+}
+
+export function useOpenSetInLive() {
+  return useMutation({ mutationFn: writeSetAndOpenIt });
 }
 
 export function useRevealInFinder() {
