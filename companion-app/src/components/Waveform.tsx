@@ -212,6 +212,7 @@ export function Waveform({
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    if (!draggingRef.current) return;
     draggingRef.current = false;
     const ratio = ratioFromClientX(e.clientX);
     // Raw, precise seek to the release point — no section snapping. Holding
@@ -220,6 +221,10 @@ export function Waveform({
       ? snapRatioToSection(ratio, regions, durationSeconds ?? 0)
       : ratio;
     onSeek(committed);
+  }
+
+  function handlePointerCancel() {
+    draggingRef.current = false;
   }
 
   function handlePointerLeave() {
@@ -279,6 +284,7 @@ export function Waveform({
       onPointerDown={onSeek ? handlePointerDown : undefined}
       onPointerMove={onSeek ? handlePointerMove : undefined}
       onPointerUp={onSeek ? handlePointerUp : undefined}
+      onPointerCancel={onSeek ? handlePointerCancel : undefined}
       onPointerLeave={onSeek ? handlePointerLeave : undefined}
     >
     <svg
