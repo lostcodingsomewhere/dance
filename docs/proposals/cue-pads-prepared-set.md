@@ -1,6 +1,6 @@
 # Cue pads, a prepared Set, and version families
 
-**Status:** APPROVED 2026-11-23. All eleven decisions are settled in "Decisions for you". Steps 0 to 6 are built as of 2026-11-24, step 6 on the branch. The checks so far ran over OSC and in a browser: nobody has listened to a pad or used the APC40, and no version has been downloaded for real.
+**Status:** APPROVED 2026-11-23. All eleven decisions are settled in "Decisions for you". Steps 0 to 6 are built and in `main` as of 2026-11-24. The checks so far ran over OSC and in a browser: nobody has listened to a pad or used the APC40, and no version has been downloaded for real.
 **Date:** 2026-11-23
 **Touches:** `src/dance/pipeline/stages/detect_regions.py`, `src/dance/core/database.py` (one enum value), `src/dance/als/writer.py` + `generator.py`, `src/dance/osc/bridge.py` (`push_track_to_live`), `src/dance/api/routers/{ableton,sets,tracks}.py` + `schemas.py`, `src/dance/recommender/dedup.py`, `companion-app` (`SceneGrid`, `TwoDeckStrip`, `lib/roles.ts`), `cli.py`.
 **Stacks on:** [`als-clip-elements.md`](als-clip-elements.md) option A, [`warp-guard.md`](warp-guard.md) (who owns the grid), and the library re-run that the tempo fix already requires.
@@ -279,9 +279,9 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
 
 **Step 6, find versions**
 
-- Built on 2026-11-24, on the branch. Live is not involved. Checked against real
-  Spotify and in a browser on a copy of the library. No download has completed for
-  real: YouTube refused it on this Mac (see the last points).
+- Built on 2026-11-24. Live is not involved. Checked against real Spotify and in
+  a browser on a copy of the library. No download has completed for real: YouTube
+  refused it on this Mac (see the last points). Merged to `main` on 2026-11-24.
 - What Spotify answers today, measured with this repo's app credentials: track
   search works but gives at most 10 results a request; `/playlists/{id}/tracks`
   answers 403 and its replacement `/playlists/{id}/items` answers 401 without a
