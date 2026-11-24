@@ -60,6 +60,7 @@ def _is_the_default_version(text: str) -> bool:
 class TitleParts:
     base: str
     notes: tuple[str, ...]
+    plain: str = ""
 
     @property
     def note(self) -> str:
@@ -80,7 +81,7 @@ def title_parts(title: str | None) -> TitleParts:
         if _names_a_version(inside):
             notes.append(inside)
             return " "
-        return f" {inside} "
+        return bracket.group(0)
 
     segments = _BRACKETED.sub(without_version_or_credit, title or "").split(_TAIL_SEPARATOR)
     tails: list[str] = []
@@ -89,24 +90,32 @@ def title_parts(title: str | None) -> TitleParts:
     ):
         tails.append(segments.pop().strip())
     notes += [tail for tail in reversed(tails) if not _is_the_default_version(tail)]
-    base = _key(_TRAILING_CREDIT.sub("", _TAIL_SEPARATOR.join(segments)))
-    return TitleParts(base=base, notes=tuple(notes))
+    plain = " ".join(_TRAILING_CREDIT.sub("", _TAIL_SEPARATOR.join(segments)).split())
+    said_once: dict[str, str] = {}
+    for note in notes:
+        said_once.setdefault(_key(note), note)
+    return TitleParts(base=_key(plain), notes=tuple(said_once.values()), plain=plain)
+
+
+def _credited_names(artist: str | None) -> list[str]:
+    without_tags = _BRACKETED.sub(" ", artist or "")
+    return [name.strip() for name in _ARTIST_SEPARATORS.split(without_tags) if _key(name)]
 
 
 def credited_artists(artist: str | None) -> frozenset[str]:
-    without_tags = _BRACKETED.sub(" ", artist or "")
-    return frozenset(
-        name for name in (_key(part) for part in _ARTIST_SEPARATORS.split(without_tags)) if name
-    )
+    return frozenset(_key(name) for name in _credited_names(artist))
+
+
+def first_credited_artist(artist: str | None) -> str:
+    names = _credited_names(artist)
+    return names[0] if names else ""
 
 
 @dataclass(frozen=True)
-class Recording:
-    track_id: int
+class Cut:
     title: str | None
     artist: str | None
     duration_seconds: float | None
-    file_size_bytes: int = 0
 
     @cached_property
     def parts(self) -> TitleParts:
@@ -116,11 +125,27 @@ class Recording:
     def artists(self) -> frozenset[str]:
         return credited_artists(self.artist)
 
-    def is_the_same_recording_as(self, other: Recording) -> bool:
+    def is_the_same_song_as(self, other: Cut) -> bool:
+        same_title = bool(self.parts.base) and self.parts.base == other.parts.base
+        return same_title and bool(self.artists & other.artists)
+
+    def is_the_same_recording_as(self, other: Cut) -> bool:
         if self.duration_seconds is None or other.duration_seconds is None:
             return False
         close = abs(self.duration_seconds - other.duration_seconds) <= SAME_RECORDING_TOLERANCE_S
         return close and self.parts.note_key == other.parts.note_key
+
+    def label_seen_from(self, other: Cut) -> str:
+        if self.parts.note_key != other.parts.note_key:
+            return self.parts.note or ORIGINAL_LABEL
+        longer = (self.duration_seconds or 0.0) > (other.duration_seconds or 0.0)
+        return LONGER_LABEL if longer else SHORTER_LABEL
+
+
+@dataclass(frozen=True)
+class Recording(Cut):
+    track_id: int
+    file_size_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -133,13 +158,6 @@ class Version:
 class LeadingVersion:
     of_track_id: int
     label: str
-
-
-def _label(version: Recording, seen_from: Recording) -> str:
-    if version.parts.note_key != seen_from.parts.note_key:
-        return version.parts.note or ORIGINAL_LABEL
-    longer = (version.duration_seconds or 0.0) > (seen_from.duration_seconds or 0.0)
-    return LONGER_LABEL if longer else SHORTER_LABEL
 
 
 def _sharing_an_artist(recordings: Sequence[Recording]) -> list[list[Recording]]:
@@ -199,7 +217,7 @@ class VersionIndex:
             return []
         itself = self._stands_for[track_id]
         return [
-            Version(track_id=other.track_id, label=_label(other, asked))
+            Version(track_id=other.track_id, label=other.label_seen_from(asked))
             for other in self._family[track_id]
             if other is not itself
         ]

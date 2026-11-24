@@ -253,6 +253,7 @@ function QueueCard({
   onFocus,
   onRemove,
   onOpenPads,
+  onFindVersions,
 }: {
   item: PlanItem;
   role: PlanRole;
@@ -262,7 +263,10 @@ function QueueCard({
   onFocus?: () => void;
   onRemove: () => void;
   onOpenPads?: () => void;
+  onFindVersions?: () => void;
 }) {
+  const metaButton =
+    "-my-px shrink-0 rounded border border-neutral-700/60 bg-neutral-800/70 px-1.5 font-sans text-[10px] leading-tight text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors";
   return (
     <StemRow
       trackId={item.track_id}
@@ -278,17 +282,30 @@ function QueueCard({
       onFocus={onFocus}
       leading={`${index + 1}`}
       metaAction={
-        onOpenPads && (
-          <button
-            type="button"
-            onClick={onOpenPads}
-            onKeyDown={keepActivationKeysFromGrid}
-            className="-my-px shrink-0 rounded border border-neutral-700/60 bg-neutral-800/70 px-1.5 font-sans text-[10px] leading-tight text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors"
-            title="Show and move this song's cue pads"
-          >
-            Pads
-          </button>
-        )
+        <>
+          {onFindVersions && (
+            <button
+              type="button"
+              onClick={onFindVersions}
+              onKeyDown={keepActivationKeysFromGrid}
+              className={metaButton}
+              title="Find other versions of this song on Spotify"
+            >
+              Versions
+            </button>
+          )}
+          {onOpenPads && (
+            <button
+              type="button"
+              onClick={onOpenPads}
+              onKeyDown={keepActivationKeysFromGrid}
+              className={metaButton}
+              title="Show and move this song's cue pads"
+            >
+              Pads
+            </button>
+          )}
+        </>
       }
       action={
         <button
@@ -519,11 +536,13 @@ export function PlanBand({
   role,
   mode,
   onOpenPads,
+  onFindVersions,
 }: {
   setId: number;
   role: PlanRole;
   mode: Mode;
   onOpenPads?: (item: PlanItem) => void;
+  onFindVersions?: (item: PlanItem) => void;
 }) {
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
@@ -536,6 +555,7 @@ export function PlanBand({
         mode={mode}
         queue={queue}
         onOpenPads={onOpenPads}
+        onFindVersions={onFindVersions}
         className="flex-1"
       />
     </div>
@@ -570,6 +590,7 @@ function PlanZone({
   mode,
   queue,
   onOpenPads,
+  onFindVersions,
   className,
 }: {
   setId: number;
@@ -577,6 +598,7 @@ function PlanZone({
   mode: Mode;
   queue: PlanItem[];
   onOpenPads?: (item: PlanItem) => void;
+  onFindVersions?: (item: PlanItem) => void;
   /** Passed ``flex-1`` so the zone grows to fill a stretched plan band —
    * that's what makes the empty placeholder match the tallest queued column. */
   className?: string;
@@ -606,6 +628,7 @@ function PlanZone({
           onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
           onRemove={() => removeFromRole(role, i)}
           onOpenPads={onOpenPads && (() => onOpenPads(item))}
+          onFindVersions={onFindVersions && (() => onFindVersions(item))}
         />
       ))}
     </div>

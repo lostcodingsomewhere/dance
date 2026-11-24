@@ -1,12 +1,13 @@
-"""Spotify Web API search — Client Credentials flow.
+"""Spotify Web API reads: catalog search, one track, and a playlist's songs.
 
-Powers Cmd-K's "ADD FROM SPOTIFY" section. spotDL handles its own auth for
-downloads; this module is just for *finding* tracks the user can then
-ingest. Client Credentials is the right flow for catalog search: no user
-OAuth, no scopes, no redirect URIs — just a (client_id, client_secret)
-exchanged for a 1-hour Bearer token.
+Search and track lookups use the Client Credentials flow: a (client_id,
+client_secret) pair exchanged for a 1-hour Bearer token, cached in memory with
+a small safety margin before expiry. A playlist's songs need a user's token.
 
-The token is cached in memory with a small safety margin before expiry.
+What Spotify answered on 2026-11-24, after its February 2026 Web API change:
+search takes at most 10 results a request, ``/playlists/{id}/tracks`` is gone
+(403), and ``/playlists/{id}/items`` answers only a user token, and only for a
+playlist that user owns or collaborates on.
 """
 
 from __future__ import annotations
@@ -27,6 +28,21 @@ _SEARCH_URL = "https://api.spotify.com/v1/search"
 _TRACK_URL = "https://api.spotify.com/v1/tracks"
 _PLAYLIST_URL = "https://api.spotify.com/v1/playlists"
 
+SEARCH_PAGE_SIZE = 10
+PLAYLIST_PAGE_SIZE = 50
+
+PLAYLIST_NEEDS_A_USER = (
+    "Spotify lists a playlist's songs only for a signed-in user, so this needs a "
+    "Spotify user token: paste one in the Pipeline form, or set "
+    "DANCE_SPOTIFY_USER_TOKEN in ~/.dance/.env. A playlist exported as a CSV and "
+    "pasted in the Pipeline view needs no token."
+)
+PLAYLIST_BELONGS_TO_SOMEONE_ELSE = (
+    "Spotify refused this playlist. It lists a playlist's songs only for the "
+    "account that owns it or collaborates on it. Use a token from that account, "
+    "or export the playlist as a CSV and paste that in the Pipeline view."
+)
+
 # HTTP 429 handling. Spotify rate-limits per app over a rolling 30 s window
 # and says how long to back off in ``Retry-After`` (seconds). A 300-track
 # playlist pages + per-track lookups can trip it; before this the first 429
@@ -37,6 +53,9 @@ _PLAYLIST_URL = "https://api.spotify.com/v1/playlists"
 _MAX_429_RETRIES = 3
 _MAX_RETRY_AFTER_S = 30.0
 _RETRY_JITTER_S = 1.0
+# Search answered 502 "Please try again later" once in about 85 real calls on 2026-11-24.
+_PASSING_SERVER_ERRORS = frozenset({500, 502, 503, 504})
+_MAX_SERVER_ERROR_RETRIES = 2
 
 
 def _retry_after_seconds(header: str | None, attempt: int) -> float:
@@ -94,11 +113,7 @@ class SpotifySearchClient:
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
-        # Pre-issued user OAuth token, if available. Used in preference to
-        # Client Credentials for playlist reads (Spotify's 2024 API policy
-        # blocks Client Credentials from /playlists/{id}/tracks). None
-        # means "fall back to Client Credentials" — that path works for
-        # /search and /tracks but 403s on /playlists/*.
+        # A user's own token, needed to read a playlist's songs.
         self._user_token = user_token
         self._token: str | None = None
         # epoch seconds at which the current token expires; 0 = no token.
@@ -110,11 +125,8 @@ class SpotifySearchClient:
 
     @property
     def configured(self) -> bool:
-        """True when *any* credential is set. The /search and /tracks
-        endpoints need Client Credentials; playlist reads accept either
-        Client Credentials (with limitations) or a user token. Callers
-        should still inspect specific failures to know which path they
-        need to flesh out."""
+        """True when *any* credential is set. Search and track lookups need
+        Client Credentials; a playlist's songs need a user token."""
         return bool(self._client_id and self._client_secret) or bool(
             self._user_token
         )
@@ -128,7 +140,8 @@ class SpotifySearchClient:
     # ------------------------------------------------------------------
 
     def search_tracks(self, query: str, limit: int = 8) -> list[SpotifyTrackHit]:
-        """Run a catalog search. Returns up to ``limit`` track hits."""
+        """Run a catalog search. Returns up to ``limit`` track hits, reading as
+        many pages as that takes."""
         if not query.strip():
             return []
         if not self.configured:
@@ -136,13 +149,20 @@ class SpotifySearchClient:
                 "Spotify search not configured — set DANCE_SPOTIFY_CLIENT_ID "
                 "and DANCE_SPOTIFY_CLIENT_SECRET in ~/.dance/.env"
             )
+        hits: list[SpotifyTrackHit] = []
+        while len(hits) < limit:
+            asked_for = min(SEARCH_PAGE_SIZE, limit - len(hits))
+            page = self._search_page(query, asked_for, offset=len(hits))
+            hits += page
+            if len(page) < asked_for:
+                break
+        return hits
+
+    def _search_page(self, query: str, size: int, offset: int) -> list[SpotifyTrackHit]:
+        params = {"q": query, "type": "track", "limit": size, "offset": offset}
         token = self._get_token()
         try:
-            r = self._get(
-                _SEARCH_URL,
-                params={"q": query, "type": "track", "limit": max(1, min(limit, 50))},
-                headers={"Authorization": f"Bearer {token}"},
-            )
+            r = self._get(_SEARCH_URL, params=params, headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError as exc:
             raise SpotifySearchError(f"Spotify search transport error: {exc}") from exc
         if r.status_code == 401:
@@ -150,11 +170,7 @@ class SpotifySearchClient:
             self._token = None
             self._expires_at = 0
             token = self._get_token()
-            r = self._get(
-                _SEARCH_URL,
-                params={"q": query, "type": "track", "limit": max(1, min(limit, 50))},
-                headers={"Authorization": f"Bearer {token}"},
-            )
+            r = self._get(_SEARCH_URL, params=params, headers={"Authorization": f"Bearer {token}"})
         if r.status_code >= 400:
             raise SpotifySearchError(f"Spotify search HTTP {r.status_code}: {r.text[:200]}")
         return [_parse_hit(it) for it in r.json().get("tracks", {}).get("items", [])]
@@ -180,73 +196,37 @@ class SpotifySearchClient:
         playlist_url_or_id: str,
         user_token: str | None = None,
     ) -> list[SpotifyTrackHit]:
-        """Fetch every track in a public Spotify playlist.
+        """Every song in a playlist the token's user owns or collaborates on.
 
-        Accepts either a raw playlist ID or any of Spotify's URL forms
-        (``https://open.spotify.com/playlist/{id}``, ``spotify:playlist:{id}``,
-        with optional ``?si=...`` query). Pages through ``GET /playlists/{id}/tracks``
-        until ``next`` is null — Spotify caps each page at 100, so a 500-track
-        playlist takes 5 requests.
-
-        ``user_token``: optional per-request user OAuth token. Used in
-        preference to the instance's stored ``_user_token`` (env var) and
-        in preference to Client Credentials. Required in practice because
-        Spotify's Nov 2024 policy makes Client Credentials 403 on
-        ``/playlists/{id}/tracks``. Paste a fresh token from any
-        OAuth-authenticated session (e.g. https://exportify.net DevTools).
-
-        Excludes podcast episodes (``track.type != 'track'``) and any local-file
-        tracks that the playlist owner added (no ``id``). Caller can rely on
-        every returned hit having a usable ``spotify_id``.
+        Accepts a raw playlist ID or any of Spotify's URL forms. ``user_token``
+        is used in preference to the stored ``DANCE_SPOTIFY_USER_TOKEN``.
+        Podcast episodes, local files and repeats of a song are left out, so
+        every returned hit has a usable ``spotify_id``.
         """
-        # Pick the auth token: explicit per-call > instance env > CC fallback.
         bearer = user_token or self._user_token
         if bearer is None:
-            if not (self._client_id and self._client_secret):
-                raise SpotifyAuthError("Spotify search not configured")
-            bearer = self._get_token()  # Client Credentials — will likely 403
+            raise SpotifyAuthError(PLAYLIST_NEEDS_A_USER)
         playlist_id = extract_playlist_id(playlist_url_or_id)
         if not playlist_id:
             raise SpotifySearchError(f"Could not extract playlist ID from {playlist_url_or_id!r}")
 
-        token = bearer
         hits: list[SpotifyTrackHit] = []
-        # Initial URL — subsequent pages come from r.json()["next"].
-        url: str | None = (
-            f"{_PLAYLIST_URL}/{playlist_id}/tracks"
-            "?fields=items(track(id,name,artists(name),album(name,images),"
-            "duration_ms,preview_url,explicit,popularity,type)),next"
-            "&limit=100"
-        )
         seen_ids: set[str] = set()
-        while url:
+        offset = 0
+        while True:
             try:
-                r = self._get(url, headers={"Authorization": f"Bearer {token}"})
+                r = self._get(
+                    f"{_PLAYLIST_URL}/{playlist_id}/items",
+                    params={"limit": PLAYLIST_PAGE_SIZE, "offset": offset},
+                    headers={"Authorization": f"Bearer {bearer}"},
+                )
             except httpx.HTTPError as exc:
                 raise SpotifySearchError(f"Spotify playlist transport error: {exc}") from exc
             if r.status_code == 401:
-                # User tokens can't be refreshed silently — the caller has
-                # to paste a fresh one. Client Credentials, however, we
-                # can re-fetch and retry once.
-                if user_token or self._user_token:
-                    raise SpotifyAuthError(
-                        "Spotify user token expired (or invalid). Paste a fresh one "
-                        "(open https://exportify.net in your browser, copy the "
-                        "Bearer token from a /me/playlists request in DevTools)."
-                    )
-                self._token = None
-                self._expires_at = 0
-                token = self._get_token()
-                r = self._get(url, headers={"Authorization": f"Bearer {token}"})
+                raise SpotifyAuthError("Spotify user token expired (or invalid). Paste a fresh one.")
             if r.status_code == 403:
-                # Specific guidance: Spotify's Nov 2024 policy locks this
-                # endpoint to user tokens for non-owned playlists. Bubble
-                # up a hint so the FE can render "paste a user token."
                 raise SpotifyAuthError(
-                    "Spotify HTTP 403: playlist tracks require a user OAuth token "
-                    "(Client Credentials no longer works for /playlists/{id}/tracks). "
-                    "Paste a token in the Pipeline form, or set "
-                    "DANCE_SPOTIFY_USER_TOKEN in ~/.dance/.env."
+                    f'{PLAYLIST_BELONGS_TO_SOMEONE_ELSE} Spotify said "{_what_spotify_said(r)}".'
                 )
             if r.status_code == 404:
                 raise SpotifySearchError(
@@ -255,8 +235,10 @@ class SpotifySearchClient:
             if r.status_code >= 400:
                 raise SpotifySearchError(f"Spotify playlist HTTP {r.status_code}: {r.text[:200]}")
             payload = r.json()
-            for item in payload.get("items") or []:
-                track = item.get("track")
+            entries = payload.get("items") or []
+            for entry in entries:
+                # Spotify renamed the entry's "track" to "item" and still documents both.
+                track = entry.get("item") or entry.get("track")
                 if not track or track.get("type") != "track":
                     continue
                 tid = track.get("id")
@@ -264,8 +246,9 @@ class SpotifySearchClient:
                     continue
                 seen_ids.add(tid)
                 hits.append(_parse_hit(track))
-            url = payload.get("next")
-        return hits
+            offset += len(entries)
+            if not entries or not payload.get("next"):
+                return hits
 
     # ------------------------------------------------------------------
     # Transport with 429 back-off
@@ -280,16 +263,24 @@ class SpotifySearchClient:
     def _send(
         self, method: Callable[..., httpx.Response], url: str, **kwargs: Any
     ) -> httpx.Response:
-        """Issue a request, retrying HTTP 429 per ``Retry-After``.
+        """Issue a request, retrying HTTP 429 per ``Retry-After`` and a
+        server error twice.
 
-        Returns the final response — a 429 after the last retry is handed
-        back for the caller's normal ``>= 400`` handling. Raises
+        Returns the final response — a 429 or server error after the last
+        retry is handed back for the caller's normal ``>= 400`` handling. Raises
         :class:`SpotifySearchError` straight away when Spotify asks for a
         wait longer than ``_MAX_RETRY_AFTER_S``.
         """
         attempt = 0
+        server_errors = 0
         while True:
             r = method(url, **kwargs)
+            if r.status_code in _PASSING_SERVER_ERRORS:
+                if server_errors >= _MAX_SERVER_ERROR_RETRIES:
+                    return r
+                self._sleep(float(2**server_errors) + random.uniform(0.0, _RETRY_JITTER_S))
+                server_errors += 1
+                continue
             if r.status_code != 429 or attempt >= _MAX_429_RETRIES:
                 return r
             wait = _retry_after_seconds(r.headers.get("Retry-After"), attempt)
@@ -362,6 +353,13 @@ def extract_playlist_id(value: str) -> str | None:
     if re.fullmatch(r"[A-Za-z0-9]{10,}", value):
         return value
     return None
+
+
+def _what_spotify_said(response: httpx.Response) -> str:
+    try:
+        return str(response.json()["error"]["message"])
+    except (ValueError, KeyError, TypeError):
+        return response.text[:100]
 
 
 def _parse_hit(item: dict) -> SpotifyTrackHit:

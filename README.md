@@ -100,7 +100,8 @@ Both views share **one surface** — the **plan grid** (`RoleColumnsGrid`): five
 1. **Open the companion** at `http://localhost:5173`. First-time users with a legacy localStorage Stack get a one-shot prompt to import it as a named Set.
 2. **Create or switch sets** from the **Set** view (top nav). Sets are persistent and named — "Warehouse Sat", "Wedding 90min" — and a Set *is* its plan (a per-role queue stored on the set).
 3. **Queue picks per role.** Each role column shows recommendations scored against the rest of the plan and the plan's journey so far. Tap **＋** on a card to queue it onto that role's stack. Use ▶ to prelisten in headphones (cue) first; the ScoreBreakdown chips explain why a pick scored where it did.
-4. **Or fill via ⌘K.** The palette is hybrid: typing surfaces fuzzy artist/title matches in the **Tracks** section first, CLAP vibe matches in the **Vibe** section below (8+ char queries). BPM/key/energy chips narrow further. Selecting a result appends it to the **Song** column of the active plan.
+4. **Bring in a song's other versions.** **Versions** on a queued song in the Song column lists its remixes, edits and other cuts on Spotify. **Get** downloads one and queues it right after the song; run *Process now* in the Pipeline view before playing it.
+5. **Or fill via ⌘K.** The palette is hybrid: typing surfaces fuzzy artist/title matches in the **Tracks** section first, CLAP vibe matches in the **Vibe** section below (8+ char queries). BPM/key/energy chips narrow further. Selecting a result appends it to the **Song** column of the active plan.
 
 ### During the set — the Booth
 

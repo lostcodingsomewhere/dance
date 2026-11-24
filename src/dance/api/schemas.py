@@ -794,6 +794,26 @@ class IngestTrackResult(BaseModel):
     already_existed: bool = False
 
 
+class SpotifyVersionOut(_Base):
+    spotify_id: str
+    title: str
+    artist: str
+    album: str | None = None
+    duration_ms: int | None = None
+    image_url: str | None = None
+    explicit: bool = False
+    label: str
+    library_track_id: int | None = None
+    library_state: str | None = None
+    download_failed: bool = False
+
+
+class SpotifyVersionsOut(_Base):
+    track_id: int
+    query: str
+    versions: list[SpotifyVersionOut] = Field(default_factory=list)
+
+
 class IngestPlaylistRequest(BaseModel):
     """Body for ``POST /api/v1/pipeline/ingest/playlist``.
 
@@ -802,11 +822,10 @@ class IngestPlaylistRequest(BaseModel):
     every new ID, and spawns yt-dlp jobs to download missing audio.
     De-duped on ``spotify_id`` against the existing library.
 
-    ``user_token``: optional Spotify USER OAuth token (Authorization Code
-    flow). Spotify's Nov 2024 API policy blocks Client Credentials apps
-    from reading playlist track lists — a user token is required.
-    Falls back to ``DANCE_SPOTIFY_USER_TOKEN`` env var; if neither is
-    set, the request fails with a hint.
+    ``user_token``: a Spotify USER OAuth token. Spotify lists a playlist's
+    songs only for the user who owns it or collaborates on it, so one is
+    required. Falls back to ``DANCE_SPOTIFY_USER_TOKEN`` env var; if neither
+    is set, the request fails with a hint.
     """
 
     playlist_url: str

@@ -10,6 +10,7 @@ import { PLAN_ROLES, type PlanItem, type PlanRole } from "../types";
 import { Modal } from "./Modal";
 import { PadEditor } from "./PadEditor";
 import { ColumnHeader, PlanBand, RecsBand } from "./RoleColumn";
+import { VersionFinder } from "./VersionFinder";
 
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
 function visRole(role: PlanRole): string {
@@ -47,6 +48,8 @@ export function RoleColumnsGrid({
   const previewing = usePreviewState();
   const [padsPick, setPadsPick] = useState<PlanItem | null>(null);
   const closePads = useCallback(() => setPadsPick(null), []);
+  const [versionsPick, setVersionsPick] = useState<PlanItem | null>(null);
+  const closeVersions = useCallback(() => setVersionsPick(null), []);
 
   // Switching mode or set re-populates every column; a cursor left pointing
   // into the old lists would walk into tracks that are no longer there.
@@ -100,7 +103,7 @@ export function RoleColumnsGrid({
     () => ({ onAudition, onCommit, onEscape }),
     [onAudition, onCommit, onEscape],
   );
-  useGridKeys(actions, padsPick == null);
+  useGridKeys(actions, padsPick == null && versionsPick == null);
 
   // Rendered as horizontal BANDS rather than five independent columns:
   //   [headers] · [PLAN band] · divider · [RECS band]
@@ -129,6 +132,7 @@ export function RoleColumnsGrid({
                 role={role}
                 mode={mode}
                 onOpenPads={mode === "plan" ? setPadsPick : undefined}
+                onFindVersions={mode === "plan" && role === "song" ? setVersionsPick : undefined}
               />
             ))}
           </div>
@@ -152,6 +156,20 @@ export function RoleColumnsGrid({
         widthClass="max-w-4xl"
       >
         {padsPick && <PadEditor trackId={padsPick.track_id} />}
+      </Modal>
+
+      <Modal
+        open={versionsPick != null}
+        onClose={closeVersions}
+        title={
+          versionsPick
+            ? `Versions · ${versionsPick.title ?? `Track #${versionsPick.track_id}`}`
+            : undefined
+        }
+      >
+        {versionsPick && setId != null && (
+          <VersionFinder trackId={versionsPick.track_id} setId={setId} />
+        )}
       </Modal>
     </div>
   );

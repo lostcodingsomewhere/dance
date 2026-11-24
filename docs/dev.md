@@ -47,7 +47,7 @@ npm test                # vitest
 npm test -- --watch
 ```
 
-There are 17 vitest files under `companion-app/tests/` (`smoke.test.tsx` plus SceneGrid, RoleColumnsGrid, BoothColumnHeaders, Waveform, preview, seek, gridNav, gridKeys, deckArm, deckRegistration, sharedSocket, and the flow tests padsFlow, setExportFlow, boothPagesFlow, boothLoadFlow and versionsFlow; the Booth flows share `boothHarness.tsx`). Add one next to them as you add components.
+There are 18 vitest files under `companion-app/tests/` (`smoke.test.tsx` plus SceneGrid, RoleColumnsGrid, BoothColumnHeaders, Waveform, preview, seek, gridNav, gridKeys, deckArm, deckRegistration, sharedSocket, and the flow tests padsFlow, setExportFlow, boothPagesFlow, boothLoadFlow, versionsFlow and findVersionsFlow; the Booth flows share `boothHarness.tsx`). Add one next to them as you add components.
 
 ## Adding a new pipeline stage
 

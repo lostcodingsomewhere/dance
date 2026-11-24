@@ -101,6 +101,7 @@ export class BoothBackend {
       };
       this.requests.push(seen);
       const answered = answer(seen);
+      if (answered instanceof Response) return answered;
       return answered === undefined ? whenNothingElseAnswers(seen) : json(answered);
     }) as unknown as typeof fetch;
   }

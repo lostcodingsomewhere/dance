@@ -47,16 +47,12 @@ class Settings(BaseSettings):
     # bundled credentials (which are for downloads only).
     spotify_client_id: Optional[str] = Field(default=None)
     spotify_client_secret: Optional[str] = Field(default=None)
-    # Optional Spotify USER OAuth token (Authorization Code flow). Required
-    # for reading arbitrary public playlists' track lists since Spotify's
-    # Nov 2024 API policy: Client Credentials can search the catalog and
-    # fetch single tracks, but ``GET /playlists/{id}/tracks`` returns 403.
-    # A user-auth token (from any OAuth-flow Spotify app — e.g. paste from
-    # exportify.net's DevTools, or wire up our own OAuth flow later) does
-    # work. Lives in ~/.dance/.env as ``DANCE_SPOTIFY_USER_TOKEN``.
-    # Tokens last ~1 hour — when this one expires, the playlist endpoint
-    # falls back to Client Credentials (which 403s on /tracks) and the
-    # user will need to refresh.
+    # A Spotify USER OAuth token, needed to read a playlist's songs. Since
+    # Spotify's February 2026 change ``GET /playlists/{id}/items`` answers
+    # only a user token, and only for a playlist that user owns or
+    # collaborates on. Client Credentials still search the catalog and fetch
+    # single tracks. Lives in ~/.dance/.env as ``DANCE_SPOTIFY_USER_TOKEN``.
+    # Tokens last about an hour.
     spotify_user_token: Optional[str] = Field(default=None)
 
     # YouTube cookies for yt-dlp ingest. Default: ~/.dance/cookies.txt if
