@@ -8,6 +8,25 @@ export function press(key: string, init: KeyboardEventInit = {}): void {
   if (leftToTheBrowser && activates && focused.matches("button")) fireEvent.click(focused);
 }
 
+export function tabTo(control: HTMLElement): void {
+  press("Tab");
+  control.focus();
+}
+
+export function clickWithTheMouse(control: HTMLElement): void {
+  fireEvent.mouseDown(control);
+  control.focus();
+  fireEvent.mouseUp(control);
+  fireEvent.click(control);
+}
+
+// A browser takes focus off the page while its window is in the background, then hands it back.
+export function switchToAnotherAppAndBack(): void {
+  const focused = document.activeElement as HTMLElement;
+  focused.blur();
+  focused.focus();
+}
+
 export async function letRequestsGoOut(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));

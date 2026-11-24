@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { store } from "../src/store";
 import { SetEditor } from "../src/views/SetEditor";
 import { BoothBackend, type SeenRequest } from "./boothHarness";
-import { press } from "./safe-inputHelpers";
+import { letRequestsGoOut, press, tabTo } from "./safe-inputHelpers";
 
 const SET_ID = 1;
+const SET_NAME = "Friday night";
 const PLANNED = { track_id: 7, title: "Night Drive" };
 const FIRST_REC = { track_id: 8, title: "Night Drive (Club Mix)" };
 const SECOND_REC = { track_id: 9, title: "Half Light" };
@@ -40,7 +41,7 @@ function aSetWithOneSongPlanned({ path, query }: SeenRequest): unknown {
   if (path === "/api/v1/sets/active" || path === `/api/v1/sets/${SET_ID}`) {
     return {
       id: SET_ID,
-      name: "Friday night",
+      name: SET_NAME,
       notes: null,
       is_active: true,
       created_at: "2026-11-01T00:00:00",
@@ -102,5 +103,19 @@ describe("Enter on the Set view's plan grid", () => {
 
     await waitFor(() => expect(picksAdded()).toContain(SECOND_REC.track_id));
     expect(picksAdded()).toEqual([FIRST_REC.track_id, SECOND_REC.track_id]);
+  });
+
+  it("leaves Enter to a button reached with the Tab key outside the plan grid", async () => {
+    await openSetViewWithTheCursorOnTheFirstRec();
+
+    tabTo(screen.getByRole("button", { name: SET_NAME }));
+    press("Enter");
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    await letRequestsGoOut();
+    expect(picksAdded()).toEqual([]);
+
+    press("ArrowDown");
+    press("Enter");
+    await waitFor(() => expect(picksAdded()).toEqual([SECOND_REC.track_id]));
   });
 });

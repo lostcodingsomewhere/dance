@@ -163,7 +163,7 @@ export function RoleColumnsGrid({
   // between what you've ADDED (plan) and what's RECOMMENDED (recs).
   const cols = "grid grid-cols-5 gap-x-2 min-w-0";
   return (
-    <div className="flex flex-col gap-1 min-w-0">
+    <div data-plan-grid className="flex flex-col gap-1 min-w-0">
       <div className={cols}>
         {PLAN_ROLES.map((role) => (
           <ColumnHeader key={role} role={role} />

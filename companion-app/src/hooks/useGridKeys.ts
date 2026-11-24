@@ -39,6 +39,42 @@ function isTyping(target: EventTarget | null): boolean {
   );
 }
 
+let tabbing = false;
+let reachedByTab: EventTarget | null = null;
+
+function isTabKey(e: KeyboardEvent): boolean {
+  return e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey;
+}
+
+// A clicked button keeps focus in Chrome, so focus alone does not mean the keyboard is aimed at it.
+if (typeof window !== "undefined") {
+  const beforeAnyHandler = true;
+  const pointerTookOver = () => {
+    tabbing = false;
+  };
+  window.addEventListener("pointerdown", pointerTookOver, beforeAnyHandler);
+  window.addEventListener("mousedown", pointerTookOver, beforeAnyHandler);
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (isTabKey(e)) tabbing = true;
+    },
+    beforeAnyHandler,
+  );
+  window.addEventListener(
+    "focusin",
+    (e) => {
+      reachedByTab = tabbing ? e.target : null;
+    },
+    beforeAnyHandler,
+  );
+}
+
+function reachedByTabOutsidePlanGrid(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement) || target !== reachedByTab) return null;
+  return target.closest("[data-plan-grid]") == null ? target : null;
+}
+
 export interface GridKeyActions {
   /** space — audition the focused card in headphones (toggles). */
   onAudition: (trackId: number, focus: GridFocus) => void;
@@ -86,7 +122,10 @@ export function useGridKeys(actions: GridKeyActions, enabled = true): void {
 
       if (isNavKey(e.key)) {
         e.preventDefault(); // don't scroll the page out from under the grid
-        store.setGridFocus(moveFocus(shape, focus, e.key));
+        const moved = moveFocus(shape, focus, e.key);
+        store.setGridFocus(moved);
+        // Enter and Space now follow the cursor, so the control tabbed to earlier gives them up.
+        if (moved != null) reachedByTabOutsidePlanGrid(e.target)?.blur();
         return;
       }
       if (e.key === "Escape") {
@@ -102,6 +141,7 @@ export function useGridKeys(actions: GridKeyActions, enabled = true): void {
       const isAudition = e.key === " " || e.key === "Spacebar";
       const isCommit = e.key === "Enter";
       if (!isAudition && !isCommit) return;
+      if (reachedByTabOutsidePlanGrid(e.target)) return;
       e.preventDefault(); // space scrolls otherwise
       if (e.repeat) return;
       if (isAudition) actions.onAudition(trackId, current);

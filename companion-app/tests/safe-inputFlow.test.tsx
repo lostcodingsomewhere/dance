@@ -12,7 +12,14 @@ import {
   songOn,
   type SeenRequest,
 } from "./boothHarness";
-import { holdAnswersTo, letRequestsGoOut, press } from "./safe-inputHelpers";
+import {
+  clickWithTheMouse,
+  holdAnswersTo,
+  letRequestsGoOut,
+  press,
+  switchToAnotherAppAndBack,
+  tabTo,
+} from "./safe-inputHelpers";
 
 const ORIGINAL = { track_id: 7, title: "Night Drive" };
 const CLUB_MIX = { track_id: 8, title: "Night Drive (Club Mix)" };
@@ -25,6 +32,8 @@ const MISSING_STEM = "The bass stem is missing on disk.";
 const LOAD = "/api/v1/ableton/load-track";
 const PREVIEW = "/api/v1/ableton/preview";
 const STOP_PREVIEW = "/api/v1/ableton/preview/stop";
+const STOP_ALL_CLIPS = "/api/v1/ableton/transport/stop-all";
+const FIRE_DECK_A_CUE_3 = "/api/v1/ableton/transport/fire-deck/a/2";
 const SEEK_ON_DECK_A = `/api/v1/ableton/transport/seek/${LIVE_TRACK_OF.mix_a}/0`;
 
 const DRUMS_A_INTRO_PAD = "Drums A: Night Drive — Test Artist — cue 1, intro — tap to fire";
@@ -238,6 +247,7 @@ describe("Enter and Space on the Booth's plan grid", () => {
     press("Enter");
     const loading = await screen.findByText("loading Half Light onto Deck A…");
     expect(loading).toHaveAttribute("role", "status");
+    expect(loading.closest("[data-plan-grid]")).not.toBeNull();
 
     finishLoading();
     await waitFor(() => expect(screen.queryByText(/^loading /)).not.toBeInTheDocument());
@@ -282,5 +292,70 @@ describe("Enter and Space on the Booth's plan grid", () => {
       { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
     ]);
     expect(backend.sent("POST", STOP_PREVIEW)).toHaveLength(1);
+  });
+
+  it("leaves Enter and Space to a button reached with the Tab key outside the plan grid", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+
+    tabTo(screen.getByRole("button", { name: "Panic — stop all clips" }));
+    press("Enter");
+    expect(screen.getByRole("button", { name: "PANIC" })).toHaveFocus();
+    press("Enter");
+    await waitFor(() => expect(backend.sent("POST", STOP_ALL_CLIPS)).toHaveLength(1));
+
+    tabTo(within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" }));
+    press(" ");
+    await waitFor(() => expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(1));
+
+    expect(backend.sent("POST", LOAD)).toEqual([]);
+    expect(backend.sent("POST", PREVIEW)).toEqual([]);
+  });
+
+  it("keeps Enter and Space on the plan grid after a mouse click on a button elsewhere", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+    const cue = within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" });
+
+    clickWithTheMouse(cue);
+    expect(cue).toHaveFocus();
+    press(" ");
+    await waitFor(() =>
+      expect(backend.sent("POST", PREVIEW)).toMatchObject([
+        { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
+      ]),
+    );
+
+    switchToAnotherAppAndBack();
+    expect(cue).toHaveFocus();
+    press(" ");
+    await waitFor(() => expect(backend.sent("POST", STOP_PREVIEW)).toHaveLength(1));
+
+    expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(1);
+  });
+
+  it("gives Enter and Space back to the plan grid once an arrow key moves its cursor", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+    tabTo(within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" }));
+
+    press("ArrowDown");
+    press(" ");
+
+    await waitFor(() =>
+      expect(backend.sent("POST", PREVIEW)).toMatchObject([
+        { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
+      ]),
+    );
+    expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toEqual([]);
+  });
+
+  it("still loads the pick under the cursor when Enter lands on a button inside the plan grid", async () => {
+    await openBoothWithTheCursorOnTheRecommendedSong();
+    const pick = screen.getByRole("group", { name: RECOMMENDED.title });
+    expect(pick.closest("[data-plan-grid]")).not.toBeNull();
+
+    within(pick).getByTitle("Preview in headphones (cue)").focus();
+    press("Enter", { shiftKey: true });
+
+    await waitFor(() => expect(decksLoaded()).toEqual(["b"]));
+    expect(backend.sent("POST", PREVIEW)).toEqual([]);
   });
 });
