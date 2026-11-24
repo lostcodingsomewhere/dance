@@ -30,6 +30,9 @@ Response/request shapes live in `src/dance/api/schemas.py`.
 | GET    | `/api/v1/tracks/search`               | `q, limit, bpm_min, bpm_max, key, energy`                                    | `list[TrackOut]`                  |     |
 | GET    | `/api/v1/tracks/{id}`                 | -                                                                            | `TrackOut`                        | 404 |
 | GET    | `/api/v1/tracks/{id}/regions`         | `region_type, stem_file_id`                                                  | `list[RegionOut]`                 | 404 |
+| GET    | `/api/v1/tracks/{id}/pads`            | none                                                                         | `list[PadOut]` (five per stem and for the mix; `silent` is worked out on read) | 404 |
+| PUT    | `/api/v1/tracks/{id}/pads/{role}/{slot}` | body `{position_ms}`; `role` is `drums`, `bass`, `vocals`, `other`, `mix` or `all`; `slot` 1-5 | `PadOut` (snapped to the nearest bar line, `source: manual`) | 404, 409 (no beat grid), 422 (outside the song) |
+| DELETE | `/api/v1/tracks/{id}/pads/{role}/{slot}` | none                                                                      | `list[PadOut]` (that pad is back to the app's pick) | 404 |
 | GET    | `/api/v1/tracks/{id}/stems`           | -                                                                            | `list[StemFileOut]`               | 404 |
 | GET    | `/api/v1/tracks/{id}/waveform`        | `num_peaks` (query, default 200, range 50-1000)                              | `WaveformOut`                     | 404, 422, 503 |
 | GET    | `/api/v1/stems/{stem_file_id}/waveform` | `num_peaks` (query, default 200, range 50-1000)                            | `WaveformOut`                     | 404, 422, 503 |

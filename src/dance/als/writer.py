@@ -33,6 +33,7 @@ Color palette (Live built-in indices 0-69):
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from importlib import resources
@@ -202,6 +203,7 @@ class LiveSetSpec:
     bpm: float
     stems: Sequence[StemEntry]
     locators: Sequence[LocatorEntry]
+    set_dir: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +237,7 @@ def build_live_set_xml(spec: LiveSetSpec) -> bytes:
         raise RuntimeError("template missing <LiveSet>")
 
     _set_tempo(liveset, spec.bpm)
-    _replace_tracks(liveset, spec.stems, spec.bpm)
+    _replace_tracks(liveset, spec.stems, spec.bpm, spec.set_dir)
     _set_locators(liveset, spec.locators)
 
     return etree.tostring(
@@ -304,7 +306,10 @@ def _set_tempo(liveset: etree._Element, bpm: float) -> None:
 
 
 def _replace_tracks(
-    liveset: etree._Element, stems: Sequence[StemEntry], bpm: float
+    liveset: etree._Element,
+    stems: Sequence[StemEntry],
+    bpm: float,
+    set_dir: Path | None = None,
 ) -> None:
     """Remove default Midi/Audio tracks, insert 9 deck-pair AudioTracks
     (drums_a/b, bass_a/b, vocals_a/b, other_a/b, mix).
@@ -355,6 +360,7 @@ def _replace_tracks(
             deck_kind=deck_kind,
             entry=stem_for_clip,
             bpm=bpm,
+            set_dir=set_dir,
         )
         tracks_el.insert(insert_idx + i, clone)
 
@@ -389,6 +395,7 @@ def _populate_audio_track(
     deck_kind: str,
     entry: StemEntry | None,
     bpm: float,
+    set_dir: Path | None = None,
 ) -> None:
     """Fill in a cloned AudioTrack: name + color from ``deck_kind`` (so
     every deck slot gets the right identity even when empty), crossfader
@@ -411,12 +418,6 @@ def _populate_audio_track(
     color = at.find("Color")
     if color is not None:
         color.set("Value", str(color_idx))
-    # Also expose a ColorIndex sibling so tests / external consumers that
-    # look for it find the same value. Live ignores extra leaf elements.
-    ci = at.find("ColorIndex")
-    if ci is None:
-        ci = etree.SubElement(at, "ColorIndex")
-    ci.set("Value", str(color_idx))
 
     # Crossfader assignment: A → 0, B → 2, mix → 1 (no binding). Modifies
     # the template's existing CrossFadeState/Manual leaf, doesn't create.
@@ -447,12 +448,19 @@ def _populate_audio_track(
         entry=entry,
         bpm=bpm,
         muted=deck_kind in ("mix_a", "mix_b"),
+        set_dir=set_dir,
     )
 
 
 # ---------------------------------------------------------------------------
 # AudioClip
 # ---------------------------------------------------------------------------
+
+
+_WARP_GRID_BEATS = 1 / 32
+_RELATIVE_PATH_NONE = "0"
+_RELATIVE_PATH_FROM_SET = "1"
+_FILE_REF_EXTERNAL = "2"
 
 
 def _val(parent: etree._Element, tag: str, value: object) -> etree._Element:
@@ -475,6 +483,7 @@ def _build_audio_clip(
     entry: StemEntry,
     bpm: float,
     muted: bool,
+    set_dir: Path | None = None,
 ) -> None:
     duration = entry.duration_seconds or 0.0
     end_beats = (duration * bpm / 60.0) if duration > 0 else 16.0
@@ -490,47 +499,41 @@ def _build_audio_clip(
     _build_loop_block(clip, end_beats)
     _val(clip, "Name", entry.display_name())
     _val(clip, "Annotation", "")
-    _val(clip, "ColorIndex", STEM_COLOR_INDEX.get(entry.kind, 0))
+    _val(clip, "Color", STEM_COLOR_INDEX.get(entry.kind, 0))
     _val(clip, "LaunchMode", "0")
-    # 1 bar quantization — fired clips wait for the next bar boundary
-    # before starting, so two-deck transitions land beat-aligned with
-    # whatever's already playing. Live's LaunchQuantisation enum: 0=None,
-    # 1=8 bars, 2=4 bars, 3=2 bars, 4=1 bar, 5=1/2, 6=1/2T, 7=1/4, ...
-    # Previously this was 0 (None) and we relied on the project-level
-    # Song.clip_trigger_quantization fallback — too fragile, breaks if
-    # that ever drifts.
-    _val(clip, "LaunchQuantisation", "4")
+    # 0 is Global in the clip enum, as on live-loaded clips (bridge._LAUNCH_QUANT_GLOBAL).
+    _val(clip, "LaunchQuantisation", "0")
     # TimeSignature is a CLASS element in Live's clip schema (carries
     # Numerator/Denominator children), not a leaf with Value attr. Omit
     # and let the clip inherit the project's 4/4.
     _val(clip, "Disabled", "true" if muted else "false")
+    _val(clip, "IsWarped", "true")
 
     sample_ref = etree.SubElement(clip, "SampleRef")
-    _add_file_ref(sample_ref, entry.path)
+    _add_file_ref(sample_ref, entry.path, set_dir)
     _val(sample_ref, "LastModDate", "0")
-    _val(sample_ref, "SourceContext", "")
+    etree.SubElement(sample_ref, "SourceContext")
     _val(sample_ref, "SampleUsageHint", "0")
     _val(sample_ref, "DefaultDuration", str(int(duration * 44100)) if duration else "0")
     _val(sample_ref, "DefaultSampleRate", "44100")
+    _val(sample_ref, "SamplesToAutoWarp", "0")
+
+    _val(clip, "WarpMode", "0")
+    _val(clip, "PitchCoarse", "0")
+    _val(clip, "PitchFine", "0")
+    _val(clip, "SampleVolume", "1")
 
     warp_markers = etree.SubElement(clip, "WarpMarkers")
     start = etree.SubElement(warp_markers, "WarpMarker")
     start.set("Id", "0")
     start.set("SecTime", "0")
     start.set("BeatTime", "0")
-    end = etree.SubElement(warp_markers, "WarpMarker")
-    end.set("Id", "1")
-    end.set("SecTime", f"{duration:.6f}" if duration else "1.0")
-    end.set("BeatTime", f"{end_beats:.6f}")
+    slope = etree.SubElement(warp_markers, "WarpMarker")
+    slope.set("Id", "1")
+    slope.set("SecTime", repr(_WARP_GRID_BEATS * 60.0 / bpm))
+    slope.set("BeatTime", repr(_WARP_GRID_BEATS))
 
-    _val(clip, "WarpMode", "0")
-    _val(clip, "GranularityResolution", "4")
-    _val(clip, "Gain", "0")
-    _val(clip, "PitchCoarse", "0")
-    _val(clip, "PitchFine", "0")
-    _val(clip, "SampleVolume", "1")
     _val(clip, "MarkersGenerated", "true")
-    _val(clip, "Warp", "true")
 
 
 def _build_loop_block(clip: etree._Element, end_beats: float) -> None:
@@ -547,31 +550,28 @@ def _build_loop_block(clip: etree._Element, end_beats: float) -> None:
     _val(loop, "HiddenLoopEnd", f"{end_beats:.6f}")
 
 
-def _add_file_ref(parent: etree._Element, path: Path, name: str | None = None) -> None:
-    """Insert a leaf-style ``<FileRef>`` describing ``path``.
+def _add_file_ref(parent: etree._Element, path: Path, set_dir: Path | None = None) -> None:
+    """Insert a ``<FileRef>`` with the nine children Live 12.4 writes.
 
-    Live 11+ rejects child elements inside ``<RelativePath>``; emit it as
-    a leaf with a Value attribute carrying the parent directory.
+    With ``set_dir`` the reference carries a path relative to the Set's
+    folder, as Live writes for an external file. Without it only the
+    absolute ``Path`` is given.
     """
     file_ref = etree.SubElement(parent, "FileRef")
-
-    parts = list(path.resolve().parts)
-    if parts and parts[0] == "/":
-        parts = parts[1:]
-    rel_path_str = "/".join(parts[:-1])
-    rel = etree.SubElement(file_ref, "RelativePath")
-    rel.set("Value", rel_path_str)
-
-    _val(file_ref, "Name", path.name if name is None else name)
-    _val(file_ref, "Type", "1")  # 1 = audio sample
-    _val(file_ref, "Path", str(path.resolve()))
+    absolute = path.resolve()
+    if set_dir is None:
+        _val(file_ref, "RelativePathType", _RELATIVE_PATH_NONE)
+        _val(file_ref, "RelativePath", "")
+    else:
+        _val(file_ref, "RelativePathType", _RELATIVE_PATH_FROM_SET)
+        _val(file_ref, "RelativePath", os.path.relpath(absolute, set_dir.resolve()))
+    _val(file_ref, "Path", str(absolute))
+    _val(file_ref, "Type", _FILE_REF_EXTERNAL)
+    _val(file_ref, "LivePackName", "")
+    _val(file_ref, "LivePackId", "")
     _val(file_ref, "OriginalFileSize", str(_safe_size(path)))
     _val(file_ref, "OriginalCrc", "0")
-    _val(file_ref, "HasRelativePath", "false")
-    _val(file_ref, "HasSearchHint", "false")
-    _val(file_ref, "SearchHint", "")
-    _val(file_ref, "DefaultDuration", "0")
-    _val(file_ref, "DefaultSampleRate", "44100")
+    _val(file_ref, "SourceHint", "")
 
 
 # ---------------------------------------------------------------------------

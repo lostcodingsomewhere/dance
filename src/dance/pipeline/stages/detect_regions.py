@@ -35,6 +35,10 @@ from dance.core.database import (
     TrackState,
 )
 from dance.pipeline.utils.beats import detect_beats, detect_phrases
+from dance.pipeline.utils.pads import (
+    PHRASE_TYPE_TO_SECTION as _PHRASE_TYPE_TO_SECTION,
+)
+from dance.pipeline.utils.pads import pad_region, pick_pads, section_from_phrase
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +49,6 @@ except ImportError:
     _LIBROSA_OK = False
     logger.warning("librosa not available — region detection disabled")
 
-
-_PHRASE_TYPE_TO_SECTION: dict[str, SectionLabel] = {
-    "intro": SectionLabel.INTRO,
-    "buildup": SectionLabel.BUILDUP,
-    "drop": SectionLabel.DROP,
-    "breakdown": SectionLabel.BREAKDOWN,
-    "outro": SectionLabel.OUTRO,
-}
 
 _BEATS_PER_BAR = 4
 _LOOP_BARS = 8
@@ -119,6 +115,7 @@ class RegionDetectionStage:
             self._write_loops(
                 session, track, phrases, full_analysis.bpm, duration_ms
             )
+            self._write_pads(session, track.id, phrases, full_analysis.bpm)
 
             track.state = self.output_state.value
             session.commit()
@@ -275,6 +272,36 @@ class RegionDetectionStage:
                     f"{kind.value.title()} loop {_LOOP_BARS}b",
                     _LOOP_CONF_STEM, start,
                 ))
+
+    @staticmethod
+    def _write_pads(
+        session: Session, track_id: int, phrases: list[dict], bpm: float
+    ) -> None:
+        sections = [
+            section_from_phrase(
+                p["start_ms"], p["end_ms"], p.get("bar_count"),
+                p.get("phrase_type"), p.get("energy_level"),
+            )
+            for p in phrases
+        ]
+        picks = pick_pads(sections, bpm)
+        stem_ids = [
+            stem_id for (stem_id,) in
+            session.query(StemFile.id).filter(StemFile.track_id == track_id)
+        ]
+        moved_by_hand = {
+            (stem_file_id, slot)
+            for stem_file_id, slot in session.query(Region.stem_file_id, Region.slot).filter(
+                Region.track_id == track_id,
+                Region.region_type == RegionType.PAD.value,
+            )
+        }
+        for stem_file_id in [None, *stem_ids]:
+            for pick in picks:
+                if (stem_file_id, pick.slot) not in moved_by_hand:
+                    session.add(
+                        pad_region(track_id, stem_file_id, pick, RegionSource.AUTO)
+                    )
 
     @staticmethod
     def _present_stems(session: Session, track_id: int) -> dict[StemKind, int]:

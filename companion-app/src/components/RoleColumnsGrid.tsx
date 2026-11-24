@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useGridKeys } from "../hooks/useGridKeys";
 import { useLoadToDeck } from "../hooks/useLoadToDeck";
@@ -6,7 +6,9 @@ import { useStartPreview, useStopPreview, usePreviewState } from "../hooks/usePr
 import { usePlanMutations } from "../hooks/useSetPlan";
 import type { GridFocus } from "../lib/gridNav";
 import { store } from "../store";
-import { PLAN_ROLES, type PlanRole } from "../types";
+import { PLAN_ROLES, type PlanItem, type PlanRole } from "../types";
+import { Modal } from "./Modal";
+import { PadEditor } from "./PadEditor";
 import { ColumnHeader, PlanBand, RecsBand } from "./RoleColumn";
 
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
@@ -43,6 +45,8 @@ export function RoleColumnsGrid({
   const startPreview = useStartPreview();
   const stopPreview = useStopPreview();
   const previewing = usePreviewState();
+  const [padsPick, setPadsPick] = useState<PlanItem | null>(null);
+  const closePads = useCallback(() => setPadsPick(null), []);
 
   // Switching mode or set re-populates every column; a cursor left pointing
   // into the old lists would walk into tracks that are no longer there.
@@ -96,7 +100,7 @@ export function RoleColumnsGrid({
     () => ({ onAudition, onCommit, onEscape }),
     [onAudition, onCommit, onEscape],
   );
-  useGridKeys(actions);
+  useGridKeys(actions, padsPick == null);
 
   // Rendered as horizontal BANDS rather than five independent columns:
   //   [headers] · [PLAN band] · divider · [RECS band]
@@ -119,7 +123,13 @@ export function RoleColumnsGrid({
         <>
           <div className={`${cols} items-stretch`}>
             {PLAN_ROLES.map((role) => (
-              <PlanBand key={role} setId={setId} role={role} mode={mode} />
+              <PlanBand
+                key={role}
+                setId={setId}
+                role={role}
+                mode={mode}
+                onOpenPads={mode === "plan" ? setPadsPick : undefined}
+              />
             ))}
           </div>
           {/* seam between added (plan) and recommended (recs) */}
@@ -134,6 +144,15 @@ export function RoleColumnsGrid({
       </div>
 
       <KeyHints mode={mode} />
+
+      <Modal
+        open={padsPick != null}
+        onClose={closePads}
+        title={padsPick ? `Pads · ${padsPick.title ?? `Track #${padsPick.track_id}`}` : undefined}
+        widthClass="max-w-4xl"
+      >
+        {padsPick && <PadEditor trackId={padsPick.track_id} />}
+      </Modal>
     </div>
   );
 }

@@ -119,6 +119,7 @@ class RegionType(str, Enum):
     FADE_OUT = "fade_out"
     SECTION = "section"
     STEM_SOLO = "stem_solo"
+    PAD = "pad"
 
 
 class SectionLabel(str, Enum):
@@ -461,6 +462,7 @@ class Region(Base):
     # avoid collision with ``Phrase.bar_count`` which has different semantics
     # (count of bars *in* the phrase, not its musical-loop length).
     length_bars = Column(Integer, nullable=True)
+    slot = Column(Integer, nullable=True)
     name = Column(String(64), nullable=True)
     color = Column(String(8), nullable=True)
     confidence = Column(Float, nullable=True)

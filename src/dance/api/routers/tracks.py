@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Path as PathParam
 from sqlalchemy.orm import Session
 
 from dance.als import AlsGenerator
@@ -14,6 +16,8 @@ from dance.api.deps import get_session, get_settings, track_to_out
 from dance.api.schemas import (
     AlsExportRequest,
     AlsExportResult,
+    PadMove,
+    PadOut,
     RegionOut,
     StemFileOut,
     TrackOut,
@@ -23,11 +27,28 @@ from dance.audio import get_or_compute_peaks
 from dance.config import Settings
 from dance.core.database import (
     AudioAnalysis,
+    Beat,
+    Phrase,
     Region,
+    RegionSource,
+    RegionType,
     SessionPlay,
     StemFile,
+    StemKind,
     Track,
     TrackEdge,
+)
+from dance.pipeline.utils.pads import (
+    PAD_COUNT,
+    Section,
+    bar_ms,
+    is_silent,
+    pad_at,
+    pad_region,
+    pick_pads,
+    section_containing,
+    section_from_phrase,
+    snap_to_bar,
 )
 from dance.recommender.dedup import dedupe_track_rows
 
@@ -52,6 +73,10 @@ _MAX_NUM_PEAKS = 1000
 # still gets `limit` results back. The worst real group in this library has
 # 3 copies; 3x leaves headroom without needing a second query.
 _DEDUPE_OVERFETCH = 3
+
+_MIX_ROLE = "mix"
+_EVERY_ROLE = "all"
+_PAD_ROLE_ORDER = [*(kind.value for kind in StemKind), _MIX_ROLE]
 
 
 @router.get("/search", response_model=list[TrackOut])
@@ -176,6 +201,161 @@ def list_regions(
     if stem_file_id is not None:
         q = q.filter(Region.stem_file_id == stem_file_id)
     return q.order_by(Region.position_ms).all()
+
+
+def _track_or_404(session: Session, track_id: int) -> Track:
+    track = session.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="track not found")
+    return track
+
+
+def _track_bpm(session: Session, track_id: int) -> float:
+    bpm = (
+        session.query(AudioAnalysis.bpm)
+        .filter(AudioAnalysis.track_id == track_id, AudioAnalysis.stem_file_id.is_(None))
+        .scalar()
+    )
+    return float(bpm or 0.0)
+
+
+def _stem_ids_by_role(session: Session, track_id: int) -> dict[str, int | None]:
+    roles: dict[str, int | None] = {_MIX_ROLE: None}
+    for stem_id, kind in session.query(StemFile.id, StemFile.kind).filter(
+        StemFile.track_id == track_id
+    ):
+        roles[kind] = stem_id
+    return roles
+
+
+def _pad_targets(session: Session, track_id: int, role: str) -> list[int | None]:
+    stem_ids = _stem_ids_by_role(session, track_id)
+    if role == _EVERY_ROLE:
+        return list(stem_ids.values())
+    if role not in stem_ids:
+        raise HTTPException(status_code=404, detail=f"this track has no {role!r} pads")
+    return [stem_ids[role]]
+
+
+def _sections(session: Session, track_id: int) -> list[Section]:
+    phrases = (
+        session.query(
+            Phrase.start_ms, Phrase.end_ms, Phrase.bar_count, Phrase.phrase_type, Phrase.energy_level
+        )
+        .filter(Phrase.track_id == track_id)
+        .order_by(Phrase.start_ms)
+    )
+    return [section_from_phrase(*phrase) for phrase in phrases]
+
+
+def _pad_rows(session: Session, track_id: int):
+    return session.query(Region).filter(
+        Region.track_id == track_id, Region.region_type == RegionType.PAD.value
+    )
+
+
+def _delete_pad(session: Session, track_id: int, stem_file_id: int | None, slot: int) -> None:
+    same_stem = (
+        Region.stem_file_id.is_(None) if stem_file_id is None else Region.stem_file_id == stem_file_id
+    )
+    _pad_rows(session, track_id).filter(Region.slot == slot, same_stem).delete(
+        synchronize_session=False
+    )
+
+
+def _pads_out(session: Session, track_id: int) -> list[PadOut]:
+    bpm = _track_bpm(session, track_id)
+    role_by_stem_id = {
+        stem_id: role for role, stem_id in _stem_ids_by_role(session, track_id).items()
+    }
+    presence_by_stem_id = {
+        stem_file_id: json.loads(intervals)
+        for stem_file_id, intervals in session.query(
+            AudioAnalysis.stem_file_id, AudioAnalysis.presence_intervals
+        )
+        .join(StemFile, StemFile.id == AudioAnalysis.stem_file_id)
+        .filter(StemFile.track_id == track_id)
+        if intervals is not None
+    }
+    pads = [
+        PadOut(
+            slot=pad.slot,
+            role=role_by_stem_id[pad.stem_file_id],
+            stem_file_id=pad.stem_file_id,
+            position_ms=pad.position_ms,
+            length_ms=pad.length_ms,
+            length_bars=pad.length_bars,
+            section_label=pad.section_label,
+            source=pad.source,
+            silent=bpm > 0
+            and pad.stem_file_id in presence_by_stem_id
+            and is_silent(presence_by_stem_id[pad.stem_file_id], pad.position_ms, bpm),
+        )
+        for pad in _pad_rows(session, track_id)
+        if pad.stem_file_id in role_by_stem_id and pad.slot is not None
+    ]
+    return sorted(pads, key=lambda pad: (_PAD_ROLE_ORDER.index(pad.role), pad.slot))
+
+
+@router.get("/{track_id}/pads", response_model=list[PadOut])
+def list_pads(track_id: int, session: Session = Depends(get_session)) -> list[PadOut]:
+    _track_or_404(session, track_id)
+    return _pads_out(session, track_id)
+
+
+@router.put("/{track_id}/pads/{role}/{slot}", response_model=PadOut)
+def move_pad(
+    track_id: int,
+    role: str,
+    body: PadMove,
+    slot: int = PathParam(ge=1, le=PAD_COUNT),
+    session: Session = Depends(get_session),
+) -> PadOut:
+    _track_or_404(session, track_id)
+    targets = _pad_targets(session, track_id, role)
+    bpm = _track_bpm(session, track_id)
+    downbeats = [
+        position_ms
+        for (position_ms,) in session.query(Beat.position_ms).filter(
+            Beat.track_id == track_id, Beat.downbeat.is_(True)
+        )
+    ]
+    if bpm <= 0 or not downbeats:
+        raise HTTPException(status_code=409, detail="this track has no beat grid yet")
+    position_ms = snap_to_bar(body.position_ms, downbeats)
+    section = section_containing(position_ms, _sections(session, track_id))
+    if section is None or abs(position_ms - body.position_ms) > bar_ms(bpm):
+        raise HTTPException(status_code=422, detail="position is outside the song")
+
+    pick = pad_at(slot, position_ms, section, bpm)
+    for stem_file_id in targets:
+        _delete_pad(session, track_id, stem_file_id, slot)
+        session.add(pad_region(track_id, stem_file_id, pick, RegionSource.MANUAL))
+    session.commit()
+    return next(
+        pad
+        for pad in _pads_out(session, track_id)
+        if pad.stem_file_id == targets[0] and pad.slot == slot
+    )
+
+
+@router.delete("/{track_id}/pads/{role}/{slot}", response_model=list[PadOut])
+def reset_pad(
+    track_id: int,
+    role: str,
+    slot: int = PathParam(ge=1, le=PAD_COUNT),
+    session: Session = Depends(get_session),
+) -> list[PadOut]:
+    _track_or_404(session, track_id)
+    targets = _pad_targets(session, track_id, role)
+    picks = pick_pads(_sections(session, track_id), _track_bpm(session, track_id))
+    app_pick = next((pick for pick in picks if pick.slot == slot), None)
+    for stem_file_id in targets:
+        _delete_pad(session, track_id, stem_file_id, slot)
+        if app_pick is not None:
+            session.add(pad_region(track_id, stem_file_id, app_pick, RegionSource.AUTO))
+    session.commit()
+    return _pads_out(session, track_id)
 
 
 @router.post("/{track_id}/tag", response_model=TrackOut)
