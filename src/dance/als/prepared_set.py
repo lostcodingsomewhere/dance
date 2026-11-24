@@ -8,33 +8,19 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from dance.als.cue_clips import PADS_PER_PAGE, cue_clips_by_role
 from dance.als.generator import AlsExportError, AlsGenerator, _safe_filename
 from dance.als.writer import PlacedClip, PreparedSetSpec, StemEntry, build_prepared_set_xml
 from dance.config import Settings
 from dance.core.database import Set, StemFile, StemKind, Track, TrackState
 from dance.core.set_queues import parse_plan
-from dance.pipeline.utils.pads import (
-    BEATS_PER_BAR,
-    MIX_ROLE,
-    PAD_COUNT,
-    TrackPad,
-    load_track_pads,
-    pad_start_beats,
-    track_bpm,
-)
+from dance.pipeline.utils.pads import MIX_ROLE, track_bpm
 
 logger = logging.getLogger(__name__)
 
-PADS_PER_PAGE = PAD_COUNT
 SONG_ROLE = "song"
 STEM_ROLES = tuple(kind.value for kind in StemKind)
 SIDES = ("a", "b")
-LOOPING_ROLES = frozenset({StemKind.DRUMS.value, StemKind.BASS.value, StemKind.OTHER.value})
-
-# Indices into Live's 70-colour clip palette. Not yet checked on the APC40's pads.
-SECTION_COLOR_INDEX = {"intro": 24, "outro": 24, "buildup": 17, "drop": 14, "breakdown": 22}
-OTHER_SECTION_COLOR_INDEX = 27
-SILENT_PAD_COLOR_OFFSET = 42
 
 
 @dataclass(frozen=True)
@@ -90,11 +76,6 @@ def plan_loads(queues: dict[str, list[int]]) -> list[DeckLoad]:
     return loads
 
 
-def pad_color_index(pad: TrackPad) -> int:
-    color = SECTION_COLOR_INDEX.get(pad.section_label or "", OTHER_SECTION_COLOR_INDEX)
-    return color + SILENT_PAD_COLOR_OFFSET if pad.silent else color
-
-
 def _audio_paths_by_role(session: Session, track: Track) -> dict[str, Path]:
     paths = {MIX_ROLE: Path(track.file_path)}
     for kind, path in session.query(StemFile.kind, StemFile.path).filter(
@@ -108,9 +89,7 @@ def _clips_for_load(
     session: Session, load: DeckLoad, track: Track, bpm: float
 ) -> tuple[list[PlacedClip], list[SkippedPick]]:
     paths = _audio_paths_by_role(session, track)
-    pads_by_role: dict[str, list[TrackPad]] = {}
-    for pad in load_track_pads(session, track.id):
-        pads_by_role.setdefault(pad.role, []).append(pad)
+    cues_by_role = cue_clips_by_role(session, track.id, bpm)
 
     clips: list[PlacedClip] = []
     skipped: list[SkippedPick] = []
@@ -119,26 +98,23 @@ def _clips_for_load(
         if role not in paths:
             skipped.append(SkippedPick(track.id, role, "no stem file for this role"))
             continue
-        if not pads_by_role.get(role):
+        if not cues_by_role.get(role):
             skipped.append(
                 SkippedPick(track.id, role, "no pads; run `dance reprocess --from detect_regions`")
             )
             continue
         entry = StemEntry(kind=role, path=paths[role], duration_seconds=track.duration_seconds)
-        for pad in pads_by_role[role]:
-            loop_beats = (
-                float((pad.length_bars or 0) * BEATS_PER_BAR) if role in LOOPING_ROLES else None
-            )
+        for cue in cues_by_role[role]:
             clips.append(
                 PlacedClip(
                     deck_kind=f"{role}_{load.side}",
-                    scene=load.page * PADS_PER_PAGE + pad.slot - 1,
+                    scene=load.page * PADS_PER_PAGE + cue.slot - 1,
                     entry=entry,
                     bpm=bpm,
                     name=f"{title} ({role} {load.side.upper()})",
-                    start_beats=pad_start_beats(pad.position_ms, bpm),
-                    loop_beats=loop_beats or None,
-                    color_index=pad_color_index(pad),
+                    start_beats=cue.start_beats,
+                    loop_beats=cue.loop_beats,
+                    color_index=cue.color_index,
                     muted=role == MIX_ROLE,
                 )
             )

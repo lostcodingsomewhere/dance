@@ -783,13 +783,16 @@ def _load_then_check_warp(live, *, expected_beats=None, tmp_path=None, track_id=
         bridge.stop()
 
 
-def test_bridge_load_forces_warp_beats_on_every_stem(tmp_path):
-    """Every live-loaded stem gets Warp ON + Beats mode, explicitly.
+def test_bridge_load_forces_warp_on_in_each_stems_own_mode(tmp_path):
+    """Every live-loaded stem gets Warp ON and the warp mode the .als writer
+    gives its role, explicitly.
 
     ``create_audio_clip`` alone leaves warp to Live's auto-warp preference,
-    so the deck path used to disagree with the .als writer (which pins
-    Warp=true / WarpMode=0). A deck you can't beatmatch is not a deck.
+    so the deck path used to disagree with the .als writer. A deck you can't
+    beatmatch is not a deck.
     """
+    beats, complex_, complex_pro = 0, 4, 6
+    mode_of = {"drums_a": beats, "bass_a": beats, "vocals_a": complex_pro, "other_a": complex_}
     with _FakeLive(initial_names=[f"Pre {i}" for i in range(10)]) as live:
         _load_then_check_warp(live, tmp_path=tmp_path)
 
@@ -798,8 +801,9 @@ def test_bridge_load_forces_warp_beats_on_every_stem(tmp_path):
                 lambda i=idx: (i, 0, 1) in live.args_for("/live/clip/set/warping")
             ), f"{deck_kind} was not forced to warp"
             assert _wait_for(
-                lambda i=idx: (i, 0, 0) in live.args_for("/live/clip/set/warp_mode")
-            ), f"{deck_kind} was not pinned to Beats mode"
+                lambda i=idx, mode=mode_of[deck_kind]: (i, 0, mode)
+                in live.args_for("/live/clip/set/warp_mode")
+            ), f"{deck_kind} was not given warp mode {mode_of[deck_kind]}"
 
 
 def test_bridge_warp_check_flags_half_warped_stem(tmp_path):

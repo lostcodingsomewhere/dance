@@ -56,7 +56,7 @@ This is the highest-frequency decision in the loop. In song-mode DJing the picke
 | Compat with current combo | Per-card ScoreBreakdown chip row: embedding / key / BPM / energy / timbre / transition-fit |
 | Search escape hatch | ⌘K hybrid search (fuzzy + CLAP vibe); a chosen result appends to the Song column's plan queue |
 | Cue before firing | Per-card ▶ preview button → cue bus (Scarlett 4i4 outs 3/4 → headphones, master unaffected) |
-| Load it onto a deck | ⤒A / ⤒B on the card picks the deck at load time |
+| Load it onto a deck | ⤒A / ⤒B on the card picks the deck at load time. The pick lands as five cue pads per column on the page in front of you, or on the next page where that deck is free, and the Booth follows it there. Nothing already in Live is replaced |
 | Fire it | Tap cell in SceneGrid OR launch from APC40 |
 
 **Eyes-on demand: medium-high.** Scanning a role column's recs, reading ScoreBreakdown chips. Faster cycle than song-mode picking.

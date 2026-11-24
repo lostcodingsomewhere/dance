@@ -1,30 +1,16 @@
 from __future__ import annotations
 
-import gzip
-import socket
-import threading
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from lxml import etree
-from pythonosc import udp_client
 
-from dance.api import create_app
 from dance.config import get_settings
-from dance.core.database import Track, _reset_engine_for_tests, get_session, get_session_factory
-from dance.osc.bridge import AbletonBridge
-from dance.osc.listener import AbletonOSCListener
+from dance.core.database import Track, get_session
+from tests.live_stand_in import booth_with_live
 from tests.test_cue_pads_e2e import API, BLOCK_MS
-from tests.test_export_set_e2e import (
-    PADS_PER_PAGE,
-    _pads,
-    _planned_set,
-    _stem_path,
-    three_songs_through_the_pipeline,
-)
+from tests.test_export_set_e2e import PADS_PER_PAGE, _pads, _planned_set, _stem_path
 
 STEM_ROLES = ("drums", "bass", "vocals", "other")
 SONG_ROLES = (*STEM_ROLES, "mix")
@@ -36,126 +22,9 @@ DECK_KIND_BY_TRACK_NAME = {
 SETTLE_SECONDS = 5.0
 
 
-def _free_port() -> int:
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    port = probe.getsockname()[1]
-    probe.close()
-    return port
-
-
-class LiveStandIn:
-    def __init__(self) -> None:
-        self.receive_port = _free_port()
-        self.reply_port = _free_port()
-        self.received: list[tuple[str, tuple[Any, ...]]] = []
-        self._track_names: list[str] = []
-        self._clips: dict[tuple[int, int], dict[str, Any]] = {}
-        self._scene_count = 0
-        self._tempo_listener_registered = False
-        self._lock = threading.Lock()
-        self._listener = AbletonOSCListener(port=self.receive_port)
-        self._reply = udp_client.SimpleUDPClient("127.0.0.1", self.reply_port)
-
-    def __enter__(self) -> LiveStandIn:
-        self._listener.on_any(self._answer)
-        self._listener.start()
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        self._listener.stop()
-
-    def open(self, set_path: str | Path) -> None:
-        live_set = etree.fromstring(gzip.decompress(Path(set_path).read_bytes()))
-        tracks = list(live_set.find(".//Tracks"))
-        with self._lock:
-            self._track_names = [t.find("Name/EffectiveName").get("Value") for t in tracks]
-            self._clips = {}
-            self._scene_count = len(live_set.findall(".//Scenes/Scene"))
-            self._tempo_listener_registered = False
-            for track_index, track in enumerate(tracks):
-                slots = track.findall("DeviceChain/MainSequencer/ClipSlotList/ClipSlot")
-                for row, slot in enumerate(slots):
-                    clip = slot.find("ClipSlot/Value/AudioClip")
-                    if clip is None:
-                        continue
-                    self._clips[(track_index, row)] = {
-                        "name": clip.find("Name").get("Value"),
-                        "start_marker": float(clip.find("Loop/LoopStart").get("Value"))
-                        + float(clip.find("Loop/StartRelative").get("Value")),
-                        "file_path": clip.find("SampleRef/FileRef/Path").get("Value"),
-                    }
-        self._reply.send_message("/live/startup", [])
-
-    def track_index(self, track_name: str) -> int:
-        return self._track_names.index(track_name)
-
-    def clip(self, track_name: str, row: int) -> dict[str, Any]:
-        return self._clips[(self.track_index(track_name), row)]
-
-    def put_clip(self, track_name: str, row: int, **clip: Any) -> None:
-        with self._lock:
-            self._clips[(self.track_index(track_name), row)] = clip
-
-    def change_tempo(self, bpm: float) -> None:
-        if self._tempo_listener_registered:
-            self._reply.send_message("/live/song/get/tempo", [bpm])
-
-    def fired(self) -> list[tuple[int, int]]:
-        with self._lock:
-            return [
-                (int(args[0]), int(args[1]))
-                for address, args in self.received
-                if address == "/live/clip_slot/fire"
-            ]
-
-    def _answer(self, address: str, args: tuple[Any, ...]) -> None:
-        with self._lock:
-            self.received.append((address, args))
-            if address == "/live/song/start_listen/tempo":
-                self._tempo_listener_registered = True
-            elif address == "/live/song/get/track_names":
-                self._reply.send_message(address, list(self._track_names))
-            elif address == "/live/song/get/num_tracks":
-                self._reply.send_message(address, [len(self._track_names)])
-            elif address == "/live/song/get/num_scenes":
-                self._reply.send_message(address, [self._scene_count])
-            elif address == "/live/track/get/clips/name":
-                track = int(args[0])
-                names = [
-                    self._clips.get((track, row), {}).get("name")
-                    for row in range(self._scene_count)
-                ]
-                self._reply.send_message(address, [track, *names])
-            elif address.startswith("/live/clip/get/"):
-                key = (int(args[0]), int(args[1]))
-                prop = address.rsplit("/", 1)[1]
-                if key in self._clips and prop in self._clips[key]:
-                    self._reply.send_message(address, [*key, self._clips[key][prop]])
-
-
 @pytest.fixture
 def booth(monkeypatch):
-    track_ids = three_songs_through_the_pipeline(monkeypatch)
-    settings = get_settings()
-    with LiveStandIn() as live:
-        bridge = AbletonBridge(
-            send_port=live.receive_port,
-            listen_port=live.reply_port,
-            state_file=settings.data_dir / "deck_state.json",
-        )
-        app = create_app(
-            settings=settings,
-            bridge=bridge,
-            session_factory=get_session_factory(settings.db_url),
-        )
-        bridge.start()
-        try:
-            with TestClient(app) as client:
-                yield client, track_ids, live
-        finally:
-            bridge.stop()
-    _reset_engine_for_tests()
+    yield from booth_with_live(monkeypatch)
 
 
 def _cells(client: TestClient) -> dict[tuple[int, str], dict]:

@@ -725,7 +725,9 @@ export function abletonResyncDecks(): Promise<ResyncDecksResult> {
 // stems made it (less than 4 = check ``warnings``).
 export interface LoadTrackResult {
   ok: boolean;
+  /** First scene row of the page the load landed on. */
   scene_index: number;
+  page: number;
   /** Which deck side received the load. Present even when the request let
    *  the bridge auto-pick, which is how ⌘K loads know which deck to arm. */
   side?: "a" | "b" | null;
@@ -764,11 +766,12 @@ export function pushTrackToLive(
   trackId: number,
   options: {
     includeStems?: boolean;
-    sceneIndex?: number;
     /** Subset of stem kinds to load. ``undefined`` = whole song (all 4). */
     kinds?: string[];
     /** Force deck side. ``undefined`` lets the bridge auto-pick. */
     side?: "a" | "b";
+    /** The page on screen; the load takes the first page from there with free deck columns. */
+    page?: number;
   } = {},
 ): Promise<LoadTrackResult> {
   return request<LoadTrackResult>("/ableton/load-track", {
@@ -776,9 +779,9 @@ export function pushTrackToLive(
     body: JSON.stringify({
       track_id: trackId,
       include_stems: options.includeStems ?? true,
-      scene_index: options.sceneIndex ?? null,
       kinds: options.kinds ?? null,
       side: options.side ?? null,
+      page: options.page ?? null,
     }),
   });
 }

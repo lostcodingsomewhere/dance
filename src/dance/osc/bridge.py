@@ -9,11 +9,13 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dance.als.cue_clips import PADS_PER_PAGE, CueClip
+from dance.als.writer import WARP_MODE_BEATS, WARP_MODE_BY_KIND
 from dance.osc.client import (
     ABLETON_RECEIVE_PORT,
     ABLETON_SEND_PORT,
@@ -25,6 +27,42 @@ if TYPE_CHECKING:  # pragma: no cover - import-time only
     from dance.core.database import StemFile, Track
 
 logger = logging.getLogger(__name__)
+
+# Live's own grid lands up to 9 s after a clip is made (12.4.3), so grids are read back for a while.
+GRID_GUARD_DELAYS: tuple[float, ...] = (*range(1, 13), 14.0, 16.0, 18.0, 20.0, 25.0, 30.0)
+GRID_TEMPO_TOLERANCE_BPM = 0.01
+GRID_ORIGIN_TOLERANCE = 1e-4
+STRAIGHT_GRID_MARKERS = 3
+SECONDS_KEPT_CLEAR_OF_THE_SAMPLE_END = 1.0
+MIX_ROLE = "mix"
+
+WarpMarker = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class GridClip:
+    deck_kind: str
+    track_index: int
+    row: int
+    bpm: float
+    seconds: float
+    cue: CueClip
+
+    @property
+    def slot(self) -> tuple[int, int]:
+        return self.track_index, self.row
+
+
+def on_straight_grid(markers: Sequence[WarpMarker], bpm: float) -> bool:
+    if not 2 <= len(markers) <= STRAIGHT_GRID_MARKERS:
+        return False
+    (first_beat, first_sec), (next_beat, next_sec) = markers[0], markers[1]
+    if abs(first_beat) > GRID_ORIGIN_TOLERANCE or abs(first_sec) > GRID_ORIGIN_TOLERANCE:
+        return False
+    if next_sec <= first_sec:
+        return False
+    tempo = (next_beat - first_beat) / (next_sec - first_sec) * 60.0
+    return abs(tempo - bpm) <= GRID_TEMPO_TOLERANCE_BPM
 
 
 @dataclass
@@ -105,8 +143,10 @@ class AbletonBridge:
         send_port: int = ABLETON_RECEIVE_PORT,
         listen_port: int = ABLETON_SEND_PORT,
         state_file: Path | None = None,
+        grid_guard_delays: tuple[float, ...] = GRID_GUARD_DELAYS,
     ) -> None:
         self.client = AbletonOSCClient(host=host, port=send_port)
+        self._grid_guard_delays = grid_guard_delays
         self.listener = AbletonOSCListener(host=host, port=listen_port)
         self.state = AbletonState()
         self._subscribers: list[StateListener] = []
@@ -133,6 +173,10 @@ class AbletonBridge:
         self._clip_values: dict[str, dict[tuple[int, int], Any]] = {}
         self._clip_values_lock = threading.Lock()
         self._set_opened_callbacks: list[Callable[[], None]] = []
+        self._warp_marker_replies: dict[tuple[int, int], list[WarpMarker]] | None = None
+        self._warp_marker_lock = threading.Lock()
+        self._grid_lock = threading.Lock()
+        self._stopped = threading.Event()
 
         # Indices of the 5 reusable "Deck" tracks in Live (mix, drums, bass,
         # vocals, other). ``None`` means we haven't created them yet; populated
@@ -180,6 +224,8 @@ class AbletonBridge:
         # exposes this map as the cell-level deck view.
         self._deck_cells: dict[tuple[int, str], int] = {}
         self._deck_cell_starts: dict[tuple[int, str], float] = {}
+        self._grid_clips: dict[tuple[int, str], GridClip] = {}
+        self._auto_warped_cells: set[tuple[int, str]] = set()
 
         # track_index -> bool, the raw Solo state Live pushed for each deck
         # column. Populated by per-deck solo subscriptions (see
@@ -240,6 +286,7 @@ class AbletonBridge:
         for clip_property in self._SCANNED_CLIP_PROPERTIES:
             self.listener.on(f"/live/clip/get/{clip_property}", self._on_clip_value)
         self.listener.on("/live/startup", self._on_live_startup)
+        self.listener.on("/live/clip/get/warp_marker_times", self._on_warp_marker_times)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -438,6 +485,7 @@ class AbletonBridge:
         return kind
 
     def stop(self) -> None:
+        self._stopped.set()
         self.listener.stop()
 
     # ------------------------------------------------------------------
@@ -874,6 +922,8 @@ class AbletonBridge:
         self._deck_columns = None
         self._deck_cells = {}
         self._deck_cell_starts = {}
+        self._grid_clips = {}
+        self._auto_warped_cells = set()
         self._cue_track_idx = None
         self._cue_idx_verified = False
         self._deck_columns_verified = False
@@ -1023,6 +1073,8 @@ class AbletonBridge:
         self._deck_columns = None
         self._deck_cells = {}
         self._deck_cell_starts = {}
+        self._grid_clips = {}
+        self._auto_warped_cells = set()
         self._recompute_soloed_kinds()
         self._persist_state()
         self._bump_deck_revision()
@@ -1120,7 +1172,7 @@ class AbletonBridge:
         paths = self._read_clip_values("file_path", slots) if starts else {}
         for cell, slot in zip(cells, slots, strict=True):
             start = starts.get(slot)
-            cell["start_beats"] = float(start) if isinstance(start, (int, float)) else None
+            cell["start_beats"] = float(start) if isinstance(start, int | float) else None
             cell["file_path"] = str(paths[slot]) if paths.get(slot) else None
         return cells
 
@@ -1381,6 +1433,11 @@ class AbletonBridge:
         """Replace ``_deck_cells`` with the given (scene, kind) → track_id map
         and persist. Caller pre-resolves track_ids via DB lookup; we just
         store + persist."""
+        unchanged = {cell for cell, track_id in cells.items() if self._deck_cells.get(cell) == track_id}
+        self._grid_clips = {
+            cell: clip for cell, clip in self._grid_clips.items() if cell in unchanged
+        }
+        self._auto_warped_cells &= unchanged
         self._deck_cells = dict(cells)
         self._deck_cell_starts = {
             cell: beats for cell, beats in (start_beats or {}).items() if cell in cells
@@ -1438,6 +1495,8 @@ class AbletonBridge:
         # (e.g. user clicked X on a stale UI).
         removed = self._deck_cells.pop((slot_index, kind), None)
         self._deck_cell_starts.pop((slot_index, kind), None)
+        self._grid_clips.pop((slot_index, kind), None)
+        self._auto_warped_cells.discard((slot_index, kind))
         self._persist_state()
         self._bump_deck_revision()
         return {
@@ -1953,10 +2012,6 @@ class AbletonBridge:
                     return i, "b"
             i += 1
 
-    # Live's WarpMode enum value for "Beats" — the algorithm the offline
-    # .als writer emits (als/writer.py → WarpMode 0). Pinned so a
-    # live-loaded stem and an exported one behave identically.
-    _WARP_MODE_BEATS = 0
     # How far two clips cut from the same source may differ in beat-length
     # before we call it a warp disagreement. 2% is far wider than any real
     # rounding and far tighter than the 2x errors we're hunting.
@@ -2159,23 +2214,11 @@ class AbletonBridge:
             return False
         return True
 
-    def _force_warp(self, track_index: int, slot_index: int) -> None:
-        """Pin a freshly-created clip to warped + Beats mode.
-
-        ``create_audio_clip`` leaves warp entirely to Live's auto-warp
-        preference, so the deck path and the .als path disagreed: an
-        exported Set pins ``Warp=true`` / ``WarpMode=0``, a live-loaded
-        stem inherited whatever Live felt like. Beatmatching two decks
-        requires warp ON, so we state it rather than hope for it.
-
-        Best-effort: this cannot fix a wrong tempo GUESS (warp markers
-        aren't reachable over OSC) — it only removes the "was it even
-        warped?" variable. ``_check_warp_agreement`` catches the rest.
-        """
+    def _force_warp(self, track_index: int, slot_index: int, role: str) -> None:
         try:
             self.client.set_clip_warp(track_index, slot_index, True)
             self.client.set_clip_warp_mode(
-                track_index, slot_index, self._WARP_MODE_BEATS
+                track_index, slot_index, WARP_MODE_BY_KIND.get(role, WARP_MODE_BEATS)
             )
         except OSError:  # pragma: no cover - best-effort
             pass
@@ -2309,20 +2352,37 @@ class AbletonBridge:
         expected_beats_by_track: dict[int, float] | None = None,
         duration_by_track: dict[int, float] | None = None,
     ) -> dict[str, Any]:
-        """Audit one scene's stem cells for Live auto-warp errors.
+        """Check the warp of what the app loaded on one scene.
 
-        Run this AFTER Live has finished analyzing (~15s post-load) — see the
-        note in ``push_track_to_live``. Cells are grouped by SOURCE TRACK
-        before comparing, because the whole premise is "same audio, therefore
-        same beat-length"; in the live-remixing model one scene routinely
-        holds stems from four different songs, and comparing those to each
-        other would be meaningless.
+        Cue pads loaded with the song's own grid are checked across the
+        scene's whole page: each grid is read back from Live and rewritten if
+        it no longer holds the song's tempo.
+
+        Whole stems loaded without a grid are audited for Live auto-warp
+        errors. Run that part AFTER Live has finished analyzing (~15s
+        post-load) — see the note in ``push_track_to_live``. Cells are grouped
+        by SOURCE TRACK before comparing, because the whole premise is "same
+        audio, therefore same beat-length"; in the live-remixing model one
+        scene routinely holds stems from four different songs, and comparing
+        those to each other would be meaningless.
+
+        Clips the app did not load itself are left alone.
 
         Returns ``{"scene_index": int, "checked": int, "warnings": [str]}``.
         """
+        first_row_of_page = scene_index // PADS_PER_PAGE * PADS_PER_PAGE
+        cue_pads = [
+            clip
+            for (scene, _), clip in sorted(self._grid_clips.items())
+            if first_row_of_page <= scene < first_row_of_page + PADS_PER_PAGE
+        ]
+        with self._grid_lock:
+            warnings: list[str] = self._grid_check_warnings(cue_pads)
+        checked = len(cue_pads)
+
         by_track: dict[int, list[tuple[str, int]]] = {}
         for (scene, deck_kind), track_id in self._deck_cells.items():
-            if scene != scene_index or deck_kind.startswith("mix"):
+            if scene != scene_index or (scene, deck_kind) not in self._auto_warped_cells:
                 continue
             if self._deck_columns is None or deck_kind not in self._deck_columns:
                 continue
@@ -2330,8 +2390,6 @@ class AbletonBridge:
                 (deck_kind, self._deck_columns[deck_kind])
             )
 
-        warnings: list[str] = []
-        checked = 0
         for track_id, cells in sorted(by_track.items()):
             if len(cells) < 2:
                 continue  # nothing to compare this source against
@@ -2345,6 +2403,314 @@ class AbletonBridge:
                 )
             )
         return {"scene_index": scene_index, "checked": checked, "warnings": warnings}
+
+    def _on_warp_marker_times(self, address: str, args: tuple[Any, ...]) -> None:
+        if len(args) < 2:
+            return
+        values = [float(value) for value in args[2:]]
+        with self._warp_marker_lock:
+            if self._warp_marker_replies is not None:
+                self._warp_marker_replies[(int(args[0]), int(args[1]))] = list(
+                    zip(values[0::2], values[1::2], strict=False)
+                )
+
+    def _read_warp_markers(
+        self, slots: Sequence[tuple[int, int]], *, timeout: float = 1.5, poll: float = 0.01
+    ) -> dict[tuple[int, int], list[WarpMarker]]:
+        wanted = set(slots)
+        with self._warp_marker_lock:
+            self._warp_marker_replies = {}
+        try:
+            for track_index, row in slots:
+                self.client.get_warp_marker_times(track_index, row)
+        except OSError:  # pragma: no cover - best-effort
+            pass
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._warp_marker_lock:
+                if wanted <= self._warp_marker_replies.keys():
+                    break
+            time.sleep(poll)
+        with self._warp_marker_lock:
+            answered, self._warp_marker_replies = self._warp_marker_replies, None
+        return answered
+
+    def _stamp_grid(self, clip: GridClip, markers: Sequence[WarpMarker]) -> None:
+        if not markers:
+            return
+        track_index, row = clip.slot
+        far_seconds = clip.seconds - SECONDS_KEPT_CLEAR_OF_THE_SAMPLE_END
+        # Live ends every grid with a marker of its own that cannot be removed.
+        for beat, _ in reversed(markers[1:-1]):
+            self.client.remove_warp_marker(track_index, row, beat)
+        self.client.add_warp_marker(track_index, row, far_seconds * clip.bpm / 60.0, far_seconds)
+        self.client.remove_warp_marker(track_index, row, markers[0][0])
+        self.client.add_warp_marker(track_index, row, 0.0, 0.0)
+
+    def _place_cue(self, clip: GridClip) -> None:
+        track_index, row = clip.slot
+        cue = clip.cue
+        if cue.loop_beats:
+            self.client.set_clip_looping(track_index, row, True)
+            self.client.set_clip_loop(
+                track_index, row, cue.start_beats, cue.start_beats + cue.loop_beats
+            )
+        self.client.set_clip_start_marker(track_index, row, cue.start_beats)
+        if cue.color_index is not None:
+            self.client.set_clip_color(track_index, row, cue.color_index)
+
+    def _put_grids_right(self, clips: Sequence[GridClip]) -> tuple[list[GridClip], list[GridClip]]:
+        if not clips:
+            return [], []
+        read = self._read_warp_markers([clip.slot for clip in clips])
+        unanswered: list[GridClip] = []
+        rewritten: list[GridClip] = []
+        for clip in clips:
+            markers = read.get(clip.slot)
+            if markers is None:
+                unanswered.append(clip)
+            elif not on_straight_grid(markers, clip.bpm):
+                try:
+                    self._stamp_grid(clip, markers)
+                    self._place_cue(clip)
+                except OSError:  # pragma: no cover - best-effort
+                    pass
+                rewritten.append(clip)
+        return unanswered, rewritten
+
+    def _grid_check_warnings(self, clips: Sequence[GridClip]) -> list[str]:
+        unanswered, rewritten = self._put_grids_right(clips)
+        refused: list[GridClip] = []
+        if rewritten:
+            read = self._read_warp_markers([clip.slot for clip in rewritten])
+            refused = [
+                clip
+                for clip in rewritten
+                if not on_straight_grid(read.get(clip.slot, ()), clip.bpm)
+            ]
+        warnings: list[str] = []
+        if unanswered:
+            warnings.append(
+                f"Live did not report the warp grid of {self._pads_named(unanswered)}, so "
+                "it was not checked."
+            )
+        if refused:
+            warnings.append(
+                f"Live did not take the song's own warp grid on {self._pads_named(refused)}, "
+                "so they may start in the wrong place. Run `dance doctor` to check the "
+                "AbletonOSC patches."
+            )
+        return warnings
+
+    @staticmethod
+    def _pads_named(clips: Sequence[GridClip]) -> str:
+        named = ", ".join(f"{clip.deck_kind} row {clip.row + 1}" for clip in clips[:6])
+        more = f" and {len(clips) - 6} more" if len(clips) > 6 else ""
+        return f"{len(clips)} pad{'s' if len(clips) != 1 else ''} ({named}{more})"
+
+    def _guard_grids(self, clips: Sequence[GridClip]) -> None:
+        waited = 0.0
+        for delay in self._grid_guard_delays:
+            if self._stopped.wait(max(delay - waited, 0.0)):
+                return
+            waited = delay
+            still_loaded = [
+                clip for clip in clips if self._grid_clips.get((clip.row, clip.deck_kind)) is clip
+            ]
+            if not still_loaded:
+                return
+            with self._grid_lock:
+                self._put_grids_right(still_loaded)
+
+    def _cells_taken(self, live_reachable: bool) -> set[tuple[int, str]]:
+        taken = set(self._deck_cells)
+        if live_reachable:
+            in_live = self._scan_cells_batched(timeout=1.0) or []
+            taken |= {(cell["scene_index"], cell["kind"]) for cell in in_live}
+        return taken
+
+    @staticmethod
+    def _free_page(
+        roles: Sequence[str], forced_side: str | None, page: int, taken: set[tuple[int, str]]
+    ) -> tuple[int, str]:
+        sides = (forced_side,) if forced_side else ("a", "b")
+        while True:
+            rows = range(page * PADS_PER_PAGE, (page + 1) * PADS_PER_PAGE)
+            for side in sides:
+                if not any((row, f"{role}_{side}") in taken for role in roles for row in rows):
+                    return page, side
+            page += 1
+
+    def _audio_for_load(
+        self, track: Track, stems: list[StemFile], kinds: list[str] | None, warnings: list[str]
+    ) -> dict[str, Path]:
+        wanted = self._SOURCE_STEM_KINDS if kinds is None else kinds
+        stems_by_kind = {str(stem.kind).lower(): stem for stem in stems}
+        audio: dict[str, Path] = {}
+        for kind in (k for k in wanted if k in self._SOURCE_STEM_KINDS):
+            stem = stems_by_kind.get(kind)
+            if stem is None or not stem.path:
+                warnings.append(f"No {kind} stem available for track {track.id}")
+            elif not Path(stem.path).exists():
+                warnings.append(f"{kind} stem file missing on disk: {stem.path!r}")
+            else:
+                audio[kind] = Path(stem.path)
+        if kinds is None and track.file_path:
+            if Path(track.file_path).exists():
+                audio[MIX_ROLE] = Path(track.file_path)
+            else:
+                warnings.append(f"mix file missing on disk: {track.file_path!r}")
+        return audio
+
+    def push_cue_pads_to_live(
+        self,
+        track: Track,
+        stems: list[StemFile],
+        *,
+        cues: Mapping[str, Sequence[CueClip]],
+        bpm: float,
+        kinds: list[str] | None = None,
+        side: str | None = None,
+        page: int = 0,
+        num_tracks_timeout: float = 0.5,
+    ) -> dict[str, Any]:
+        warnings: list[str] = []
+        deck_columns, live_reachable = self._deck_columns_for_load(warnings, num_tracks_timeout)
+        audio = self._audio_for_load(track, stems, kinds, warnings)
+        roles = [role for role in audio if cues.get(role)]
+        track_id = int(track.id)
+        title = (track.title or track.file_name or f"Track {track_id}").strip()
+        seconds = float(track.duration_seconds or 0.0)
+
+        with self._grid_lock:
+            page, side = self._free_page(
+                roles,
+                side if side in ("a", "b") else None,
+                max(page, 0),
+                self._cells_taken(live_reachable),
+            )
+            first_row = page * PADS_PER_PAGE
+            last_row = first_row + PADS_PER_PAGE - 1
+            if roles and live_reachable and self.ensure_scene_exists(last_row) is False:
+                warnings.append(
+                    f"Live has no scene {first_row + PADS_PER_PAGE} and would not create "
+                    "one; this load would land nowhere."
+                )
+
+            columns: list[list[GridClip]] = []
+            for role in roles:
+                deck_kind = f"{role}_{side}"
+                column = [
+                    GridClip(
+                        deck_kind=deck_kind,
+                        track_index=deck_columns[deck_kind],
+                        row=first_row + cue.slot - 1,
+                        bpm=bpm,
+                        seconds=seconds,
+                        cue=cue,
+                    )
+                    for cue in sorted(cues[role], key=lambda cue: cue.slot)
+                ]
+                name = f"{title} ({role} {side.upper()})"
+                try:
+                    self._create_first_pad(column[0], audio[role], name)
+                except OSError as exc:  # pragma: no cover - best-effort
+                    warnings.append(f"OSC send for {deck_kind} failed: {exc}")
+                    continue
+                columns.append(column)
+                for clip in column:
+                    cell = (clip.row, deck_kind)
+                    self._deck_cells[cell] = track_id
+                    self._deck_cell_starts[cell] = clip.cue.start_beats
+                    self._grid_clips[cell] = clip
+                    self._auto_warped_cells.discard(cell)
+
+            built = [clip for column in columns for clip in column]
+            if live_reachable and built:
+                self._finish_columns(columns)
+                warnings.extend(self._grid_check_warnings(built))
+
+        if live_reachable and built:
+            threading.Thread(
+                target=self._guard_grids, args=(built,), name="grid-guard", daemon=True
+            ).start()
+        stems_loaded = len(
+            [column for column in columns if not column[0].deck_kind.startswith(MIX_ROLE)]
+        )
+        try:
+            self.client.show_message(
+                f"Dance: {title} → page {page + 1} deck {side.upper()} "
+                f"({stems_loaded} stem{'s' if stems_loaded != 1 else ''} loaded)"
+            )
+        except OSError:  # pragma: no cover - best-effort UI
+            pass
+        self._persist_state()
+        self._bump_deck_revision()
+        return {
+            "scene_index": first_row,
+            "page": page,
+            "side": side,
+            "track_indices": deck_columns,
+            "stems_loaded": stems_loaded,
+            "warnings": warnings,
+        }
+
+    def _create_first_pad(self, clip: GridClip, audio: Path, name: str) -> None:
+        track_index, row = clip.slot
+        role = clip.deck_kind.rsplit("_", 1)[0]
+        self.client.create_audio_clip(track_index, row, str(audio))
+        self.client.set_clip_name(track_index, row, name)
+        self._force_warp(track_index, row, role)
+
+    def _finish_columns(self, columns: Sequence[Sequence[GridClip]]) -> None:
+        markers = self._read_warp_markers([column[0].slot for column in columns])
+        for column in columns:
+            first = column[0]
+            try:
+                if first.slot in markers:
+                    self._stamp_grid(first, markers[first.slot])
+                for clip in column[1:]:
+                    self.client.duplicate_clip_to(*first.slot, *clip.slot)
+                for clip in column:
+                    self._place_cue(clip)
+            except OSError:  # pragma: no cover - best-effort
+                pass
+
+    def _deck_columns_for_load(
+        self, warnings: list[str], num_tracks_timeout: float
+    ) -> tuple[dict[str, int], bool]:
+        base = self.get_num_tracks(timeout=num_tracks_timeout)
+        live_reachable = base is not None
+        if not live_reachable:
+            warnings.append(
+                "Could not read song num_tracks from Live (timeout); "
+                "deck-column indices below are best-effort."
+            )
+
+        # Provision the 10 deck columns if we don't have them cached, or — only
+        # when Live is reachable — if the cached indices no longer fit Live's
+        # current track count (user deleted tracks). _create_deck_columns is
+        # ADOPT-BEFORE-CREATE: it reuses any existing "Deck …" columns and
+        # only creates the genuinely-missing ones, so this never spawns a
+        # duplicate set even after a backend restart or an opened .als export.
+        if self._deck_columns is None:
+            self._deck_columns = self._create_deck_columns(
+                start_index=base if base is not None else 0
+            )
+        elif base is not None and not self._deck_columns_verified:
+            # Confirm the cached indices still NAME the deck columns.
+            #
+            # The old test was `cached_max >= base` — re-derive only when the
+            # indices no longer FIT, i.e. only when Live SHRANK. If Live grew,
+            # or the user opened a different Set, or tracks were reordered,
+            # the stale map was kept and clips were written to whatever now
+            # occupies those indices — possibly the user's own tracks. Growth
+            # is the normal case here, since the bridge itself adds a Cue
+            # track and a Recorder track beyond the ten deck columns.
+            if not self._deck_columns_match_live():
+                self._deck_columns = self._create_deck_columns(start_index=base)
+            self._deck_columns_verified = True
+        return self._deck_columns, live_reachable
 
     def push_track_to_live(
         self,
@@ -2399,39 +2765,9 @@ class AbletonBridge:
         # full-track audio and we never duplicate it into the deck row).
         valid_kinds = [k for k in kinds if k in ("drums", "bass", "vocals", "other")]
 
-        base = self.get_num_tracks(timeout=num_tracks_timeout)
-        live_reachable = base is not None
-        if not live_reachable:
-            warnings.append(
-                "Could not read song num_tracks from Live (timeout); "
-                "deck-column indices below are best-effort."
-            )
-
-        # Provision the 10 deck columns if we don't have them cached, or — only
-        # when Live is reachable — if the cached indices no longer fit Live's
-        # current track count (user deleted tracks). _create_deck_columns is
-        # ADOPT-BEFORE-CREATE: it reuses any existing "Deck …" columns and
-        # only creates the genuinely-missing ones, so this never spawns a
-        # duplicate set even after a backend restart or an opened .als export.
-        if self._deck_columns is None:
-            self._deck_columns = self._create_deck_columns(
-                start_index=base if live_reachable else 0
-            )
-        elif live_reachable and not self._deck_columns_verified:
-            # Confirm the cached indices still NAME the deck columns.
-            #
-            # The old test was `cached_max >= base` — re-derive only when the
-            # indices no longer FIT, i.e. only when Live SHRANK. If Live grew,
-            # or the user opened a different Set, or tracks were reordered,
-            # the stale map was kept and clips were written to whatever now
-            # occupies those indices — possibly the user's own tracks. Growth
-            # is the normal case here, since the bridge itself adds a Cue
-            # track and a Recorder track beyond the ten deck columns.
-            if not self._deck_columns_match_live():
-                self._deck_columns = self._create_deck_columns(start_index=base)
-            self._deck_columns_verified = True
-
-        deck_columns: dict[str, int] = self._deck_columns
+        deck_columns, live_reachable = self._deck_columns_for_load(
+            warnings, num_tracks_timeout
+        )
 
         # Resolve where this load lands. All stems of one push_track_to_live
         # call go to the SAME side so anchor-detection (4-of-4 same track in
@@ -2521,11 +2857,11 @@ class AbletonBridge:
                 self.client.set_clip_name(
                     t_idx, scene_index, f"{title} ({kind} {side.upper()})"
                 )
-                # Warp ON + Beats, always — a deck you can't beatmatch is
-                # not a deck. See _force_warp.
-                self._force_warp(t_idx, scene_index)
+                self._force_warp(t_idx, scene_index, kind)
                 self._deck_cells[(scene_index, deck_kind)] = track.id
                 self._deck_cell_starts[(scene_index, deck_kind)] = 0.0
+                self._grid_clips.pop((scene_index, deck_kind), None)
+                self._auto_warped_cells.add((scene_index, deck_kind))
                 loaded_cells.append((deck_kind, t_idx))
                 stems_loaded += 1
             except OSError as exc:  # pragma: no cover - best-effort
@@ -2547,6 +2883,7 @@ class AbletonBridge:
                     )
                     self._deck_cells[(scene_index, mix_kind)] = track.id
                     self._deck_cell_starts[(scene_index, mix_kind)] = 0.0
+                    self._grid_clips.pop((scene_index, mix_kind), None)
                 except OSError as exc:  # pragma: no cover - best-effort
                     warnings.append(f"OSC send for {mix_kind} failed: {exc}")
             else:

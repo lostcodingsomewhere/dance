@@ -118,6 +118,81 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
 - Left as it was: the deck ▶ button still fires all five tracks of the deck at the
   scene, empty slots included.
 
+**Step 4, live loads build the same clips**
+
+- Built on 2026-11-24, on the branch only. It has not run against Live, so it is
+  not merged.
+- A song loaded from the app during a set lands on a page as five cue pads per
+  column, as a prepared Set would hold it: the same start and loop markers, warp
+  mode per stem, section colours, and the song's own tempo grid. One difference
+  is kept on purpose: a prepared Set's mix clips are deactivated in the file,
+  and a live-loaded mix clip is left active as before, because the bridge mutes
+  the two Mix tracks itself and `session-1.md` plays the mix by unmuting the
+  track. `POST /ableton/load-track` takes the page the Booth shows and answers with
+  the page, deck and first row the load landed on. Every load button in the app
+  sends the page on screen, and the Booth follows the load to its page.
+- Placement. A load takes the first page, starting at the one asked for, where its
+  deck columns are empty. Empty is checked against Live as well as the app's own
+  map, so a clip dropped in by hand counts. A load never deletes or replaces a
+  clip. With no deck named, deck A is tried before deck B on each page. A single
+  stem takes only its own column.
+- The grid. Live's auto-warp cannot be trusted with a stem (measured below), so
+  the load writes the grid itself. It creates the first pad of a column, removes
+  Live's warp markers, pins the start of the file and a point one second before
+  its end to the song's tempo, copies that clip to the other four rows, and sets
+  each row's markers. For 30 seconds after a load the bridge reads every new
+  clip's grid back (once a second for 12 s, then less often) and rewrites any
+  that changed. `POST /ableton/warp-check/{scene}` does the same for the scene's page
+  and reports only pads on which Live would not take the grid. Its old
+  length comparison now runs only on whole stems the app loaded without a grid.
+- A song with no pads yet loads each stem whole on the first row of the page, on
+  its own grid, with a warning. A song with no tempo analysis loads as before.
+- `dance doctor` fails when the installed `add_warp_marker` handler is the form
+  Live refuses, and counts the warp-marker handlers as needed by the app.
+- Tests: five end-to-end tests against a stand-in for Live that handles messages
+  in the order sent and models clips, warp markers, auto-warp and Live's refusals;
+  one app flow test; one `dance doctor` test through the command. The stand-in's
+  rules for adding a marker and for copying a clip are my reading of Live and
+  have not been compared with it.
+- Checked in a browser on a copy of the library, with Live not answering: one
+  click on ⤒A, asked for page 1, put a song's 25 cells on page 3 (deck A was
+  taken on pages 1 and 2), with cue chips and the deck's cue buttons, and the
+  Booth moved to that page. The banner said Live could not be read. Nothing
+  reached Live.
+- What the check in Live found before it was cut short (Live 12.4.3, six test
+  clips in empty slots, read over OSC):
+  - A stem Live has never analysed gets a placeholder grid at the Set's tempo and
+    then Live's own grid within 9 s (2 of 2 stems, first seen 8.1 s and 8.8 s
+    after the clip was made). Live read a 138 BPM drum stem at 105 BPM over its
+    first four beats, with beat 1 at 1.63 s.
+  - A stem Live auto-warped on an earlier day gets that guess back within 1.6 s
+    (2 of 2). One was right (125.00 for 124.999) and one was half tempo (64.17
+    for 128.0).
+  - A stem Live first met inside an exported Set keeps the placeholder at the
+    Set's tempo, which is wrong whenever the song's tempo differs (2 of 2: one
+    happened to match, the other stayed at 120.01 on a 127.0 BPM stem for 30 s).
+  - Reading a grid works. Removing markers works: 259 were gone within 0.5 s.
+    Live keeps one marker of its own after the last one and will not remove it.
+  - Adding a marker failed. The handler installed on this Mac passed Live a dict,
+    and Live answered "No registered converter was able to produce a C++ rvalue
+    of type NApiHelpers::TWarpMarker from this Python object of type dict". Patch
+    `0005` in the repo builds a `Live.Clip.WarpMarker` instead. That form is now
+    installed on this Mac (backup in `~/.dance/backups/abletonosc-20261124-100603`)
+    and has not run yet.
+  - `/live/api/reload`, sent to pick up the new handler, broke AbletonOSC in the
+    running Live. The reload cleared every handler and then stopped on the
+    installed crossfader listener, which is not tracked the way the reload
+    expects. Live answers nothing over OSC until it is restarted.
+- Not done: everything in Live. Open questions are whether `add_warp_marker`
+  works with the marker object, whether a grid written before Live's own grid
+  lands survives it or has to be rewritten by the 30-second check, whether a
+  copied clip keeps its grid, how long a load takes, and how it sounds.
+- Found on the way: the AbletonOSC installed on this Mac is an older hand-edited
+  copy. `scripts/abletonosc_patch.py --check` reports two patches in conflict and
+  two pending, so the script cannot bring it in line with the repo. Until step 4
+  only reading and removing warp markers had been tried, which is why the broken
+  add went unnoticed.
+
 ---
 
 ## What this is for
@@ -451,10 +526,11 @@ mode sounds chopped.
 
 A live load builds the same five clips per column over OSC, from the same cue and
 grid functions. It needs the grid set through the warp-marker handlers
-(`vendor/abletonosc` patch `0005`, installed, never run against Live). Five
-`create_audio_clip` calls per stem may each trigger analysis. If they do, a
-`duplicate_clip_to` handler is one more small patch; the installed script does not
-expose it.
+(`vendor/abletonosc` patch `0005`). Five `create_audio_clip` calls per stem would
+each be auto-warped, so the load creates one clip, writes its grid, and copies it
+with `/live/clip_slot/duplicate_clip_to`, which stock AbletonOSC already has.
+(Corrected 2026-11-24. This paragraph used to say the patch was installed and that
+the copy handler was missing. See the step 4 notes under Progress.)
 
 ## Part 3: Version families
 
@@ -501,7 +577,7 @@ work first and this is its own step.
 | SQLAlchemy models | One value added to `RegionType`: `pad`. One nullable column added, `regions.slot`, which says which of the five pads a row is. It came with hand-picking: a moved pad has to keep its number when the app's picks are rebuilt around it. Alembic revision `a1c5d9e3f7b2`, additive. |
 | Stage protocol | None. `detect_regions` emits more rows. |
 | `.als` emission | Several clips per deck track with their own start and loop markers, warp mode per role, named scenes, more than one song per Set. A new export beside the per-track one, which stays. |
-| OSC load contract | A load creates five clips per column and sets `start_marker`, `loop_start`, `loop_end`, `looping`, `color_index` (all handled by the installed script). Clip names stay `{title} ({kind} {side})` so `/decks/resync` keeps working (`ableton.py:701`); the cue is the row within the page. |
+| OSC load contract | A load creates one clip per column, writes its warp grid (`remove_warp_marker`, `add_warp_marker`), copies it to the other four rows (`duplicate_clip_to`), and sets `start_marker`, `loop_start`, `loop_end`, `looping`, `color_index` on each. Clip names stay `{title} ({kind} {side})` so `/decks/resync` keeps working (`ableton.py:701`); the cue is the row within the page. |
 | API schemas | Deck cells gain a cue number and label. New `POST /sets/{id}/als` and `GET /tracks/{id}/versions`. New `GET /tracks/{id}/pads`, and `PUT` and `DELETE /tracks/{id}/pads/{stem}/{n}` to move a pad and to reset it. `{stem}` is `drums`, `bass`, `vocals`, `other`, `mix`, or `all` for the whole song. The silent flag is worked out on read from the stem's presence data. `load-track` accepts a page. |
 | Plan shape | Unchanged. |
 | Column order (decision 5, decided) | `_DECK_KINDS`, `DECK_ORDER`, `TWO_DECK_COLUMN_ORDER`, the template's track order, docs and course. |

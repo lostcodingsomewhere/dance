@@ -402,14 +402,16 @@ def test_abletonosc_missing_crossfade_assign_fails_with_doc_pointer(tmp_path: Pa
     assert "fully quit and reopen Live" in (res.fix or "")
 
 
-def test_abletonosc_missing_probe_only_handlers_warns(tmp_path: Path):
+def test_abletonosc_missing_warp_marker_handlers_fails_because_live_loads_use_them(
+    tmp_path: Path,
+):
     root = _fake_abletonosc(tmp_path / "AbletonOSC", drop=_patch_addrs("warp_markers"))
 
     res = doctor.check_abletonosc(root)
 
-    assert res.status == WARN
+    assert res.status == FAIL
     line = next(d for d in res.details if d.startswith("MISSING warp_markers"))
-    assert "only standalone probes" in line
+    assert "sent by osc/bridge.py" in line
     assert "0005-clip-read-and-edit-warp-markers" in (res.fix or "")
 
 
@@ -815,6 +817,26 @@ def test_cli_doctor_exits_nonzero_on_fail_and_prints_fix(healthy_env):
     assert "migration(s) behind" in result.output
     assert "alembic upgrade head" in result.output
     assert _version(db_path) == ["c6e3ba31c1f0"]
+
+
+def test_cli_doctor_fails_on_a_warp_marker_handler_that_live_refuses(healthy_env):
+    from dance.cli import main
+
+    handler_live_12_4_refuses = (
+        "def clip_add_warp_marker(clip, params):\n"
+        "    beat_time, sample_time = float(params[0]), float(params[1])\n"
+        '    clip.add_warp_marker({"beat_time": beat_time, "sample_time": sample_time})\n'
+    )
+    (doctor.DEFAULT_ABLETONOSC_DIR / "abletonosc" / "clip.py").write_text(
+        handler_live_12_4_refuses
+    )
+
+    result = CliRunner().invoke(main, ["doctor"])
+
+    assert result.exit_code == 1, result.output
+    assert "FAIL" in result.output
+    assert "add_warp_marker" in result.output
+    assert "0005-clip-read-and-edit-warp-markers" in "".join(result.output.split())
 
 
 def test_crashing_check_becomes_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

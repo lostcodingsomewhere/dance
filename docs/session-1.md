@@ -63,9 +63,10 @@ If either fails, stop and fix it — nothing below works without this.
 
 Back in the companion app, Booth view.
 
-- [ ] ⌘K → type an artist you know → **Enter** on a result. That loads all 4
-      stems + the mix onto a free scene.
-- [ ] Do it again with a second track. Two scenes now have clips.
+- [ ] ⌘K → type an artist you know → **Enter** on a result. That loads the 4
+      stems + the mix onto a free deck of the page you are on, five cue pads
+      each (rows 1 to 5 start the song at its five cues).
+- [ ] Do it again with a second track. Both decks of the page now have pads.
 - [ ] In the **Song** column of the plan grid, use **⤒A** and **⤒B** instead if
       you want to choose the deck explicitly. A on the left, B on the right —
       same as the crossfader.
@@ -76,8 +77,8 @@ you want them to sound good together as well, pick two in adjacent Camelot keys
 — you have 141 tracks in 5A–8A alone.
 
 - [ ] Wait ~20 seconds after each load. If an amber banner appears under the top
-      strip naming a stem ("bass_a: warped to 646 beats but the other stems came
-      out at 710"), that's the warp audit. Note it; you'll want it in Part 4.
+      strip ("Live did not take the song's own warp grid on 5 pads…"), that's
+      the warp audit. Note it; you'll want it in Part 4.
 
 ---
 
@@ -86,7 +87,7 @@ you want them to sound good together as well, pick two in adjacent Camelot keys
 This is ordinary two-deck DJing. No stems yet. Live warps a full mix reliably,
 so this part is unaffected by the warp problem.
 
-In **Live's** session view, for each of your two scenes:
+In **Live's** session view, for each of your two decks:
 
 - [ ] Mute the 4 stem tracks (Drums/Bass/Vocals/Other) on that deck side.
 - [ ] Unmute the **Mix** track for that side.
