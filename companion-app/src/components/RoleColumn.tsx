@@ -458,6 +458,25 @@ function ZoneLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ServerNotReached({ consequence, onRetry }: { consequence?: string; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-rose-500/40 px-2 py-1.5 text-xs leading-snug text-rose-200"
+    >
+      <span>{["Could not reach the server.", consequence].filter(Boolean).join(" ")}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        onKeyDown={keepActivationKeysFromGrid}
+        className="shrink-0 rounded border border-rose-400/40 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-100 hover:bg-neutral-800 transition-colors"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 /** Recs scored against the plan (Set page). */
 function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
   const recs = usePlanRecs(setId, role);
@@ -465,6 +484,8 @@ function PlanRecsZone({ setId, role }: { setId: number; role: PlanRole }) {
   return (
     <RecsList
       loading={recs.isLoading}
+      failed={recs.isError && recs.data == null}
+      onRetry={() => recs.refetch()}
       recs={recs.data?.recs ?? []}
       role={role}
       mode="plan"
@@ -503,6 +524,8 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
     return (
       <RecsList
         loading={planRecs.isLoading}
+        failed={planRecs.isError && planRecs.data == null}
+        onRetry={() => planRecs.refetch()}
         recs={planRecs.data?.recs ?? []}
         role={role}
         mode="live"
@@ -526,6 +549,8 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
   return (
     <RecsList
       loading={recs.isLoading}
+      failed={recs.isError && recs.data == null}
+      onRetry={() => recs.refetch()}
       recs={recs.data?.recs ?? []}
       role={role}
       mode="live"
@@ -537,6 +562,8 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
 
 function RecsList({
   loading,
+  failed,
+  onRetry,
   recs,
   role,
   mode,
@@ -545,6 +572,8 @@ function RecsList({
   deckBesideTheOriginal,
 }: {
   loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
   recs: ColumnRec[];
   role: PlanRole;
   mode: Mode;
@@ -564,7 +593,8 @@ function RecsList({
         </div>
       )}
       {loading && <div className="text-[10px] text-neutral-600 px-1">…</div>}
-      {!loading && recs.length === 0 && (
+      {!loading && failed && <ServerNotReached onRetry={onRetry} />}
+      {!loading && !failed && recs.length === 0 && (
         <div className="text-[10px] text-neutral-600 italic px-1">no candidates</div>
       )}
       {recs.map((rec, i) => (
@@ -638,6 +668,52 @@ export function PlanBand({
       />
     </div>
   );
+}
+
+function hasPicks(plan: SetPlan | null | undefined): boolean {
+  return Object.values(plan?.queues ?? {}).some((queue) => queue.length > 0);
+}
+
+export function PlanRow({
+  setId,
+  className,
+  children,
+}: {
+  setId: number;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const plan = useSetPlan(setId);
+  if (plan.isError && plan.data == null) {
+    return (
+      <ServerNotReached consequence="Your plan is not shown." onRetry={() => plan.refetch()} />
+    );
+  }
+  return <div className={className}>{children}</div>;
+}
+
+export function RecsRow({
+  setId,
+  mode,
+  className,
+  children,
+}: {
+  setId: number | null;
+  mode: Mode;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const plan = useSetPlan(setId);
+  if (mode === "plan" && plan.isLoading) return null;
+  if (mode === "plan" && plan.data != null && !hasPicks(plan.data)) {
+    return (
+      <p className="px-2 py-6 text-center text-sm leading-relaxed text-neutral-300">
+        Nothing planned yet. Press ⌘K and add a first song. Recommendations follow from what you
+        plan.
+      </p>
+    );
+  }
+  return <div className={className}>{children}</div>;
 }
 
 /** RECS band for one role — live (booth) or plan-scored (set) recommendations. */
@@ -747,7 +823,7 @@ function PlanZone({
       {rows}
       {queue.length === 0 && (
         <div className="flex min-h-[3rem] flex-1 items-center justify-center rounded-md border border-dashed border-neutral-800 px-2 text-[10px] text-neutral-700">
-          nothing queued
+          {plan.isLoading ? "…" : "nothing queued"}
         </div>
       )}
     </div>

@@ -91,7 +91,8 @@ function press(key: string, init: KeyboardEventInit = {}) {
 }
 
 beforeEach(() => {
-  state.plan = { set_id: 1, queues: {} };
+  // The Set view lists recs only once something is planned.
+  state.plan = { set_id: 1, queues: { song: [{ track_id: 900, title: "Planned Song" }] } };
   state.planRecs = [];
   state.liveRecs = [];
   state.hasContext = true;

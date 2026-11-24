@@ -1,65 +1,20 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SetEditor } from "../src/views/SetEditor";
 import { BoothBackend } from "./boothHarness";
-import { API, ROLES, SetsOnTheServer, holdAnswersTo, type Plan, type Role } from "./setsFlowBackend";
-
-const NIGHT_DRIVE = { track_id: 7, title: "Night Drive" };
-const HALF_LIGHT = { track_id: 9, title: "Half Light" };
-const LOW_TIDE = { track_id: 3, title: "Low Tide" };
-const SLOW_BURN = { track_id: 5, title: "Slow Burn" };
-const LIBRARY = [NIGHT_DRIVE, HALF_LIGHT, LOW_TIDE, SLOW_BURN];
-const COLUMN_LABEL: Record<Role, string> = {
-  drums: "Drums",
-  bass: "Bass",
-  vocals: "Vocals",
-  other: "Melody",
-  song: "Song",
-};
-const SEVEN_PICKS: Plan = {
-  drums: [HALF_LIGHT.track_id, NIGHT_DRIVE.track_id],
-  bass: [LOW_TIDE.track_id],
-  vocals: [],
-  other: [SLOW_BURN.track_id],
-  song: [NIGHT_DRIVE.track_id, LOW_TIDE.track_id, HALF_LIGHT.track_id],
-};
-
-function titleOf(trackId: number): string {
-  return LIBRARY.find((song) => song.track_id === trackId)!.title;
-}
-
-function renderSetView() {
-  return render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
-      <SetEditor />
-    </QueryClientProvider>,
-  );
-}
-
-function planned(role: Role): HTMLElement {
-  return screen.getByRole("group", { name: `${COLUMN_LABEL[role]} plan` });
-}
-
-function picksIn(role: Role): string[] {
-  return within(planned(role))
-    .queryAllByRole("group")
-    .map((card) => card.getAttribute("aria-label") ?? "");
-}
-
-function picksOnScreen(): Record<Role, string[]> {
-  return Object.fromEntries(ROLES.map((role) => [role, picksIn(role)])) as Record<Role, string[]>;
-}
-
-function titlesOf(plan: Plan): Record<Role, string[]> {
-  return Object.fromEntries(ROLES.map((role) => [role, plan[role].map(titleOf)])) as Record<
-    Role,
-    string[]
-  >;
-}
+import { API, SetsOnTheServer, holdAnswersTo, type Role } from "./setsFlowBackend";
+import {
+  HALF_LIGHT,
+  LIBRARY,
+  LOW_TIDE,
+  NIGHT_DRIVE,
+  SEVEN_PICKS,
+  picksIn,
+  picksOnScreen,
+  planned,
+  renderSetView,
+  titlesOf,
+} from "./setsFlowView";
 
 function numberedPicksIn(role: Role): string[] {
   return within(planned(role))
