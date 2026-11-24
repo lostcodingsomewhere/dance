@@ -22,6 +22,8 @@ const SONG_COLUMN = "mix";
 const SLOWER_THAN_LIVE_BPM = 124;
 const BOTH_DECKS_ON_CUE_ONE = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0 };
 const SIDES = ["A", "B"] as const;
+const SMALLEST_TEXT_PX = 11;
+const ROOT_FONT_PX = 16;
 
 let backend: BoothBackend;
 let inLive: Cell[];
@@ -131,6 +133,24 @@ function expectToGiveWay(chip: HTMLElement): void {
   expect(chip.className).toMatch(/(^|\s)min-w-/);
 }
 
+interface SizedText {
+  shows: string;
+  px: number;
+}
+
+function sizedTextsIn(root: HTMLElement): SizedText[] {
+  const sized: SizedText[] = [];
+  for (const element of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
+    const shows = element.textContent ?? "";
+    for (const name of Array.from(element.classList)) {
+      const size = /^text-\[([\d.]+)(px|rem)\]$/.exec(name);
+      if (size) sized.push({ shows, px: Number(size[1]) * (size[2] === "rem" ? ROOT_FONT_PX : 1) });
+    }
+    if (element.style?.fontSize) sized.push({ shows, px: parseFloat(element.style.fontSize) });
+  }
+  return sized;
+}
+
 beforeEach(async () => {
   inLive = slowerThanLive([
     ...songOn(0, "a", ON_DECK_A),
@@ -183,5 +203,27 @@ describe("a deck panel in the middle of a set", () => {
       for (const cue of cues) expect(cue).toHaveClass("h-7");
     }
     expect(screen.getByRole("button", { name: "Fire riser" })).toHaveClass("h-6");
+  });
+
+  it("shows no text under 11 px", () => {
+    const sized = sizedTextsIn(screen.getByTestId("two-deck-strip"));
+    const everyKindOfTextOnADeck = [
+      "▶ live",
+      "armed · 6",
+      "PFL",
+      "HPF",
+      "REV",
+      "DLY",
+      "Test Artist",
+      "SYNC",
+      "mixed",
+      `◇${ON_DECK_A.title}`,
+      "1 intro",
+      "▷",
+      "—:—4:00",
+      "▲ Riser",
+    ];
+    expect(sized.map(({ shows }) => shows)).toEqual(expect.arrayContaining(everyKindOfTextOnADeck));
+    expect(sized.filter(({ px }) => px < SMALLEST_TEXT_PX)).toEqual([]);
   });
 });

@@ -186,7 +186,7 @@ export function TwoDeckStrip() {
             disabled={fxFire.isPending}
             title="Fire the Riser one-shot on the next bar"
             aria-label="Fire riser"
-            className="h-6 whitespace-nowrap text-[10px] font-bold uppercase tracking-widest leading-none rounded px-2.5 border transition-colors bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
+            className="h-6 whitespace-nowrap text-[11px] font-bold uppercase tracking-widest leading-none rounded px-2.5 border transition-colors bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
           >
             ▲ Riser
           </button>
@@ -525,7 +525,7 @@ function DeckCues({
             aria-pressed={isPlaying}
             aria-label={`Deck ${sideLabel} cue ${cue}${label ? `, ${label}` : ""}`}
             title={`Play Deck ${sideLabel} from cue ${cue}${label ? ` (${label})` : ""}`}
-            className={`h-7 min-w-0 flex-1 truncate rounded px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wide transition-opacity ${sectionTone(label).head} ${
+            className={`h-7 min-w-0 flex-1 truncate rounded px-1.5 text-[11px] font-semibold uppercase leading-none tracking-wide transition-opacity ${sectionTone(label).head} ${
               isPlaying ? "ring-2 ring-emerald-300" : "opacity-70 hover:opacity-100"
             }`}
           >
@@ -617,13 +617,13 @@ function DeckHeader({
         DECK {sideLabel}
       </div>
       {firing && (
-        <span className="shrink-0 text-[10px] text-emerald-300 uppercase tracking-widest animate-pulse">
+        <span className="shrink-0 text-[11px] text-emerald-300 uppercase tracking-widest animate-pulse">
           ▶ live
         </span>
       )}
       {armedSceneIdx != null && (
         <span
-          className="shrink-0 text-[10px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
+          className="shrink-0 text-[11px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
           title={`▶ will fire scene ${armedSceneIdx + 1} — the track you last loaded onto Deck ${sideLabel}`}
           data-testid={`armed-${side}`}
         >
@@ -646,7 +646,7 @@ function DeckHeader({
               : `Play Deck ${sideLabel} (fire scene ${fireSceneIdx + 1})`
         }
         aria-label={`Play Deck ${sideLabel}`}
-        className={`h-6 min-w-6 text-[10px] leading-none rounded px-1.5 border transition-colors ${
+        className={`h-6 min-w-6 text-[11px] leading-none rounded px-1.5 border transition-colors ${
           firing
             ? "bg-emerald-500/40 text-emerald-50 border-emerald-300/60"
             : "bg-neutral-900 text-neutral-300 hover:bg-emerald-900/40 hover:text-emerald-200 border-neutral-700 disabled:opacity-40 disabled:hover:bg-neutral-900 disabled:hover:text-neutral-300"
@@ -659,7 +659,7 @@ function DeckHeader({
         onClick={onStopDeck}
         title={`Stop Deck ${sideLabel} (halt all of this side's clips)`}
         aria-label={`Stop Deck ${sideLabel}`}
-        className="h-6 min-w-6 text-[10px] leading-none rounded px-1.5 border bg-neutral-900 text-neutral-400 hover:bg-rose-950/40 hover:text-rose-200 border-neutral-700 transition-colors"
+        className="h-6 min-w-6 text-[11px] leading-none rounded px-1.5 border bg-neutral-900 text-neutral-400 hover:bg-rose-950/40 hover:text-rose-200 border-neutral-700 transition-colors"
       >
         ■
       </button>
@@ -675,7 +675,7 @@ function DeckHeader({
         }
         aria-pressed={pflActive}
         aria-label={`PFL Deck ${sideLabel}`}
-        className={`h-6 text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+        className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
           pflActive
             ? "bg-amber-400/30 text-amber-100 border-amber-300/60"
             : "text-neutral-500 hover:text-amber-200 border-neutral-700 hover:border-amber-400/40"
@@ -700,7 +700,7 @@ function DeckHeader({
           }
           aria-pressed={filterActive}
           aria-label={`HPF Deck ${sideLabel}`}
-          className={`h-6 text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
             filterActive
               ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
               : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
@@ -720,7 +720,7 @@ function DeckHeader({
           }
           aria-pressed={reverbActive}
           aria-label={`Reverb throw Deck ${sideLabel}`}
-          className={`h-6 text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
             reverbActive
               ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
               : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
@@ -740,7 +740,7 @@ function DeckHeader({
           }
           aria-pressed={delayActive}
           aria-label={`Delay throw Deck ${sideLabel}`}
-          className={`h-6 text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
             delayActive
               ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
               : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
@@ -760,14 +760,14 @@ function DeckHeader({
               {anchorCell.artist}
             </div>
           )}
-          <div className="text-[10px] font-mono tabular-nums text-neutral-500 min-w-0 overflow-hidden whitespace-nowrap flex items-baseline gap-1.5">
+          <div className="text-[11px] font-mono tabular-nums text-neutral-500 min-w-0 overflow-hidden whitespace-nowrap flex items-baseline gap-1.5">
             {sourceBpm != null && <span>{sourceBpm.toFixed(0)}</span>}
             {showSync && (
               <button
                 type="button"
                 onClick={() => onSyncTempo(Number(sourceBpm!.toFixed(2)))}
                 title={`Set master tempo to ${sourceBpm!.toFixed(1)} BPM (currently ${projectTempo!.toFixed(1)})`}
-                className="h-6 text-[9px] font-bold leading-none rounded px-1 bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 transition-colors"
+                className="h-6 text-[11px] font-bold leading-none rounded px-1 bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 transition-colors"
               >
                 SYNC
               </button>
@@ -783,7 +783,7 @@ function DeckHeader({
           </div>
           {!isPureAnchor && (
             <span
-              className="text-[10px] uppercase tracking-wider text-amber-400/70"
+              className="text-[11px] uppercase tracking-wider text-amber-400/70"
               title="Stems from multiple source tracks — not a single-song anchor"
             >
               mixed
@@ -804,7 +804,7 @@ function DeckHeader({
               }
               aria-label={`Play original mix on Deck ${sideLabel}`}
               aria-pressed={mixFiring}
-              className={`h-6 shrink-[100] min-w-7 text-[9px] font-mono uppercase tracking-wider leading-none rounded px-1.5 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
+              className={`h-6 shrink-[100] min-w-7 text-[11px] font-mono uppercase tracking-wider leading-none rounded px-1.5 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
                 mixFiring
                   ? "bg-emerald-500/30 text-emerald-100 border-emerald-400/60"
                   : "text-neutral-400 hover:text-neutral-100 border-neutral-700 hover:border-neutral-500"
@@ -922,7 +922,7 @@ function DeckWaveform({
         durationSeconds={duration ?? undefined}
         onSeek={anchorCell ? handleSeek : undefined}
       />
-      <div className="flex items-baseline justify-between text-[10px] font-mono tabular-nums text-neutral-500">
+      <div className="flex items-baseline justify-between text-[11px] font-mono tabular-nums text-neutral-500">
         <span>
           {elapsedSec != null && duration != null
             ? formatDuration(elapsedSec % duration)
