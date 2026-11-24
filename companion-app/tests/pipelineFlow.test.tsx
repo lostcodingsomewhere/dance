@@ -198,4 +198,25 @@ describe("failed tracks in the Pipeline view", () => {
     expect(within(failed).getByRole("button", { name: "error" })).toBeInTheDocument();
     expect(within(failed).getByRole("button", { name: "Retry" })).toBeEnabled();
   });
+
+  it("shows the first sentence of a long error and opens the rest on a click", async () => {
+    backend = new BoothBackend(aLibraryOf([FAILED, FILE_MISSING]));
+    renderPipelineView();
+
+    const failed = await rowOf("Night Drive");
+    const reason = within(failed).getByRole("button", { name: OUT_OF_MEMORY_FIRST_SENTENCE });
+    expect(reason).toHaveAttribute("aria-expanded", "false");
+    expect(within(failed).queryByText(/PYTORCH_MPS_HIGH_WATERMARK_RATIO/)).not.toBeInTheDocument();
+
+    fireEvent.click(reason);
+
+    expect(within(failed).getByRole("button", { name: OUT_OF_MEMORY })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    const short = await rowOf("Half Light");
+    expect(within(short).getByText(FILE_IS_GONE)).toBeInTheDocument();
+    expect(within(short).queryByRole("button", { name: FILE_IS_GONE })).not.toBeInTheDocument();
+  });
 });

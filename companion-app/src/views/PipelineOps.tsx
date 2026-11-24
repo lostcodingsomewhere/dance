@@ -35,6 +35,7 @@ const POLL_MS = 3000;
 const RECENT_LIMIT = 30;
 const FILTERED_LIMIT = 200;
 const REFUSAL_STAYS_MS = 12000;
+const LONGEST_REASON_SHOWN_WHOLE = 60;
 
 const STAGE_COLOR: Record<string, string> = {
   pending: "bg-neutral-800 text-neutral-400",
@@ -71,6 +72,32 @@ function formatRelative(iso: string | null): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function firstSentence(text: string): string {
+  const firstLine = text.trim().split("\n")[0];
+  const end = firstLine.search(/[.!?](\s|$)/);
+  return end === -1 ? firstLine : firstLine.slice(0, end + 1);
+}
+
+function ErrorReason({ reason }: { reason: string }) {
+  const [open, setOpen] = useState(false);
+  if (reason.length <= LONGEST_REASON_SHOWN_WHOLE) {
+    return <div className="text-rose-400 text-xs mt-0.5 truncate">{reason}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={() => setOpen((wasOpen) => !wasOpen)}
+      title={open ? "Show less" : "Show the full error"}
+      className={`block max-w-md text-left text-rose-400 hover:text-rose-300 text-xs mt-0.5 underline decoration-dotted underline-offset-2 ${
+        open ? "whitespace-pre-wrap break-words" : "truncate"
+      }`}
+    >
+      {open ? reason : firstSentence(reason)}
+    </button>
+  );
 }
 
 // =============================================================================
@@ -1068,11 +1095,7 @@ export function PipelineOps() {
                               — {t.artist ?? "?"}
                             </span>
                           </div>
-                          {t.error_message && (
-                            <div className="text-rose-400 text-xs mt-0.5 truncate">
-                              {t.error_message}
-                            </div>
-                          )}
+                          {t.error_message && <ErrorReason reason={t.error_message} />}
                         </td>
                         <td className="px-3 py-2">
                           <button
