@@ -135,8 +135,19 @@ dance export-set            # the active set
 dance export-set 3 --out ~/Music/Dance/Sets/friday.als
 ```
 
-`POST /api/v1/sets/{id}/als` does the same. The file holds the set's whole plan,
-laid out in pages of five scene rows (what the APC40 shows at once):
+`POST /api/v1/sets/{id}/als` does the same. The command and the route write
+`<set name>.als` and replace it on the next run.
+
+The **Open in Live** button in the app's Set view does both steps in one click. It
+writes the plan to a new file, `<set name> <date> <time>.als`, and opens that file in
+Live Standard or Suite (`POST /api/v1/files/open-in-live`), never Lite. Click it again
+after changing the plan and Live switches to the new plan. A new file each time
+(`new_file` on the route) means the file Live has open is never rewritten. If Live asks
+to save the Set it had open, either answer is safe: the save lands in the earlier file.
+Earlier files stay in `als_output_dir` until you delete them.
+
+The file holds the set's whole plan, laid out in pages of five scene rows (what the
+APC40 shows at once):
 
 - **Songs fill pages in plan order.** The first song goes on deck A of page 1, the
   second on deck B, the third on deck A of page 2. Queue an original and then its

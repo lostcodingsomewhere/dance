@@ -593,6 +593,11 @@ class AlsExportRequest(BaseModel):
     out_path: str | None = None
 
 
+class SetAlsExportRequest(BaseModel):
+    out_path: str | None = None
+    new_file: bool = False
+
+
 class SkippedPickOut(BaseModel):
     track_id: int
     role: str
@@ -833,6 +838,7 @@ class JobOut(BaseModel):
 __all__ = [
     "AbletonStateOut",
     "AlsExportRequest",
+    "SetAlsExportRequest",
     "AlsExportResult",
     "AnalysisOut",
     "ColumnRecOut",

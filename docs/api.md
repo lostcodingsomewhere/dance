@@ -110,7 +110,7 @@ A **Set is its plan**. The plan is per-role queues of source tracks the DJ inten
 | GET    | `/api/v1/sets/{id}/plan`                          | -                                         | `SetPlanOut`            | 404 |
 | PUT    | `/api/v1/sets/{id}/plan`                          | `SetPlanUpdateRequest`                    | `SetPlanOut`            | 400, 404 |
 | POST   | `/api/v1/sets/{id}/plan/append`                   | `SetPlanAppendRequest`                    | `SetPlanOut`            | 400, 404 |
-| POST   | `/api/v1/sets/{id}/als` | `AlsExportRequest` (`out_path?`) | `SetAlsExportResult` (`out_path`, `page_count`, `scene_count`, `clip_count`, `skipped`): the whole plan as one Live Set, see `als-export.md` | 400 (empty plan, or nothing exportable), 403 (outside `als_output_dir`), 404 |
+| POST   | `/api/v1/sets/{id}/als` | `SetAlsExportRequest` (`out_path?`, `new_file?`: write `<set name> <date> <time>.als` and leave earlier files alone; the default is `<set name>.als`, replaced each time) | `SetAlsExportResult` (`out_path`, `page_count`, `scene_count`, `clip_count`, `skipped`): the whole plan as one Live Set, see `als-export.md` | 400 (empty plan, or nothing exportable), 403 (outside `als_output_dir`), 404 |
 | GET    | `/api/v1/sets/{id}/plan-recs`                     | `role` (req), `k`                         | `ColumnRecsResponse`    | 400, 404 |
 | POST   | `/api/v1/sets/{id}/tracks`                        | `SetTrackAddRequest`                      | `SetOut`                | 400, 404 |
 | PATCH  | `/api/v1/sets/{id}/tracks/{track_id}`             | `SetTrackUpdateRequest`                   | `SetOut`                | 400, 404 |
@@ -192,6 +192,7 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | Method | Path                | Body              | Response               | 4xx |
 |--------|---------------------|-------------------|------------------------|-----|
 | POST   | `/api/v1/files/reveal` | `{"path": str}` | `{"ok": true, "command": str}` | 400, 403, 404, 500 |
+| POST   | `/api/v1/files/open-in-live` | `{"path": str}` (an `.als` inside `als_output_dir`) | `{"ok": true, "app": str}`: opens the Set in the installed Live Standard or Suite, named by its app path so Lite is never picked | 400, 403, 404, 409 (no usable Live found) |
 
 Allowlist: `path` must live under `library_dir`, `stems_dir`, or `als_output_dir` (`files.py:26`) — otherwise 403. Uses `open -R` (macOS), `explorer /select,` (Windows), or `xdg-open` (Linux).
 

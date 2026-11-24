@@ -802,10 +802,45 @@ export function exportAls(
   });
 }
 
+export interface SkippedPick {
+  track_id: number;
+  role: string;
+  reason: string;
+}
+
+export interface SetAlsExportResult {
+  ok: boolean;
+  out_path: string;
+  size_bytes: number;
+  page_count: number;
+  scene_count: number;
+  clip_count: number;
+  skipped: SkippedPick[];
+}
+
+export function writeSetAsNewLiveSet(setId: number): Promise<SetAlsExportResult> {
+  return request<SetAlsExportResult>(`/sets/${setId}/als`, {
+    method: "POST",
+    body: JSON.stringify({ new_file: true }),
+  });
+}
+
 // Files --------------------------------------------------------------------
 
 export function revealPath(path: string): Promise<{ ok: true }> {
   return request<{ ok: true }>("/files/reveal", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export interface OpenInLiveResult {
+  ok: boolean;
+  app: string;
+}
+
+export function openInLive(path: string): Promise<OpenInLiveResult> {
+  return request<OpenInLiveResult>("/files/open-in-live", {
     method: "POST",
     body: JSON.stringify({ path }),
   });

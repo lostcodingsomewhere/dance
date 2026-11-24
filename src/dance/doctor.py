@@ -615,6 +615,32 @@ def find_live_installs(apps_dirs: Sequence[Path]) -> list[LiveInstall]:
     return out
 
 
+def live_install_for_sets(
+    apps_dirs: Sequence[Path] | None = None,
+    template: TemplateInfo | None = None,
+) -> LiveInstall | None:
+    template = template or read_template_info()
+    template_version = _version_tuple(template.version)
+    usable = [
+        install
+        for install in find_live_installs(
+            list(apps_dirs if apps_dirs is not None else DEFAULT_APPS_DIRS)
+        )
+        if not install.error
+        and install.edition not in _LIMITED_EDITIONS
+        and template_version
+        and _version_tuple(install.version) >= template_version
+    ]
+    same_build = [
+        install
+        for install in usable
+        if _version_tuple(install.version) == template_version
+        and install.build_hash == template.revision[:10]
+    ]
+    ranked = same_build or sorted(usable, key=lambda install: _version_tuple(install.version))
+    return ranked[-1] if ranked else None
+
+
 def check_live_installs(
     apps_dirs: Sequence[Path] | None = None,
     template: TemplateInfo | None = None,

@@ -21,8 +21,8 @@ from dance.als.generator import AlsExportError, AlsOutsideDirError
 from dance.als.prepared_set import export_set
 from dance.api.deps import fullmix_analysis, get_session, get_settings
 from dance.api.schemas import (
-    AlsExportRequest,
     ColumnRecsResponse,
+    SetAlsExportRequest,
     SetAlsExportResult,
     SetCreateRequest,
     SetOut,
@@ -696,14 +696,15 @@ def get_plan_recs(
 @router.post("/{set_id}/als", response_model=SetAlsExportResult)
 def export_set_als(
     set_id: int,
-    body: AlsExportRequest | None = None,
+    body: SetAlsExportRequest | None = None,
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> SetAlsExportResult:
     set_row = _require_set(session, set_id)
     out_path = Path(body.out_path) if body is not None and body.out_path else None
+    new_file = body.new_file if body is not None else False
     try:
-        exported = export_set(session, settings, set_row, out_path)
+        exported = export_set(session, settings, set_row, out_path, new_file)
     except AlsOutsideDirError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except AlsExportError as exc:

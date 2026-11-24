@@ -8,10 +8,13 @@
  */
 
 import type React from "react";
+import { useRef } from "react";
 
 import { CueStrip } from "../components/CueStrip";
 import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
+import { SetExportStrip } from "../components/SetExportStrip";
 import { SetMenu } from "../components/SetMenu";
+import { useOpenSetInLive } from "../hooks/useSetExport";
 import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
 import { store } from "../store";
 import type { DanceSet } from "../types";
@@ -37,23 +40,54 @@ export function SetEditor() {
 }
 
 function Header({ set }: { set: DanceSet }) {
+  const openSetInLive = useOpenSetInLive();
+  const openButton = useRef<HTMLButtonElement>(null);
+  const finishedForThisSet =
+    openSetInLive.variables === set.id && (openSetInLive.isSuccess || openSetInLive.isError);
+
+  function dismissResult() {
+    openSetInLive.reset();
+    openButton.current?.focus();
+  }
+
   return (
-    <div className="flex items-center gap-3 px-6 py-3 border-b border-neutral-800">
-      <button
-        type="button"
-        onClick={() => store.setView("booth")}
-        className="text-xs text-neutral-500 hover:text-neutral-100 shrink-0"
-      >
-        ← Booth
-      </button>
-      <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
-        Set
-      </span>
-      <SetMenu set={set} variant="full" />
-      <span className="ml-auto text-[11px] text-neutral-500 shrink-0">
-        queue stems per role · ＋ from recs or ⌘K
-      </span>
-    </div>
+    <>
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-neutral-800">
+        <button
+          type="button"
+          onClick={() => store.setView("booth")}
+          className="text-xs text-neutral-500 hover:text-neutral-100 shrink-0"
+        >
+          ← Booth
+        </button>
+        <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
+          Set
+        </span>
+        <SetMenu set={set} variant="full" />
+        <span className="ml-auto hidden lg:inline text-[11px] text-neutral-500 shrink-0">
+          queue stems per role · ＋ from recs or ⌘K
+        </span>
+        <button
+          ref={openButton}
+          type="button"
+          onClick={() => openSetInLive.mutate(set.id)}
+          disabled={openSetInLive.isPending}
+          title="Write this plan as a new Live Set file and open it in Ableton Live"
+          className="h-7 px-3 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs shrink-0 disabled:opacity-50"
+        >
+          {openSetInLive.isPending ? "Opening…" : "Open in Live"}
+        </button>
+      </div>
+      {finishedForThisSet && (
+        <SetExportStrip
+          key={openSetInLive.submittedAt}
+          setId={set.id}
+          sent={openSetInLive.data}
+          failure={openSetInLive.error}
+          onDismiss={dismissResult}
+        />
+      )}
+    </>
   );
 }
 

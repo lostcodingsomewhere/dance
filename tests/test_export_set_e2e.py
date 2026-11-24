@@ -253,3 +253,34 @@ def test_the_command_writes_the_same_set_and_bad_requests_are_refused(three_song
     assert client.post(f"{API}/sets/999999/als", json={}).status_code == 404
     empty_set = _planned_set(client, {})
     assert client.post(f"{API}/sets/{empty_set}/als", json={}).status_code == 400
+
+
+def test_a_new_file_each_time_leaves_what_live_saved_in_the_earlier_one(three_song_library):
+    client, ids = three_song_library
+    set_id = _planned_set(client, {"song": [ids["first_song"]]})
+    first_path = Path(
+        client.post(f"{API}/sets/{set_id}/als", json={"new_file": True}).json()["out_path"]
+    )
+    saved_by_live = b"the open Set, saved by Live over its own file"
+    first_path.write_bytes(saved_by_live)
+
+    replanned = client.put(
+        f"{API}/sets/{set_id}/plan",
+        json={"queues": {"song": [ids["first_song"], ids["second_song"]]}},
+    )
+    assert replanned.status_code == 200, replanned.text
+    second_path = Path(
+        client.post(f"{API}/sets/{set_id}/als", json={"new_file": True}).json()["out_path"]
+    )
+
+    assert second_path != first_path
+    assert first_path.read_bytes() == saved_by_live
+    output_dir = Path(get_settings().als_output_dir).resolve()
+    for path in (first_path, second_path):
+        assert path.resolve().parent == output_dir
+        assert path.name.startswith("Friday night ") and path.suffix == ".als"
+    assert sorted(_clips_by_row(_live_set(second_path), "Drums B")) == [0, 1, 2, 3, 4]
+
+    one_name = client.post(f"{API}/sets/{set_id}/als", json={}).json()["out_path"]
+    assert Path(one_name).name == "Friday night.als"
+    assert client.post(f"{API}/sets/{set_id}/als", json={}).json()["out_path"] == one_name
