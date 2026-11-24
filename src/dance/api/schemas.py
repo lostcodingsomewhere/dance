@@ -593,6 +593,22 @@ class AlsExportRequest(BaseModel):
     out_path: str | None = None
 
 
+class SkippedPickOut(BaseModel):
+    track_id: int
+    role: str
+    reason: str
+
+
+class SetAlsExportResult(BaseModel):
+    ok: bool
+    out_path: str
+    size_bytes: int
+    page_count: int
+    scene_count: int
+    clip_count: int
+    skipped: list[SkippedPickOut] = Field(default_factory=list)
+
+
 class AlsExportResult(BaseModel):
     """Response for ``POST /api/v1/tracks/{id}/als``."""
 

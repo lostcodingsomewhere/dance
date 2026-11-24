@@ -1,15 +1,28 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from dance.core.database import Region, RegionSource, RegionType, SectionLabel
+from sqlalchemy.orm import Session
+
+from dance.core.database import (
+    AudioAnalysis,
+    Region,
+    RegionSource,
+    RegionType,
+    SectionLabel,
+    StemFile,
+    StemKind,
+)
 
 PAD_COUNT = 5
 BEATS_PER_BAR = 4
 LOOP_BAR_CHOICES = (16, 8, 4)
 SILENT_WINDOW_BARS = 8
 SILENT_BELOW_PRESENT_FRACTION = 0.2
+MIX_ROLE = "mix"
+PAD_ROLE_ORDER = [*(kind.value for kind in StemKind), MIX_ROLE]
 
 PHRASE_TYPE_TO_SECTION: dict[str, SectionLabel] = {
     "intro": SectionLabel.INTRO,
@@ -169,3 +182,73 @@ def pad_region(
         snapped_to="bar",
         source=source.value,
     )
+
+
+@dataclass(frozen=True)
+class TrackPad:
+    slot: int
+    role: str
+    stem_file_id: int | None
+    position_ms: int
+    length_ms: int | None
+    length_bars: int | None
+    section_label: str | None
+    source: str
+    silent: bool
+
+
+def track_bpm(session: Session, track_id: int) -> float:
+    bpm = (
+        session.query(AudioAnalysis.bpm)
+        .filter(AudioAnalysis.track_id == track_id, AudioAnalysis.stem_file_id.is_(None))
+        .scalar()
+    )
+    return float(bpm or 0.0)
+
+
+def stem_ids_by_role(session: Session, track_id: int) -> dict[str, int | None]:
+    roles: dict[str, int | None] = {MIX_ROLE: None}
+    for stem_id, kind in session.query(StemFile.id, StemFile.kind).filter(
+        StemFile.track_id == track_id
+    ):
+        roles[kind] = stem_id
+    return roles
+
+
+def load_track_pads(session: Session, track_id: int) -> list[TrackPad]:
+    bpm = track_bpm(session, track_id)
+    role_by_stem_id = {
+        stem_id: role for role, stem_id in stem_ids_by_role(session, track_id).items()
+    }
+    presence_by_stem_id = {
+        stem_file_id: json.loads(intervals)
+        for stem_file_id, intervals in session.query(
+            AudioAnalysis.stem_file_id, AudioAnalysis.presence_intervals
+        )
+        .join(StemFile, StemFile.id == AudioAnalysis.stem_file_id)
+        .filter(StemFile.track_id == track_id)
+        if intervals is not None
+    }
+    rows = session.query(Region).filter(
+        Region.track_id == track_id, Region.region_type == RegionType.PAD.value
+    )
+    pads = [
+        TrackPad(
+            slot=row.slot,
+            role=role_by_stem_id[row.stem_file_id],
+            stem_file_id=row.stem_file_id,
+            position_ms=row.position_ms,
+            length_ms=row.length_ms,
+            length_bars=row.length_bars,
+            section_label=row.section_label,
+            source=row.source,
+            silent=bpm > 0
+            and row.stem_file_id in presence_by_stem_id
+            and is_silent(presence_by_stem_id[row.stem_file_id], row.position_ms, bpm),
+        )
+        for row in rows
+        if row.stem_file_id in role_by_stem_id
+        and row.slot is not None
+        and role_by_stem_id[row.stem_file_id] in PAD_ROLE_ORDER
+    ]
+    return sorted(pads, key=lambda pad: (PAD_ROLE_ORDER.index(pad.role), pad.slot))

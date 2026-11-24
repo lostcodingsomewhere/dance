@@ -27,8 +27,8 @@ const EXPANDED_ROWS = 8;
 
 /**
  * The 8-column scene grid — the canonical mirror of what the APC40 is
- * touching. Columns are the 8 stem decks in fader order (drums A · drums
- * B · bass A · bass B · vocals A · vocals B · other A · other B); rows
+ * touching. Columns are the 8 stem decks in fader order (drums A · bass
+ * A · vocals A · other A · drums B · bass B · vocals B · other B); rows
  * are scenes. The mix/anchor reference no longer has a column here — it
  * lives as a per-deck chip in the TwoDeckStrip header. Cells in the same
  * row can come from different source tracks (the live-remixing model);
@@ -76,11 +76,11 @@ export function SceneGrid() {
   // philosophy is "the user decides, not autopilot", so we only nudge.
   const [mudWarning, setMudWarning] = useState<StemRole | null>(null);
   const mudTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Two-deck column order: 8 columns in APC40 fader order (drums A · drums
-  // B · bass A · …). Drag-to-reorder is removed for now (the deck
-  // semantics break if columns are reordered freely — drums_a doesn't
-  // map cleanly to the bass spot). The mix/anchor reference is not a grid
-  // column; it lives in the TwoDeckStrip header.
+  // Two-deck column order: 8 columns in APC40 fader order (drums A · bass
+  // A · vocals A · other A · drums B · …). Drag-to-reorder is removed for
+  // now (the deck semantics break if columns are reordered freely —
+  // drums_a doesn't map cleanly to the bass spot). The mix/anchor
+  // reference is not a grid column; it lives in the TwoDeckStrip header.
   const stemColumns = TWO_DECK_COLUMN_ORDER;
 
   const columns = deckMap.data?.columns ?? null;

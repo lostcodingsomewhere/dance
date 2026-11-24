@@ -27,6 +27,7 @@ from dance.osc.listener import AbletonOSCListener
 from dance.pipeline.utils.grid_metrics import WarpMarker
 
 # Deck columns as the bridge provisions them (drums_a=0 … mix_b=9).
+# Positional, so it only fits a Set whose deck tracks are tracks 0-9 in this order.
 DECK_COLUMNS: dict[str, int] = {k: i for i, k in enumerate(AbletonBridge._DECK_KINDS)}
 
 WARP_MARKER_TIMES = "/live/clip/get/warp_marker_times"

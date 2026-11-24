@@ -100,6 +100,7 @@ dance tag [--deep]                        # CLAP zero-shot or Qwen2-Audio
 dance embed [--all]                       # re-embed tracks on an old CLAP scheme
 dance build-graph                         # build recommendation edges
 dance export-als <id> | --all             # generate Live Set(s)
+dance export-set [set_id]                 # a set's whole plan as one Live Set, in pages of five pads
 dance doctor [--json]                     # read-only health check (DB, ffmpeg, Live, AbletonOSC)
 
 # Servers

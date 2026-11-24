@@ -42,8 +42,8 @@ ROLES = ["drums", "bass", "vocals", "other", "mix"]
 API = API_PREFIX
 
 
-def _song_with_six_sections() -> tuple[np.ndarray, TrackSpec]:
-    spec = TrackSpec(bpm=BPM, bars=BARS_PER_BLOCK * len(BLOCK_LEVELS), seed=7)
+def _song_with_six_sections(bpm: float = BPM, seed: int = 7) -> tuple[np.ndarray, TrackSpec]:
+    spec = TrackSpec(bpm=bpm, bars=BARS_PER_BLOCK * len(BLOCK_LEVELS), seed=seed)
     seconds = np.arange(spec.total_samples) / spec.sample_rate
     sustained_tone = (0.2 * np.sin(2 * np.pi * 330.0 * seconds)).astype(np.float32)
     layers = kick_layer(spec) + bass_layer(spec) + hat_layer(spec) + sustained_tone

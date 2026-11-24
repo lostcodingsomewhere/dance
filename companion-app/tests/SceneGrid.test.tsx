@@ -93,10 +93,8 @@ function fillRow(
 // 9 deck columns (8 stem decks A/B per role + mix) — the post-deck-pair
 // reality. Tests use this constant rather than re-typing it everywhere.
 const DECK_COLUMNS: Record<string, number> = {
-  drums_a: 0, drums_b: 1,
-  bass_a: 2, bass_b: 3,
-  vocals_a: 4, vocals_b: 5,
-  other_a: 6, other_b: 7,
+  drums_a: 0, bass_a: 1, vocals_a: 2, other_a: 3,
+  drums_b: 4, bass_b: 5, vocals_b: 6, other_b: 7,
   mix: 8,
 };
 

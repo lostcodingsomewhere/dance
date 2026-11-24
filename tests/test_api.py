@@ -3593,7 +3593,7 @@ def test_deck_map_stem_lookup_handles_side_b_and_mix(
     session.commit()
 
     fake_bridge.deck_state_return = {
-        "columns": {"vocals_b": 5, "mix_a": 8},
+        "columns": {"vocals_b": 6, "mix_a": 8},
         "cells": [
             {"scene_index": 1, "kind": "vocals_b", "track_id": 4343},
             # The mix cell has no StemFile row — must stay null, not error.

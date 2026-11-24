@@ -25,8 +25,8 @@ vi.mock("../src/hooks/useTransport", () => ({
 }));
 
 const ALIGNED = {
-  drums_a: 0, drums_b: 1, bass_a: 2, bass_b: 3,
-  vocals_a: 4, vocals_b: 5, other_a: 6, other_b: 7,
+  drums_a: 0, bass_a: 1, vocals_a: 2, other_a: 3,
+  drums_b: 4, bass_b: 5, vocals_b: 6, other_b: 7,
   mix_a: 8, mix_b: 9,
 };
 // Three of the user's own tracks first — the layout that used to lie.

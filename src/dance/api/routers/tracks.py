@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -34,7 +34,6 @@ from dance.core.database import (
     RegionType,
     SessionPlay,
     StemFile,
-    StemKind,
     Track,
     TrackEdge,
 )
@@ -42,13 +41,15 @@ from dance.pipeline.utils.pads import (
     PAD_COUNT,
     Section,
     bar_ms,
-    is_silent,
+    load_track_pads,
     pad_at,
     pad_region,
     pick_pads,
     section_containing,
     section_from_phrase,
     snap_to_bar,
+    stem_ids_by_role,
+    track_bpm,
 )
 from dance.recommender.dedup import dedupe_track_rows
 
@@ -74,9 +75,7 @@ _MAX_NUM_PEAKS = 1000
 # 3 copies; 3x leaves headroom without needing a second query.
 _DEDUPE_OVERFETCH = 3
 
-_MIX_ROLE = "mix"
 _EVERY_ROLE = "all"
-_PAD_ROLE_ORDER = [*(kind.value for kind in StemKind), _MIX_ROLE]
 
 
 @router.get("/search", response_model=list[TrackOut])
@@ -210,26 +209,8 @@ def _track_or_404(session: Session, track_id: int) -> Track:
     return track
 
 
-def _track_bpm(session: Session, track_id: int) -> float:
-    bpm = (
-        session.query(AudioAnalysis.bpm)
-        .filter(AudioAnalysis.track_id == track_id, AudioAnalysis.stem_file_id.is_(None))
-        .scalar()
-    )
-    return float(bpm or 0.0)
-
-
-def _stem_ids_by_role(session: Session, track_id: int) -> dict[str, int | None]:
-    roles: dict[str, int | None] = {_MIX_ROLE: None}
-    for stem_id, kind in session.query(StemFile.id, StemFile.kind).filter(
-        StemFile.track_id == track_id
-    ):
-        roles[kind] = stem_id
-    return roles
-
-
 def _pad_targets(session: Session, track_id: int, role: str) -> list[int | None]:
-    stem_ids = _stem_ids_by_role(session, track_id)
+    stem_ids = stem_ids_by_role(session, track_id)
     if role == _EVERY_ROLE:
         return list(stem_ids.values())
     if role not in stem_ids:
@@ -264,37 +245,7 @@ def _delete_pad(session: Session, track_id: int, stem_file_id: int | None, slot:
 
 
 def _pads_out(session: Session, track_id: int) -> list[PadOut]:
-    bpm = _track_bpm(session, track_id)
-    role_by_stem_id = {
-        stem_id: role for role, stem_id in _stem_ids_by_role(session, track_id).items()
-    }
-    presence_by_stem_id = {
-        stem_file_id: json.loads(intervals)
-        for stem_file_id, intervals in session.query(
-            AudioAnalysis.stem_file_id, AudioAnalysis.presence_intervals
-        )
-        .join(StemFile, StemFile.id == AudioAnalysis.stem_file_id)
-        .filter(StemFile.track_id == track_id)
-        if intervals is not None
-    }
-    pads = [
-        PadOut(
-            slot=pad.slot,
-            role=role_by_stem_id[pad.stem_file_id],
-            stem_file_id=pad.stem_file_id,
-            position_ms=pad.position_ms,
-            length_ms=pad.length_ms,
-            length_bars=pad.length_bars,
-            section_label=pad.section_label,
-            source=pad.source,
-            silent=bpm > 0
-            and pad.stem_file_id in presence_by_stem_id
-            and is_silent(presence_by_stem_id[pad.stem_file_id], pad.position_ms, bpm),
-        )
-        for pad in _pad_rows(session, track_id)
-        if pad.stem_file_id in role_by_stem_id and pad.slot is not None
-    ]
-    return sorted(pads, key=lambda pad: (_PAD_ROLE_ORDER.index(pad.role), pad.slot))
+    return [PadOut(**asdict(pad)) for pad in load_track_pads(session, track_id)]
 
 
 @router.get("/{track_id}/pads", response_model=list[PadOut])
@@ -313,7 +264,7 @@ def move_pad(
 ) -> PadOut:
     _track_or_404(session, track_id)
     targets = _pad_targets(session, track_id, role)
-    bpm = _track_bpm(session, track_id)
+    bpm = track_bpm(session, track_id)
     downbeats = [
         position_ms
         for (position_ms,) in session.query(Beat.position_ms).filter(
@@ -348,7 +299,7 @@ def reset_pad(
 ) -> list[PadOut]:
     _track_or_404(session, track_id)
     targets = _pad_targets(session, track_id, role)
-    picks = pick_pads(_sections(session, track_id), _track_bpm(session, track_id))
+    picks = pick_pads(_sections(session, track_id), track_bpm(session, track_id))
     app_pick = next((pick for pick in picks if pick.slot == slot), None)
     for stem_file_id in targets:
         _delete_pad(session, track_id, stem_file_id, slot)

@@ -16,9 +16,10 @@ import { RoleIcon } from "./RoleIcon";
 /**
  * Column header strip atop the Booth. With the two-deck layout (see
  * docs/proposals/two-deck-ui-rethink.md) there are 8 columns: 4 source
- * roles × A/B sides, in APC40 mk2 fader order (strip 1 → drums A, strip
- * 2 → drums B, …). The mix/anchor reference is NOT a column here — it
- * lives as a per-deck chip inside each TwoDeckStrip panel header.
+ * roles × A/B sides, in APC40 mk2 fader order, grouped by deck (strips
+ * 1–4 → deck A's drums, bass, vocals, other; strips 5–8 → deck B's). The
+ * mix/anchor reference is NOT a column here — it lives as a per-deck chip
+ * inside each TwoDeckStrip panel header.
  *
  * Headers carry the per-source-role color (A/B share a hue so the eye
  * groups them as one role); the A/B badge inside the chip distinguishes
@@ -108,9 +109,9 @@ function ColumnHeaderChip({
   // A/B are visually distinguishable even though they share the role
   // color and the same role label.
   const styles = ROLE_STYLES[role as StemRole];
-  // Role label + A/B side, e.g. "DRUMS A". With the 8-column fader-order
-  // layout the two columns for one role sit adjacent, so the side suffix
-  // is what tells them apart at a glance.
+  // Role label + A/B side, e.g. "DRUMS A". Each role appears twice in the
+  // 8-column fader-order layout (once per deck), so the side suffix is
+  // what tells the two apart at a glance.
   const visibleLabel = roleLabel(role);
   return (
     <div

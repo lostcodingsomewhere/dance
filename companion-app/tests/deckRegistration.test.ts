@@ -16,8 +16,8 @@ import type { LoadedDeck } from "../src/types";
  */
 
 const TRACK_INDICES = {
-  drums_a: 0, drums_b: 1, bass_a: 2, bass_b: 3,
-  vocals_a: 4, vocals_b: 5, other_a: 6, other_b: 7,
+  drums_a: 0, bass_a: 1, vocals_a: 2, other_a: 3,
+  drums_b: 4, bass_b: 5, vocals_b: 6, other_b: 7,
   mix_a: 8, mix_b: 9,
 };
 
@@ -44,8 +44,8 @@ beforeEach(() => {
 
 describe("side-scoped track indices", () => {
   it("includes only the loaded side", () => {
-    expect(sideTrackIndices(TRACK_INDICES, "a").sort((x, y) => x - y)).toEqual([0, 2, 4, 6, 8]);
-    expect(sideTrackIndices(TRACK_INDICES, "b").sort((x, y) => x - y)).toEqual([1, 3, 5, 7, 9]);
+    expect(sideTrackIndices(TRACK_INDICES, "a").sort((x, y) => x - y)).toEqual([0, 1, 2, 3, 8]);
+    expect(sideTrackIndices(TRACK_INDICES, "b").sort((x, y) => x - y)).toEqual([4, 5, 6, 7, 9]);
   });
 
   it("falls back to every index when the side is unknown", () => {

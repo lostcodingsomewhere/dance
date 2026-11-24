@@ -19,7 +19,7 @@ import { useAutoSession } from "../hooks/useAutoSession";
  *   │ TwoDeckStrip (Deck A / Deck B stacked-stem waveforms + per-deck   │
  *   │   header: ◇ mix reference, PFL, FX, sync)                         │
  *   │ Crossfader (A | B — mirrors APC40 hardware fader)                 │
- *   │ BoothColumnHeaders (8 chips: DRUMS A · DRUMS B · BASS A · … in    │
+ *   │ BoothColumnHeaders (8 chips: DRUMS A · BASS A · VOCALS A · … in   │
  *   │   APC40 fader order, with Solo "S" buttons)                       │
  *   │ SceneGrid (8-column APC40 mirror — tap cells, tap rows; ▾ expand) │
  *   │ CueStrip (prelisten — headphones out)                             │

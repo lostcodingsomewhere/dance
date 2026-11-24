@@ -57,6 +57,29 @@ As of 2026-11-23. Sources are the run logs of that day and the checks named here
   given its pads: 244 of 244 tracks, 0 errors, 97 s.
 - Not done: listening to the start points on ten songs you know.
 
+**Column order (decision 5)**
+
+- Done in code on 2026-11-23: the ten deck tracks are grouped by deck in the bridge
+  (`_DECK_KINDS`), the `.als` writer (`DECK_ORDER`) and the app
+  (`TWO_DECK_COLUMN_ORDER`). One export test and one app test cover the order. The
+  docs and the course describe the new fader map.
+- Live 12.4.3 returned the ten track names in the new order from an exported Set.
+- Not done: checking the fader and pad map on the APC40.
+
+**Step 2, `dance export-set`**
+
+- Done in code on 2026-11-23: the command and `POST /sets/{id}/als`, pages of five
+  scenes, cue clips with their start and loop markers, the grid written into the
+  file, warp mode per stem, section colours, single-stem picks on spare pages. Four
+  end-to-end tests.
+- Checked in Live 12.4.3 over OSC on a copy of the library (an original, its remix,
+  a third song and one vocal stem): 15 scenes, clips on the 80 expected slots, loop
+  lengths and start points as written, warp modes 0, 6 and 4. Details in
+  `docs/live-compat.md`.
+- Not done: the Live session in the verification plan. Nobody has looked at the
+  screen, listened, or touched the APC40. The palette indices for pad colours are a
+  guess. The live-load path still uses Beats for every stem.
+
 ---
 
 ## What this is for
@@ -296,9 +319,8 @@ hardware.
 
 ### Column order
 
-Today the columns interleave roles: Drums A, Drums B, Bass A, Bass B, and so on
-(`bridge.py:872`, `writer.py:85`, `roles.ts:41`). That puts a role's two decks on
-neighbouring faders.
+Until 2026-11-23 the columns interleaved roles: Drums A, Drums B, Bass A, Bass B, and
+so on. That put a role's two decks on neighbouring faders.
 
 With B, the most common press is "start this deck at cue 3", which is four pads in
 one row. Interleaved, those are pads 1, 3, 5 and 7. Grouped by deck they are four
@@ -307,9 +329,15 @@ same finger on each hand. The scene button fires both decks' cue, which is rarel
 wanted, and the stock APC40 script cannot fire half a row.
 
 - **Decided 2026-11-23:** group by deck. Deck A is faders 1 to 4, deck B is 5 to 8.
+- **Changed in code 2026-11-23:** `_DECK_KINDS` (`bridge.py`), `DECK_ORDER`
+  (`writer.py`) and `TWO_DECK_COLUMN_ORDER` (`roles.ts`) list drums, bass, vocals and
+  other for deck A, then the same four for deck B, then the two mix tracks. The
+  bridge finds deck tracks by name, so a Set that still has the old track order keeps
+  loading, with the old fader map, until it is exported again or its deck tracks are
+  created again. The new order has not been checked in Live yet.
 - **Cost:** it reverses the 2026-06-13 choice. It is cheap now and expensive once
-  your hands have learned an order. Three exercises in the course already assume the
-  grouped order (`docs/course/index.html` lines 849, 883, 902).
+  your hands have learned an order. Three exercises in the course assumed the grouped
+  order before the change (`docs/course/index.html` lines 849, 883, 902).
 
 ### Paging
 
@@ -473,8 +501,8 @@ Each step lands on its own and is checked in Live before the next one starts.
    every stem including vocals.
 4. **Pad colour.** Decided 2026-11-23: section type, with a dim shade for silent
    stems.
-5. **Column order.** Decided 2026-11-23: grouped by deck. `vision.md` design
-   decision 6 still describes the alternating order and changes with the code.
+5. **Column order.** Decided 2026-11-23: grouped by deck, and changed in code the
+   same day.
 6. **Prepared Set.** Decided 2026-11-23: B, one exported `.als` for the whole plan.
 7. **Single-stem picks in the Set.** Decided 2026-11-23: spare pages after the
    songs.

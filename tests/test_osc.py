@@ -524,16 +524,16 @@ def test_bridge_get_num_tracks_times_out_when_live_silent():
         bridge.stop()
 
 
-# Deck-column recovery — the 10 deck tracks in index order, used by both the
-# prefixed (OSC-created) and bare (.als-writer) name tests below.
+# The 10 deck tracks in index order (deck A's stems, deck B's, then the two
+# mixes), as the bridge creates them and the .als writer emits them.
 _DECK_COLUMN_ORDER = [
     "drums_a",
-    "drums_b",
     "bass_a",
-    "bass_b",
     "vocals_a",
-    "vocals_b",
     "other_a",
+    "drums_b",
+    "bass_b",
+    "vocals_b",
     "other_b",
     "mix_a",
     "mix_b",
@@ -569,7 +569,10 @@ def test_bridge_recover_adopts_bare_als_writer_names():
     (no "Deck " prefix — see dance/als/writer.py:_display_for). Recovery
     must adopt those so the deck grid populates after `dance export-als`.
     Regression for the prefix mismatch that left the app stuck on
-    "Waiting for Ableton deck columns"."""
+    "Waiting for Ableton deck columns".
+
+    The names here are in the track order of Sets exported before 2026-11-23
+    (role by role). Recovery goes by name, so those Sets keep working."""
     bare_names = [
         "Drums A",
         "Drums B",
@@ -584,7 +587,13 @@ def test_bridge_recover_adopts_bare_als_writer_names():
     ]
     recovered = _recover_with_track_names(bare_names)
     assert recovered is not None
-    assert recovered == {kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)}
+    assert recovered == {
+        "drums_a": 0, "drums_b": 1,
+        "bass_a": 2, "bass_b": 3,
+        "vocals_a": 4, "vocals_b": 5,
+        "other_a": 6, "other_b": 7,
+        "mix_a": 8, "mix_b": 9,
+    }
 
 
 def test_bridge_recover_adopts_prefixed_deck_names():
@@ -593,12 +602,12 @@ def test_bridge_recover_adopts_prefixed_deck_names():
     accepted set to include the bare .als names)."""
     prefixed = [
         "Deck Drums A",
-        "Deck Drums B",
         "Deck Bass A",
-        "Deck Bass B",
         "Deck Vocals A",
-        "Deck Vocals B",
         "Deck Other A",
+        "Deck Drums B",
+        "Deck Bass B",
+        "Deck Vocals B",
         "Deck Other B",
         "Deck Mix A",
         "Deck Mix B",
@@ -637,8 +646,8 @@ def _stub_track(id: int = 1, title: str = "My Song", file_path: str = "/tmp/miss
 
 
 def test_bridge_push_track_to_live_creates_tracks_in_order():
-    """Ten OSC create_audio_track calls — 8 stem decks (A/B × 4 roles) +
-    mix_a + mix_b, in deck-pair order (stems first, mixes last so APC40's
+    """Ten OSC create_audio_track calls — 8 stem decks (4 roles on deck A,
+    then 4 on deck B) + mix_a + mix_b (stems first, mixes last so APC40's
     default 8-strip view maps 1:1 to the stem decks).
 
     Uses a stateful fake Live (10 pre-existing tracks) so the robust
@@ -657,18 +666,18 @@ def test_bridge_push_track_to_live_creates_tracks_in_order():
             ]
             result = bridge.push_track_to_live(track, stems, include_stems=True)
 
-            # Indices should be the next 10 slots (10..19) in deck-pair order:
-            # 8 stem decks first (A/B per role), then mix_a + mix_b. APC40's
+            # Indices should be the next 10 slots (10..19) grouped by deck:
+            # deck A's 4 stem decks, deck B's 4, then mix_a + mix_b. APC40's
             # default 8-strip view maps to the 8 stem decks; mixes live
             # beyond, reachable via bank-shift.
             assert result["scene_index"] == 0
             assert result["track_indices"]["drums_a"] == 10
-            assert result["track_indices"]["drums_b"] == 11
-            assert result["track_indices"]["bass_a"] == 12
-            assert result["track_indices"]["bass_b"] == 13
-            assert result["track_indices"]["vocals_a"] == 14
-            assert result["track_indices"]["vocals_b"] == 15
-            assert result["track_indices"]["other_a"] == 16
+            assert result["track_indices"]["bass_a"] == 11
+            assert result["track_indices"]["vocals_a"] == 12
+            assert result["track_indices"]["other_a"] == 13
+            assert result["track_indices"]["drums_b"] == 14
+            assert result["track_indices"]["bass_b"] == 15
+            assert result["track_indices"]["vocals_b"] == 16
             assert result["track_indices"]["other_b"] == 17
             assert result["track_indices"]["mix_a"] == 18
             assert result["track_indices"]["mix_b"] == 19
@@ -740,7 +749,7 @@ def test_bridge_push_track_to_live_loads_mix_cell_on_full_song(tmp_path):
 # ---------------------------------------------------------------------------
 
 # Deck-column indices when the fake starts with 10 pre-existing tracks.
-_A_STEM_IDX = {"drums_a": 10, "bass_a": 12, "vocals_a": 14, "other_a": 16}
+_A_STEM_IDX = {"drums_a": 10, "bass_a": 11, "vocals_a": 12, "other_a": 13}
 
 
 def _full_song_stems(tmp_path):
@@ -1295,11 +1304,13 @@ def test_bridge_create_deck_columns_assigns_crossfade_per_side():
                 args[0]: args[1]
                 for args in live.args_for("/live/track/set/crossfade_assign")
             }
-            # Indices 0..9 in _DECK_KINDS order; A-side at even, B-side at odd
-            # for the 8 stem decks, then mix_a (8) / mix_b (9).
-            # drums_a=0 → A, drums_b=1 → B, ... mix_a=8 → A, mix_b=9 → B.
+            # Indices 0..9 in _DECK_KINDS order; A-side stem decks at 0-3,
+            # B-side at 4-7, then mix_a (8) / mix_b (9).
+            # drums_a=0 → A, ... drums_b=4 → B, ... mix_a=8 → A, mix_b=9 → B.
             assert assigns[0] == AbletonOSCClient.CROSSFADE_A   # drums_a
-            assert assigns[1] == AbletonOSCClient.CROSSFADE_B   # drums_b
+            assert assigns[3] == AbletonOSCClient.CROSSFADE_A   # other_a
+            assert assigns[4] == AbletonOSCClient.CROSSFADE_B   # drums_b
+            assert assigns[7] == AbletonOSCClient.CROSSFADE_B   # other_b
             assert assigns[8] == AbletonOSCClient.CROSSFADE_A   # mix_a
             assert assigns[9] == AbletonOSCClient.CROSSFADE_B   # mix_b
         finally:
@@ -1346,9 +1357,9 @@ def test_bridge_soloed_kinds_stable_canonical_order():
             kind: i for i, kind in enumerate(_DECK_COLUMN_ORDER)
         }
         fake_live = udp_client.SimpleUDPClient("127.0.0.1", listen_port)
-        # Push in reverse-ish order: mix_b(9), bass_a(2), drums_a(0).
+        # Push in reverse-ish order: mix_b(9), bass_a(1), drums_a(0).
         fake_live.send_message("/live/track/get/solo", [9, 1])
-        fake_live.send_message("/live/track/get/solo", [2, 1])
+        fake_live.send_message("/live/track/get/solo", [1, 1])
         fake_live.send_message("/live/track/get/solo", [0, 1])
         assert _wait_for(
             lambda: bridge.state.soloed_kinds == ["drums_a", "bass_a", "mix_b"]
@@ -1434,7 +1445,7 @@ def test_scan_live_for_cells_uses_one_bulk_query_per_column():
     never replies to a query about an empty slot), which measured 30.3 s
     against the real rig and froze the UI for the whole resync.
     """
-    names = {(0, 2): "Bad Memories (drums a)", (3, 5): "Nightdrive (bass b)"}
+    names = {(0, 2): "Bad Memories (drums a)", (5, 5): "Nightdrive (bass b)"}
     with _FakeLive([f"Deck {i}" for i in range(10)], clip_names=names) as live:
         bridge = _bridge_with_deck_columns(live)
         try:
@@ -1481,11 +1492,11 @@ def test_scan_live_for_cells_keeps_partial_batch():
     the 30 s walk because one packet went missing — is worse than reporting
     what did arrive.
     """
-    names = {(0, 0): "Kept (drums a)", (1, 0): "Lost (drums b)"}
+    names = {(0, 0): "Kept (drums a)", (4, 0): "Lost (drums b)"}
     with _FakeLive(
         [f"Deck {i}" for i in range(10)],
         clip_names=names,
-        bulk_silent_tracks={1},
+        bulk_silent_tracks={4},
     ) as live:
         bridge = _bridge_with_deck_columns(live)
         try:
@@ -1541,17 +1552,13 @@ def test_bridge_state_to_dict_includes_new_contract_fields():
 
 # Canonical prefixed deck names the bridge CREATES, in _DECK_KINDS order.
 _PREFIXED_DECK_NAMES = [
-    "Deck Drums A", "Deck Drums B",
-    "Deck Bass A", "Deck Bass B",
-    "Deck Vocals A", "Deck Vocals B",
-    "Deck Other A", "Deck Other B",
+    "Deck Drums A", "Deck Bass A", "Deck Vocals A", "Deck Other A",
+    "Deck Drums B", "Deck Bass B", "Deck Vocals B", "Deck Other B",
     "Deck Mix A", "Deck Mix B",
 ]
 _BARE_DECK_NAMES = [
-    "Drums A", "Drums B",
-    "Bass A", "Bass B",
-    "Vocals A", "Vocals B",
-    "Other A", "Other B",
+    "Drums A", "Bass A", "Vocals A", "Other A",
+    "Drums B", "Bass B", "Vocals B", "Other B",
     "Mix A", "Mix B",
 ]
 

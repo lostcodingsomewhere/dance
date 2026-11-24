@@ -866,14 +866,15 @@ class AbletonBridge:
     }
     # Order matters — defines column layout in Live. The 8 stem decks come
     # FIRST so APC40's default 8-strip view maps to them one-to-one (one
-    # hardware fader per stem deck). Mix tracks live at indices 8-9,
-    # reachable via APC40 bank-shift; the Cue track (created later) sits
-    # at index 10. See docs/proposals/two-deck-ui-rethink.md.
+    # hardware fader per stem deck), grouped by deck: deck A on faders 1-4,
+    # deck B on 5-8, so one deck's four cue pads sit side by side in a row.
+    # Mix tracks live at indices 8-9, reachable via APC40 bank-shift; the
+    # Cue track (created later) sits at index 10. Existing Live tracks are
+    # found by name, so a Set in the older role-by-role order still works.
+    # See docs/proposals/cue-pads-prepared-set.md ("Column order").
     _DECK_KINDS: tuple[str, ...] = (
-        "drums_a", "drums_b",
-        "bass_a", "bass_b",
-        "vocals_a", "vocals_b",
-        "other_a", "other_b",
+        "drums_a", "bass_a", "vocals_a", "other_a",
+        "drums_b", "bass_b", "vocals_b", "other_b",
         "mix_a", "mix_b",
     )
     # Source stem kinds — what Demucs emits, what the pipeline operates on,

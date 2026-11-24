@@ -12,13 +12,18 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from dance.api.deps import fullmix_analysis, get_session
+from dance.als.generator import AlsExportError, AlsOutsideDirError
+from dance.als.prepared_set import export_set
+from dance.api.deps import fullmix_analysis, get_session, get_settings
 from dance.api.schemas import (
+    AlsExportRequest,
     ColumnRecsResponse,
+    SetAlsExportResult,
     SetCreateRequest,
     SetOut,
     SetPlanAppendRequest,
@@ -28,8 +33,10 @@ from dance.api.schemas import (
     SetTrackAddRequest,
     SetTrackUpdateRequest,
     SetUpdateRequest,
+    SkippedPickOut,
     TailRecsResponse,
 )
+from dance.config import Settings
 from dance.core import set_queues as sq
 from dance.core.database import (
     AudioAnalysis,
@@ -684,3 +691,33 @@ def get_plan_recs(
             }
         )
     return {"column": column, "combo_size": len(combo), "recs": recs_out}
+
+
+@router.post("/{set_id}/als", response_model=SetAlsExportResult)
+def export_set_als(
+    set_id: int,
+    body: AlsExportRequest | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> SetAlsExportResult:
+    set_row = _require_set(session, set_id)
+    out_path = Path(body.out_path) if body is not None and body.out_path else None
+    try:
+        exported = export_set(session, settings, set_row, out_path)
+    except AlsOutsideDirError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except AlsExportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SetAlsExportResult(
+        ok=True,
+        out_path=str(exported.path),
+        size_bytes=exported.size_bytes,
+        page_count=exported.page_count,
+        scene_count=exported.scene_count,
+        clip_count=exported.clip_count,
+        skipped=[
+            SkippedPickOut(track_id=pick.track_id, role=pick.role, reason=pick.reason)
+            for pick in exported.skipped
+        ],
+    )
+
