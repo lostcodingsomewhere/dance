@@ -39,13 +39,16 @@ export function BpmRangePicker({ min, max, onChange }: Props) {
       if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
     }
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
+    // Capture phase, so this Escape stops here and the palette behind stays open.
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 
