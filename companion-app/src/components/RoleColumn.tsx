@@ -31,6 +31,15 @@ function fingerprint(plan: SetPlan | null | undefined): string {
   ]);
 }
 
+export function whyNotReady(item: PlanItem): string | null {
+  if (item.state === undefined || item.state === "complete") return null;
+  if (item.state === null) return "no longer in your library";
+  if (item.download_failed) return "download failed";
+  if (item.state === "error") return "failed, see Pipeline";
+  if (item.state === "pending") return "on its way";
+  return "processing";
+}
+
 function titleOf(item: PlanItem): string {
   return item.title ?? `Track #${item.track_id}`;
 }
@@ -134,6 +143,7 @@ function StemRow({
   accent,
   versionNote,
   besideOriginalOn,
+  notReady,
   focused,
   onFocus,
 }: {
@@ -153,6 +163,7 @@ function StemRow({
   accent?: boolean;
   versionNote?: string;
   besideOriginalOn?: DeckSide;
+  notReady?: string | null;
   /** Under the keyboard cursor — draws the focus ring and scrolls into view. */
   focused?: boolean;
   /** Clicking a card moves the keyboard cursor here, so mouse and keyboard
@@ -203,13 +214,19 @@ function StemRow({
           <button
             type="button"
             onClick={togglePreview}
-            disabled={startPreview.isPending || stopPreview.isPending}
+            disabled={notReady != null || startPreview.isPending || stopPreview.isPending}
             className={`shrink-0 w-7 h-7 text-xs rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center ${
               isPreviewing
                 ? "bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-400/40"
                 : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
             }`}
-            title={isPreviewing ? "Stop preview" : "Preview in headphones (cue)"}
+            title={
+              notReady != null
+                ? "Not ready to preview"
+                : isPreviewing
+                  ? "Stop preview"
+                  : "Preview in headphones (cue)"
+            }
           >
             {isPreviewing ? "⏹" : "▶"}
           </button>
@@ -229,6 +246,9 @@ function StemRow({
       )}
       <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 font-mono leading-tight">
         <span className="truncate flex-1 min-w-0">
+          {notReady != null && (
+            <span className="mr-1.5 font-sans text-[11px] text-amber-300">{notReady}</span>
+          )}
           {bpm != null && <span>{bpm.toFixed(0)}</span>}
           {keyCamelot && <span className="ml-1.5">· {keyCamelot}</span>}
           {energy != null && <span className="ml-1.5 text-neutral-600">· E{energy}</span>}
@@ -238,7 +258,7 @@ function StemRow({
       {breakdown && Object.keys(breakdown).length > 0 && (
         <ScoreBreakdown breakdown={breakdown} size="sm" className="mt-1" />
       )}
-      {mode === "live" && (
+      {mode === "live" && notReady == null && (
         <div className="mt-1 grid grid-cols-2 gap-1">
           {(["a", "b"] as const).map((side) => (
             <button
@@ -319,6 +339,7 @@ function QueueCard({
   onOpenPads?: () => void;
   onFindVersions?: () => void;
 }) {
+  const notReady = whyNotReady(item);
   const metaButton =
     "-my-px shrink-0 rounded border border-neutral-700/60 bg-neutral-800/70 px-1.5 font-sans text-[10px] leading-tight text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors";
   return (
@@ -332,6 +353,7 @@ function QueueCard({
       role={role}
       mode={mode}
       accent
+      notReady={notReady}
       focused={focused}
       onFocus={onFocus}
       leading={`${index + 1}`}
@@ -354,7 +376,7 @@ function QueueCard({
               Versions
             </button>
           )}
-          {onOpenPads && (
+          {onOpenPads && notReady == null && (
             <button
               type="button"
               onClick={onOpenPads}

@@ -551,3 +551,47 @@ describe("the BPM range popover in the search palette", () => {
     expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument();
   });
 });
+
+describe("a song on Spotify that the library already holds", () => {
+  const HELD_ON_SPOTIFY: SpotifyTrackHit = {
+    ...REMIX_ON_SPOTIFY,
+    spotify_id: "sp-half-light",
+    title: HALF_LIGHT.title,
+    artist: "Test Artist",
+    library_track_id: HALF_LIGHT.track_id,
+    library_state: "complete",
+  };
+
+  it("is marked as held, and planning it adds the library's track without a download", async () => {
+    backend = new BoothBackend(aLibrary({ onSpotify: [HELD_ON_SPOTIFY, REMIX_ON_SPOTIFY] }));
+    renderApp();
+    await openPaletteAndType("half light");
+    await within(palette()).findByText(REMIX_ON_SPOTIFY.title);
+
+    const held = spotifyRow(HELD_ON_SPOTIFY.title);
+    expect(within(held).getByText("in your library")).toBeInTheDocument();
+    expect(within(spotifyRow(REMIX_ON_SPOTIFY.title)).queryByText("in your library")).not.toBeInTheDocument();
+
+    clickWithTheMouse(button(held, "+ Plan"));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(APPEND_PATH)).toEqual([
+        { role: "song", track_id: HALF_LIGHT.track_id, after_track_id: null },
+      ]),
+    );
+    expect(bodiesSentTo(INGEST_PATH)).toEqual([]);
+    await within(held).findByRole("button", { name: "✓ in plan" });
+  });
+
+  it("says so when the held copy is not ready to play", async () => {
+    const stillProcessing = { ...HELD_ON_SPOTIFY, library_state: "analyzing" };
+    backend = new BoothBackend(aLibrary({ onSpotify: [stillProcessing] }));
+    renderApp();
+    await openPaletteAndType("half light");
+
+    const held = await within(palette()).findByRole("group", {
+      name: `Spotify result: ${HELD_ON_SPOTIFY.title}`,
+    });
+    expect(within(held).getByText("in your library, processing")).toBeInTheDocument();
+  });
+});

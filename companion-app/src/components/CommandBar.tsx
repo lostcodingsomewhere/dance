@@ -782,6 +782,13 @@ function RowShell({
   );
 }
 
+function heldInLibraryWords(state: string | null | undefined): string {
+  if (state == null || state === "complete") return "in your library";
+  if (state === "error") return "in your library, failed";
+  if (state === "pending") return "in your library, on its way";
+  return "in your library, processing";
+}
+
 function SpotifyHitRow({
   hit,
   activeSetId,
@@ -797,19 +804,21 @@ function SpotifyHitRow({
     "idle",
   );
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  const canRun = state !== "pending" && state !== "done";
+  const heldTrackId = hit.library_track_id ?? null;
+  const nothingToDo = heldTrackId != null && !activeSetId;
+  const canRun = state !== "pending" && state !== "done" && !nothingToDo;
 
   async function ingest() {
     if (!canRun) return;
     setState("pending");
     setErrMsg(null);
     try {
-      const result = await ingestSpotifyTrack(hit);
+      const trackId = heldTrackId ?? (await ingestSpotifyTrack(hit)).track_id;
       if (activeSetId) {
         await addToPlan.mutateAsync({
           setId: activeSetId,
           role: "song",
-          trackId: result.track_id,
+          trackId,
         });
       }
       // Invalidate everything that might surface the new track — active
@@ -862,6 +871,11 @@ function SpotifyHitRow({
           {durMin && <span className="ml-1.5 font-mono">{durMin}</span>}
         </div>
       </div>
+      {heldTrackId != null && (
+        <span className="shrink-0 text-[11px] text-neutral-400">
+          {heldInLibraryWords(hit.library_state)}
+        </span>
+      )}
       {state === "error" && errMsg && (
         <span className="text-[10px] text-rose-300 truncate max-w-[10rem]" title={errMsg}>
           {errMsg}
@@ -872,14 +886,18 @@ function SpotifyHitRow({
         onClick={ingest}
         disabled={!canRun}
         title={
-          activeSetId
-            ? "Download + analyze + add to the plan (Song column)"
-            : "Download + analyze (no active set to add to)"
+          heldTrackId != null
+            ? activeSetId
+              ? "Add the track your library holds to the plan (Song column)"
+              : "Your library holds this song. Open a set to plan it."
+            : activeSetId
+              ? "Download + analyze + add to the plan (Song column)"
+              : "Download + analyze (no active set to add to)"
         }
         className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-emerald-700/80 hover:bg-emerald-600 text-white disabled:bg-neutral-800 disabled:text-neutral-500"
       >
         {state === "pending" && "⌛ adding…"}
-        {state === "done" && "✓ added"}
+        {state === "done" && (heldTrackId != null ? "✓ in plan" : "✓ added")}
         {state === "error" && "↻ retry"}
         {state === "idle" && (activeSetId ? "+ Plan" : "+ Library")}
         {highlighted && canRun && <EnterHint />}

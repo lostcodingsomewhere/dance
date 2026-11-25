@@ -175,6 +175,8 @@ export interface PlanItem {
   key_camelot: string | null;
   bpm: number | null;
   floor_energy: number | null;
+  state?: string | null;
+  download_failed?: boolean;
 }
 
 export interface SetPlan {
@@ -321,6 +323,8 @@ export interface SpotifyTrackHit {
   image_url: string | null;
   explicit: boolean;
   popularity: number | null;
+  library_track_id?: number | null;
+  library_state?: string | null;
 }
 
 export interface SpotifySearchResponse {

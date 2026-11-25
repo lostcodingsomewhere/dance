@@ -16,7 +16,7 @@ import {
 } from "../types";
 import { Modal } from "./Modal";
 import { PadEditor } from "./PadEditor";
-import { ColumnHeader, PlanBand, PlanRow, RecsBand, RecsRow } from "./RoleColumn";
+import { ColumnHeader, PlanBand, PlanRow, RecsBand, RecsRow, whyNotReady } from "./RoleColumn";
 import { VersionFinder } from "./VersionFinder";
 
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
@@ -115,6 +115,17 @@ export function RoleColumnsGrid({
   const onCommit = useCallback(
     (trackId: number, focus: GridFocus, shift: boolean) => {
       if (mode === "live") {
+        const queued =
+          focus.zone === "plan"
+            ? queryClient
+                .getQueryData<SetPlan>(["sets", setId, "plan"])
+                ?.queues?.[focus.role]?.find((item) => item.track_id === trackId)
+            : undefined;
+        const notReady = queued ? whyNotReady(queued) : null;
+        if (queued && notReady) {
+          store.reportFailure(`load ${queued.title ?? `Track #${trackId}`}`, [notReady]);
+          return;
+        }
         if (keyboardLoadInFlight.current) return;
         keyboardLoadInFlight.current = true;
         // enter → Deck A, shift+enter → Deck B. Two decks, two keystrokes.
