@@ -21,10 +21,10 @@ const UNDO_SECONDS = 8;
 interface RemovedPick {
   item: PlanItem;
   index: number;
-  planSince: string;
+  planAfterwards: string;
 }
 
-function picksOf(plan: SetPlan | null | undefined): string {
+function fingerprint(plan: SetPlan | null | undefined): string {
   return JSON.stringify([
     plan?.set_id,
     ...PLAN_ROLES.map((role) => (plan?.queues?.[role] ?? []).map((item) => item.track_id)),
@@ -775,13 +775,13 @@ function PlanZone({
   // Read here, not passed down: a prop would still hold the plan from before the save.
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
-  const planNow = picksOf(plan.data);
+  const planNow = fingerprint(plan.data);
   usePublishZone(role, "plan", queue.map((q) => q.track_id));
 
   useEffect(() => {
     if (removed == null) return;
     const forget = () => setRemoved((current) => (current === removed ? null : current));
-    if (planNow !== removed.planSince) {
+    if (planNow !== removed.planAfterwards) {
       forget();
       return;
     }
@@ -797,7 +797,7 @@ function PlanZone({
 
   const remove = (item: PlanItem, index: number) =>
     removeFromRole(role, index, item.track_id, (saved) =>
-      setRemoved({ item, index, planSince: picksOf(saved) }),
+      setRemoved({ item, index, planAfterwards: fingerprint(saved) }),
     );
   const move = (from: number, to: number) =>
     moveInRole(role, from, to, () => {
@@ -823,7 +823,7 @@ function PlanZone({
       onFindVersions={onFindVersions && (() => onFindVersions(item))}
     />
   ));
-  if (removed != null && planNow === removed.planSince) {
+  if (removed != null && planNow === removed.planAfterwards) {
     rows.splice(
       Math.min(removed.index, rows.length),
       0,

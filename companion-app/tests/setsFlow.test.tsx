@@ -141,6 +141,30 @@ describe("duplicating a set from the set menu", () => {
   });
 });
 
+describe("a copy that was made but could not be opened", () => {
+  it("is reported in the menu and listed to switch to, with its picks", async () => {
+    const server = new SetsOnTheServer(LIBRARY);
+    const friday = server.has("Friday night", SEVEN_PICKS, true);
+    const copyId = friday + 1;
+    server.unreachableFor = ({ path }) => path === `${API}/sets/${copyId}/activate`;
+    backend = new BoothBackend(server.answer);
+    renderSetView();
+    await waitFor(() => expect(picksOnScreen()).toEqual(titlesOf(SEVEN_PICKS)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Friday night" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate as new" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The copy was made but could not be opened. Pick it under Switch to.",
+    );
+    expect(server.planOf(copyId)).toEqual(SEVEN_PICKS);
+    expect(server.activeName()).toBe("Friday night");
+    const theCopy = await screen.findByRole("button", { name: /Friday night \(copy\)/ });
+    expect(theCopy).toHaveTextContent("7");
+  });
+});
+
 describe("reordering picks in the Set view", () => {
   it("moves a pick up or down, saves the new order and renumbers the column", async () => {
     const { setId } = await theSetViewWithSevenPicks();
