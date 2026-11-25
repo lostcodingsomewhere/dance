@@ -21,6 +21,8 @@ const SERVER_DOWN_TOOLTIP =
 const UNCONFIRMED_RECORDING =
   "Could not confirm an armed Recorder track — Live may capture nothing. Check Live is reachable, then retry.";
 const RECORD_NOT_SENT = "[Errno 65] No route to host";
+const RECORD_DID_NOT_CHANGE =
+  "Live could not be reached, so recording did not change. Check that Live is open, then try again.";
 
 const NIGHT_DRIVE = { track_id: 7, title: "Night Drive" };
 const CLUB_MIX = { track_id: 8, title: "Night Drive (Club Mix)" };
@@ -457,13 +459,17 @@ describe("the record button", () => {
 
     recordAnswer = { ok: false, recording: false, warning: RECORD_NOT_SENT };
     fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
-    expect(await within(header()).findByText(RECORD_NOT_SENT)).toBeInTheDocument();
+    expect(await within(header()).findByText(RECORD_DID_NOT_CHANGE)).toHaveAttribute(
+      "title",
+      RECORD_NOT_SENT,
+    );
+    expect(within(header()).queryByText(RECORD_NOT_SENT)).not.toBeInTheDocument();
     expect(within(header()).getByRole("button", { name: "Start recording" })).toBeInTheDocument();
 
     recordAnswer = { ok: true, recording: true, armed_track: 10, warnings: [] };
     fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
     await within(header()).findByRole("button", { name: /^Stop recording/ });
-    expect(within(header()).queryByText(RECORD_NOT_SENT)).not.toBeInTheDocument();
+    expect(within(header()).queryByText(RECORD_DID_NOT_CHANGE)).not.toBeInTheDocument();
     expect(within(header()).queryByText(UNCONFIRMED_RECORDING)).not.toBeInTheDocument();
   });
 });

@@ -434,6 +434,7 @@ function RecordButton() {
   const mm = Math.floor(elapsed / 60_000).toString().padStart(2, "0");
   const ss = Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0");
   const warnings = warningsIn(toggle.data);
+  const whyNotSent = reasonLiveWasNotTold(toggle.data);
   return (
     <>
       <button
@@ -456,20 +457,35 @@ function RecordButton() {
         {recording && <span>{mm}:{ss}</span>}
       </button>
       {warnings.length > 0 && (
-        <span role="alert" className="max-w-56 text-[10px] leading-tight text-amber-300">
+        <span role="alert" className={RECORD_WARNING_CLASS}>
           {warnings.join(" ")}
+        </span>
+      )}
+      {whyNotSent != null && (
+        <span role="alert" title={whyNotSent} className={RECORD_WARNING_CLASS}>
+          Live could not be reached, so recording did not change. Check that Live is open, then
+          try again.
         </span>
       )}
     </>
   );
 }
 
+const RECORD_WARNING_CLASS = "max-w-56 text-[10px] leading-tight text-amber-300";
+
 function warningsIn(answer: unknown): string[] {
   if (answer == null || typeof answer !== "object") return [];
-  const { warning, warnings } = answer as { warning?: unknown; warnings?: unknown };
-  return [...(Array.isArray(warnings) ? warnings : []), warning].filter(
+  const { warnings } = answer as { warnings?: unknown };
+  return (Array.isArray(warnings) ? warnings : []).filter(
     (text): text is string => typeof text === "string" && text !== "",
   );
+}
+
+function reasonLiveWasNotTold(answer: unknown): string | null {
+  if (answer == null || typeof answer !== "object") return null;
+  const { ok, warning } = answer as { ok?: unknown; warning?: unknown };
+  if (ok !== false) return null;
+  return typeof warning === "string" ? warning : "";
 }
 
 function IconPlay() {
