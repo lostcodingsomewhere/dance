@@ -32,7 +32,7 @@ from sqlalchemy import desc, func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from dance.api.dedup import find_duplicate, index_existing, match_duplicate
+from dance.api.dedup import find_duplicate, index_existing
 from dance.api.deps import get_session, get_settings
 from dance.api.jobs import get_job_registry
 from dance.api.schemas import (
@@ -59,6 +59,7 @@ from dance.pipeline.dispatcher_lock import (
 from dance.pipeline.events import StageEvent
 from dance.pipeline.heal_ledger import HealLedger
 from dance.pipeline.placeholders import download_failed, is_placeholder_hash, not_placeholder
+from dance.recommender.versions import SAME_RECORDING_TOLERANCE_S
 from dance.spotify.csv_importer import (
     CsvRow,
     download_track,
@@ -66,7 +67,8 @@ from dance.spotify.csv_importer import (
     parse_csv,
 )
 from dance.spotify.download_pool import get_download_pool
-from dance.spotify.versions import NEVER_DOWNLOADED
+from dance.spotify.search import SpotifyTrackHit
+from dance.spotify.versions import NEVER_DOWNLOADED, LibraryCut, held_in_library
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +515,37 @@ def _download_again_if_it_failed(session: Session, track: Track, settings: Setti
 
 
 
+def _is_the_same_recording(hit: SpotifyTrackHit, track: Track) -> bool:
+    if not hit.duration_ms or not track.duration_seconds:
+        return False
+    gap = abs(hit.duration_ms / 1000.0 - float(track.duration_seconds))
+    return gap <= SAME_RECORDING_TOLERANCE_S
+
+
+def _copies_the_library_holds(
+    session: Session, hits: list[SpotifyTrackHit]
+) -> list[tuple[Track | None, LibraryCut | None]]:
+    held = held_in_library(session, hits)
+    return [(session.get(Track, mine.track_id) if mine else None, mine) for mine in held]
+
+
+def _gives_its_spotify_id(
+    session: Session, hit: SpotifyTrackHit, track: Track, mine: LibraryCut
+) -> bool:
+    takes_the_id = (
+        # Found by its id, the id is already on it or on a row marked as its copy.
+        mine.spotify_id != hit.spotify_id
+        and track.spotify_id is None
+        and _is_the_same_recording(hit, track)
+    )
+    if takes_the_id:
+        session.query(Track).filter(Track.id == track.id).update(
+            {Track.spotify_id: hit.spotify_id}
+        )
+        session.commit()
+    return takes_the_id
+
+
 @router.post("/ingest/track", response_model=IngestTrackResult)
 def ingest_track(
     body: IngestTrackRequest,
@@ -536,10 +569,8 @@ def ingest_track(
     from dance.spotify.search import (
         SpotifyAuthError,
         SpotifySearchError,
-        SpotifyTrackHit,
         get_default_client,
     )
-    from dance.spotify.versions import held_in_library
 
     spotify_id = body.spotify_id.strip()
     if not spotify_id:
@@ -559,8 +590,7 @@ def ingest_track(
             explicit=False,
             popularity=None,
         )
-        mine = held_in_library(session, [asked])[0]
-        return session.get(Track, mine.track_id) if mine else None
+        return _copies_the_library_holds(session, [asked])[0][0]
 
     title = body.title
     artist = body.artist
@@ -724,34 +754,7 @@ def ingest_playlist(
             job_ids=[],
         )
 
-    # Two-stage dedup:
-    #   - exact spotify_id match (fast, fully reliable for tracks ingested via
-    #     /spotify/search or a prior playlist run)
-    #   - fuzzy (artist, title) match (catches tracks ingested via CSV /
-    #     library scan where spotify_id was never set — without this,
-    #     re-ingesting via a playlist creates a duplicate Track row even
-    #     though the same audio is already in the library).
-    # When fuzzy matches a pre-existing row that has no spotify_id AND the
-    # durations agree (both known, within 5 s), we *back-fill* that ID onto
-    # the existing row so the next playlist ingest of the same track
-    # short-circuits via the exact-ID path. A name-only match is never
-    # proof of identity — ``Title`` and ``Title (Extended Mix)`` can fuzz
-    # together — so it is skipped (not re-downloaded) but gets no new ID.
-    existing_rows = (
-        session.query(Track.id, Track.spotify_id)
-        .filter(Track.spotify_id.in_([h.spotify_id for h in hits]))
-        .all()
-    )
-    existing_by_sid: dict[str, int] = {sid: int(tid) for tid, sid in existing_rows}
-
-    # Fuzzy index over *all* tracks in the library — small enough to be cheap
-    # (low thousands at most) and avoids per-hit DB queries.
-    full_index_rows = session.query(
-        Track.id, Track.artist, Track.title, Track.duration_seconds
-    ).all()
-    fuzzy_index = index_existing(
-        [(int(tid), a, t, d) for tid, a, t, d in full_index_rows]
-    )
+    held = _copies_the_library_holds(session, list(hits))
     pool = get_download_pool(settings.download_workers)
 
     registry = get_job_registry()
@@ -761,28 +764,13 @@ def ingest_playlist(
     failed = 0
     backfilled_spotify_ids = 0
 
-    for hit in hits:
-        # Stage 1: exact spotify_id match — skip outright.
-        if hit.spotify_id in existing_by_sid:
-            skipped_track_ids.append(existing_by_sid[hit.spotify_id])
+    for hit, (existing_track, mine) in zip(hits, held, strict=True):
+        if existing_track is not None and mine is not None:
+            skipped_track_ids.append(int(existing_track.id))
+            backfilled_spotify_ids += _gives_its_spotify_id(
+                session, hit, existing_track, mine
+            )
             continue
-        # Stage 2: fuzzy (artist, title) match — likely a CSV-ingested twin.
-        # Back-fill the spotify_id only when the duration confirms it.
-        fuzzy_match = match_duplicate(
-            hit.artist or "",
-            hit.title or "",
-            fuzzy_index,
-            incoming_duration_s=(hit.duration_ms / 1000.0) if hit.duration_ms else None,
-        )
-        if fuzzy_match is not None:
-            existing_track = session.get(Track, fuzzy_match.track_id)
-            if existing_track is not None:
-                if existing_track.spotify_id is None and fuzzy_match.duration_confirmed:
-                    existing_track.spotify_id = hit.spotify_id
-                    backfilled_spotify_ids += 1
-                    session.commit()
-                skipped_track_ids.append(fuzzy_match.track_id)
-                continue
         # Mirror the per-track flow in ``ingest_track`` — same shape so the
         # downstream pipeline can't tell the difference.
         csv_row = CsvRow(

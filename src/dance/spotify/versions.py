@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from dance.core.database import Track, TrackState
 from dance.pipeline.placeholders import PLACEHOLDER_HASH_PREFIX, is_placeholder_hash
-from dance.recommender.versions import Cut, first_credited_artist
+from dance.recommender.versions import SAME_RECORDING_TOLERANCE_S, Cut, first_credited_artist
 from dance.spotify.matching import passes_duration_gate
 from dance.spotify.search import SpotifySearchClient, SpotifyTrackHit
 
@@ -88,15 +88,33 @@ def _one_per_recording(song: Cut, hits: Sequence[SpotifyTrackHit]) -> list[_Rele
 def _is_the_file_of(mine: LibraryCut, release: _Release) -> bool:
     if mine.spotify_id in release.spotify_ids:
         return True
+    length_fits = mine.duration_seconds is None or passes_duration_gate(
+        release.cut.duration_seconds, mine.duration_seconds
+    )
     return (
         mine.is_the_same_song_as(release.cut)
         and mine.parts.note_key == release.cut.parts.note_key
-        and passes_duration_gate(release.cut.duration_seconds, mine.duration_seconds)
+        and length_fits
     )
 
 
+def _seconds_past_the_same_recording(mine: LibraryCut, release: _Release) -> float:
+    if mine.duration_seconds is None or release.cut.duration_seconds is None:
+        return float("inf")
+    gap = abs(mine.duration_seconds - release.cut.duration_seconds)
+    return max(gap - SAME_RECORDING_TOLERANCE_S, 0.0)
+
+
 def _file_of(release: _Release, library: Sequence[LibraryCut]) -> LibraryCut | None:
-    return next((cut for cut in library if _is_the_file_of(cut, release)), None)
+    candidates = [cut for cut in library if _is_the_file_of(cut, release)]
+    return min(
+        candidates,
+        key=lambda cut: (
+            cut.spotify_id not in release.spotify_ids,
+            _seconds_past_the_same_recording(cut, release),
+        ),
+        default=None,
+    )
 
 
 def versions_among(
