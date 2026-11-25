@@ -395,14 +395,13 @@ describe("the status marks", () => {
     expect(ready).toHaveTextContent("");
   });
 
-  it("say No session beside the ring when no session is running", async () => {
+  it("say No session beside the ring until a session is running", async () => {
+    clockIsOurs();
     renderApp();
-
-    expect(await within(header()).findByText("No session")).toBeInTheDocument();
+    await timePasses(100);
+    expect(within(header()).getByText("No session")).toBeInTheDocument();
     expect(within(header()).getByText("○")).toBeInTheDocument();
-  });
 
-  it("say nothing about a session that is running beyond its plays", async () => {
     session = {
       id: 3,
       name: "Friday night",
@@ -411,9 +410,9 @@ describe("the status marks", () => {
       ended_at: null,
       plays: [],
     };
-    renderApp();
+    await secondsPassOneAtATime(6);
 
-    expect(await within(header()).findByText("0 plays")).toBeInTheDocument();
+    expect(within(header()).getByText("0 plays")).toBeInTheDocument();
     expect(within(header()).queryByText("No session")).not.toBeInTheDocument();
   });
 });
