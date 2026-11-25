@@ -11,8 +11,23 @@ interface PlayingSong {
   lowestScene: number;
 }
 
+interface NowPlaying {
+  leadingTrackId: number | null;
+  trackIds: number[];
+}
+
 type SongOfCell = Map<string, number>;
 type StartOrder = Map<number, number>;
+
+const NOTHING_PLAYING: NowPlaying = { leadingTrackId: null, trackIds: [] };
+
+function isSamePlaying(a: NowPlaying, b: NowPlaying): boolean {
+  return (
+    a.leadingTrackId === b.leadingTrackId &&
+    a.trackIds.length === b.trackIds.length &&
+    a.trackIds.every((trackId, index) => trackId === b.trackIds[index])
+  );
+}
 
 function cellKey(scene: number, kind: string): string {
   return `${scene}:${kind}`;
@@ -72,21 +87,29 @@ function leadingSong(songs: PlayingSong[], startOrder: StartOrder): PlayingSong 
 export function useNowPlayingTrack(): {
   trackId: number | null;
   source: "ableton" | "session" | "none";
+  playingTrackIds: number[];
 } {
   const playingClips = useAbletonState().playing_clips;
   const deckMap = useDeckMap().data;
   const lastPlay = useCurrentSession().data?.plays.at(-1);
   const songOfCell = useMemo(() => songsByCell(deckMap), [deckMap]);
   const startOrder = useRef<StartOrder>(new Map());
-  const [playingTrackId, setPlayingTrackId] = useState<number | null>(null);
+  const [nowPlaying, setNowPlaying] = useState(NOTHING_PLAYING);
 
   useEffect(() => {
     const songs = songsPlaying(deckMap?.columns, songOfCell, playingClips ?? {});
     rememberStarts(startOrder.current, songs);
-    setPlayingTrackId(leadingSong(songs, startOrder.current)?.trackId ?? null);
+    const next: NowPlaying = {
+      leadingTrackId: leadingSong(songs, startOrder.current)?.trackId ?? null,
+      trackIds: songs.map((song) => song.trackId).sort((a, b) => a - b),
+    };
+    setNowPlaying((shown) => (isSamePlaying(shown, next) ? shown : next));
   }, [deckMap, songOfCell, playingClips]);
 
-  if (playingTrackId != null) return { trackId: playingTrackId, source: "ableton" };
-  if (lastPlay) return { trackId: lastPlay.track_id, source: "session" };
-  return { trackId: null, source: "none" };
+  const { leadingTrackId, trackIds: playingTrackIds } = nowPlaying;
+  if (leadingTrackId != null) {
+    return { trackId: leadingTrackId, source: "ableton", playingTrackIds };
+  }
+  if (lastPlay) return { trackId: lastPlay.track_id, source: "session", playingTrackIds };
+  return { trackId: null, source: "none", playingTrackIds };
 }

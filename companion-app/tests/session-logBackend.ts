@@ -1,4 +1,5 @@
 import { act } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { EMPTY_ABLETON_STATE } from "../src/types";
 import {
@@ -93,6 +94,7 @@ function answeredLater(body: () => unknown): { response: Response; send: () => v
 export class SessionLog {
   public current: Session | null = null;
   public startsToRefuse = 0;
+  public playsToRefuse = 0;
   public refusesEnds = false;
   public holdsStarts = false;
   public holdsReads = false;
@@ -162,6 +164,10 @@ export class SessionLog {
       return this.open(backendTime());
     }
     if (method === "POST" && PLAYS_PATH.test(path)) {
+      if (this.playsToRefuse > 0) {
+        this.playsToRefuse -= 1;
+        return refused(500, "database is locked");
+      }
       this.log((body as { track_id: number }).track_id);
       return this.current;
     }
@@ -231,6 +237,13 @@ async function theAppShowsIt(): Promise<void> {
   await act(async () => {
     await new Promise((shown) => requestAnimationFrame(shown));
   });
+}
+
+export async function secondsPass(seconds: number): Promise<void> {
+  act(() => {
+    vi.advanceTimersByTime(seconds * 1000);
+  });
+  await theAppShowsIt();
 }
 
 export async function liveNowPlays(

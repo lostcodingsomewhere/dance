@@ -15,6 +15,7 @@ import {
   liveStops,
   playsLogged,
   preparedSetInLive,
+  secondsPass,
   sessionsStarted,
 } from "./session-logBackend";
 
@@ -177,6 +178,39 @@ describe("a prepared Set opened in Live from a file", () => {
     );
   });
 
+  it("keeps a song's play open through a long blend in which it never stops", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await boothShowsThePreparedSet();
+
+    await liveNowPlays(backend, clips("a", 0, STEMS));
+    await waitFor(() => expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]));
+    await liveNowPlays(backend, { ...clips("a", 0, STEMS), ...clips("b", 0, STEMS) });
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id, CLUB_MIX.track_id]),
+    );
+
+    vi.setSystemTime(Date.now() + 3 * 60_000);
+    await liveNowPlays(backend, {
+      ...clips("a", 0, STEMS),
+      ...clips("b", 0, ["drums", "vocals", "other"]),
+    });
+    await liveNowPlays(backend, {
+      ...clips("a", 0, ["drums", "vocals", "other"]),
+      ...clips("b", 0, STEMS),
+    });
+    await screen.findByText("2 plays");
+    expect(log.current?.plays.at(-1)?.track_id).toBe(CLUB_MIX.track_id);
+
+    await liveNowPlays(backend, clips("a", PAGE_2_CUE_1, STEMS));
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([
+        NIGHT_DRIVE.track_id,
+        CLUB_MIX.track_id,
+        HALF_LIGHT.track_id,
+      ]),
+    );
+  });
+
   it("logs a song again when it comes back later in the set", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     await boothShowsThePreparedSet();
@@ -215,5 +249,47 @@ describe("a prepared Set opened in Live from a file", () => {
     await waitFor(() =>
       expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id, CLUB_MIX.track_id]),
     );
+  });
+});
+
+describe("a play the backend refuses", () => {
+  it("is tried again a few seconds later while the song still leads, then left alone", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], shouldAdvanceTime: true });
+    log.playsToRefuse = 1;
+    await boothShowsThePreparedSet();
+
+    await liveNowPlays(backend, clips("a", CUE_3));
+    await waitFor(() => expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]));
+    expect(await screen.findByText("0 plays")).toBeInTheDocument();
+    await liveNowPlays(backend, clips("a", CUE_3 + 1));
+    expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]);
+
+    await secondsPass(6);
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id, NIGHT_DRIVE.track_id]),
+    );
+    expect(await screen.findByText("1 play")).toBeInTheDocument();
+    expect(screen.getByTitle("Energy arc — 1 play so far")).toBeInTheDocument();
+
+    await secondsPass(30);
+    expect(log.current?.plays.map((play) => play.track_id)).toEqual([NIGHT_DRIVE.track_id]);
+    expect(playsLogged(backend)).toHaveLength(2);
+  });
+
+  it("is not tried again for a song that no longer leads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], shouldAdvanceTime: true });
+    log.playsToRefuse = 1;
+    await boothShowsThePreparedSet();
+
+    await liveNowPlays(backend, clips("a", CUE_3));
+    await waitFor(() => expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]));
+    await liveNowPlays(backend, clips("b", 0));
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id, CLUB_MIX.track_id]),
+    );
+
+    await secondsPass(30);
+    expect(log.current?.plays.map((play) => play.track_id)).toEqual([CLUB_MIX.track_id]);
+    expect(playsLogged(backend)).toHaveLength(2);
   });
 });
