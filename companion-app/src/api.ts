@@ -55,6 +55,13 @@ export function serverMessage(error: Error): string {
   return typeof detail === "string" ? detail : error.message;
 }
 
+const BACKEND_DID_NOT_ANSWER = "The Dance backend did not answer. Check it is still running.";
+
+export function whyItFailed(error: Error): string {
+  // fetch rejects with a TypeError when no answer came back at all.
+  return error instanceof TypeError ? BACKEND_DID_NOT_ANSWER : serverMessage(error);
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},

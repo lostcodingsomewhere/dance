@@ -1,7 +1,7 @@
 import { MutationCache, QueryClient, useQueryClient, type Mutation } from "@tanstack/react-query";
 import { Component, type ReactNode } from "react";
 
-import { serverMessage } from "./api";
+import { whyItFailed } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { LoadWarnings } from "./components/LoadWarnings";
 import { MasterStrip } from "./components/MasterStrip";
@@ -14,8 +14,6 @@ import { SetEditor } from "./views/SetEditor";
 const UNMATCHED_CLIPS_NAMED = 3;
 // The backend is on this machine, so a venue's Wi-Fi dropping must not hold requests back.
 const SEND_EVEN_WHEN_THE_BROWSER_IS_OFFLINE = "always";
-
-const BACKEND_DID_NOT_ANSWER = "The Dance backend did not answer. Check it is still running.";
 
 type AnyMutation = Mutation<unknown, unknown, unknown>;
 
@@ -37,11 +35,6 @@ function whatWasAttempted(mutation: AnyMutation, variables: unknown): string | n
   } catch {
     return null;
   }
-}
-
-function whyItFailed(error: Error): string {
-  // fetch rejects with a TypeError when no answer came back at all.
-  return error instanceof TypeError ? BACKEND_DID_NOT_ANSWER : serverMessage(error);
 }
 
 function whyItWasRefused(answer: unknown): string | null {

@@ -56,7 +56,7 @@ export function useStartPreview() {
       // If the request fails, drop the optimistic preview state so the
       // button doesn't get stuck.
       store.setPreviewing(null);
-      store.reportFailure("start the preview", [api.serverMessage(error)]);
+      store.reportFailure("start the preview", [api.whyItFailed(error)]);
     },
   });
 }

@@ -17,6 +17,7 @@ import {
 const CUE_TRACK_IN_LIVE = 10;
 const NO_VOCALS = "No vocals stem available for track 9";
 const BASS_AT_HALF_TEMPO = "Bass on Deck B is warped at half the tempo of the other stems.";
+const BACKEND_DID_NOT_ANSWER = "The Dance backend did not answer. Check it is still running.";
 
 const PREVIEW_PLAYING = {
   ok: true,
@@ -58,6 +59,19 @@ describe("the cue preview", () => {
     startPreview();
 
     await expectWarningLines([`Couldn't start the preview: ${LIVE_IS_DOWN}`]);
+    expect(screen.queryByTestId("cue-strip")).not.toBeInTheDocument();
+  });
+
+  it("says the backend is not answering when a preview gets no answer at all", async () => {
+    booth.liveAnswers = (request) => {
+      if (isCommand(request, "/ableton/preview")) throw new TypeError("Failed to fetch");
+      return undefined;
+    };
+    await booth.open();
+
+    startPreview();
+
+    await expectWarningLines([`Couldn't start the preview: ${BACKEND_DID_NOT_ANSWER}`]);
     expect(screen.queryByTestId("cue-strip")).not.toBeInTheDocument();
   });
 
