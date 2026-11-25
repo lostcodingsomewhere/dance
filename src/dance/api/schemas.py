@@ -420,6 +420,8 @@ class PlanItemOut(_Base):
     key_camelot: str | None = None
     bpm: float | None = None
     floor_energy: int | None = None
+    state: str | None = None
+    download_failed: bool = False
 
 
 class SetPlanOut(_Base):
