@@ -189,7 +189,7 @@ export function RoleColumnsGrid({
     <div data-plan-grid className="flex flex-col gap-1 min-w-0">
       <div className={cols}>
         {PLAN_ROLES.map((role) => (
-          <ColumnHeader key={role} role={role} mode={mode} />
+          <ColumnHeader key={role} role={role} mode={mode} setId={setId} />
         ))}
       </div>
 

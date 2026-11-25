@@ -289,7 +289,7 @@ const PREVIEWING_TONE =
   "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]";
 const LIVE_BUTTON =
   "inline-flex h-7 w-11 shrink-0 items-center justify-center rounded text-sm transition-colors disabled:opacity-50";
-const LIVE_RECS_MIN_HEIGHT = "min-h-[396px]";
+const LIVE_RECS_MIN_HEIGHT = "min-h-[356px]";
 // 3 px of padding on every side keeps a row's focus ring inside the scroll box.
 const LIVE_PLAN_BOX =
   "-m-[3px] flex max-h-[122px] flex-col gap-1 overflow-y-auto p-[3px] scroll-py-[3px] [@media(max-height:1000px)]:max-h-[82px]";
@@ -444,13 +444,13 @@ function LiveRecCard({
       aria-label={title}
       onMouseDown={onFocus}
       title={rec.reasons.join(" · ")}
-      className={`flex shrink-0 flex-col gap-1 overflow-hidden rounded-md border px-2 py-1.5 ${
-        version ? "h-[120px]" : "h-24"
+      className={`flex shrink-0 flex-col gap-0.5 overflow-hidden rounded-md border px-2 py-1 ${
+        version ? "h-[108px]" : "h-[86px]"
       } ${focused ? `${FOCUS_RING} ` : ""}${
         preview.isPreviewing ? PREVIEWING_TONE : `${styles.border} ${styles.bg}`
       }`}
     >
-      <div className="flex h-6 shrink-0 items-center gap-2">
+      <div className="flex h-[22px] shrink-0 items-center gap-2">
         <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-400">
           {Math.round(rec.score * 100)}
         </span>
@@ -890,8 +890,18 @@ function RecsList({
  */
 
 /** The role's colored title cell. */
-export function ColumnHeader({ role, mode }: { role: PlanRole; mode?: Mode }) {
+export function ColumnHeader({
+  role,
+  mode,
+  setId,
+}: {
+  role: PlanRole;
+  mode?: Mode;
+  setId?: number | null;
+}) {
   const styles = ROLE_STYLES[visRole(role)];
+  const plan = useSetPlan(mode === "live" ? setId : null);
+  const planned = plan.data?.queues?.[role]?.length ?? 0;
   return (
     <div
       className={`rounded px-2 py-1 font-semibold uppercase text-center border ${
@@ -899,6 +909,9 @@ export function ColumnHeader({ role, mode }: { role: PlanRole; mode?: Mode }) {
       } ${styles.header}`}
     >
       {roleLabel(visRole(role))}
+      {mode === "live" && planned > 0 && (
+        <span className="ml-1.5 font-normal normal-case opacity-80">{planned} planned</span>
+      )}
     </div>
   );
 }
@@ -928,7 +941,7 @@ export function PlanBand({
       aria-label={`${roleLabel(visRole(role))} plan`}
       className={`flex flex-col gap-1 min-w-0 ${live ? "" : "h-full"}`}
     >
-      <ZoneLabel live={live}>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
+      {!live && <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>}
       {live ? (
         <LivePlanZone setId={setId} role={role} />
       ) : (

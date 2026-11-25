@@ -173,7 +173,8 @@ describe("the plan in the Booth", () => {
       "[@media(max-height:1000px)]:max-h-[82px]",
     );
     for (const row of rows) expect(row).toHaveClass("h-9", "shrink-0");
-    expect(within(planned("song")).getByText("◆ Plan · 20")).toBeInTheDocument();
+    expect(screen.getByText("20 planned")).toBeInTheDocument();
+    expect(screen.queryByText(/◆ Plan/)).not.toBeInTheDocument();
     expect(planned("song").parentElement).toHaveClass("items-start");
 
     for (const emptyColumn of ["drums", "bass", "vocals", "other"] as const) {
@@ -298,14 +299,14 @@ describe("a recommendation in the Booth", () => {
     for (const control of within(card).getAllByRole("button")) {
       expect(control).toHaveClass("w-11", "h-7");
     }
-    expect(card.parentElement).toHaveClass("min-h-[396px]");
+    expect(card.parentElement).toHaveClass("min-h-[356px]");
 
-    expect(card).toHaveClass("h-24");
+    expect(card).toHaveClass("h-[86px]");
     fireEvent.mouseDown(card);
-    expect(card).toHaveClass("h-24", "ring-2", "ring-amber-300/80");
+    expect(card).toHaveClass("h-[86px]", "ring-2", "ring-amber-300/80");
 
     const version = recCard("song", CLUB_MIX.title);
-    expect(version).toHaveClass("h-[120px]");
+    expect(version).toHaveClass("h-[108px]");
     expect(within(version).getByText("version")).toBeInTheDocument();
     expect(within(version).getByText("Club Mix of Night Drive")).toBeInTheDocument();
     expect(
@@ -345,7 +346,7 @@ describe("the Set view", () => {
     expect(pick("song", LOW_TIDE.title)).not.toHaveClass("h-9");
 
     const card = recCard("song", FITS_THE_PLAN.title);
-    expect(card).not.toHaveClass("h-24");
+    expect(card).not.toHaveClass("h-[86px]");
     expect(within(card).getByText("Test Artist")).toBeInTheDocument();
     expect(within(card).getByTitle("Vibe (CLAP embedding): 90").parentElement).not.toHaveClass(
       "overflow-hidden",
