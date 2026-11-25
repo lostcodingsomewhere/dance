@@ -11,6 +11,7 @@ export function useFireScene() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (sceneIndex: number) => api.abletonFireScene(sceneIndex),
+    meta: { attempt: (sceneIndex: number) => `play scene ${sceneIndex + 1}` },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -20,6 +21,7 @@ export function useFireCell() {
   return useMutation({
     mutationFn: ({ track, slot }: { track: number; slot: number }) =>
       api.abletonFireCell(track, slot),
+    meta: { attempt: "play that clip" },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -28,6 +30,7 @@ export function useStopTrack() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (trackIndex: number) => api.abletonStopTrack(trackIndex),
+    meta: { attempt: "stop that column" },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -36,6 +39,7 @@ export function useStopAllClips() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.abletonStopAllClips(),
+    meta: { attempt: "stop all clips" },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -45,6 +49,7 @@ export function useStopCell() {
   return useMutation({
     mutationFn: ({ track, slot }: { track: number; slot: number }) =>
       api.abletonStopCell(track, slot),
+    meta: { attempt: "stop that clip" },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -53,6 +58,7 @@ export function useStopScene() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (sceneIndex: number) => api.abletonStopScene(sceneIndex),
+    meta: { attempt: (sceneIndex: number) => `stop scene ${sceneIndex + 1}` },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -62,6 +68,10 @@ export function useSoloTrack() {
   return useMutation({
     mutationFn: ({ track, soloed }: { track: number; soloed: boolean }) =>
       api.abletonSoloTrack(track, soloed),
+    meta: {
+      attempt: ({ soloed }: { soloed: boolean }) =>
+        soloed ? "solo that column" : "unsolo that column",
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }
@@ -75,6 +85,7 @@ export function useDeleteCell() {
   return useMutation({
     mutationFn: ({ track, slot }: { track: number; slot: number }) =>
       api.abletonDeleteCell(track, slot),
+    meta: { attempt: "remove that clip" },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ableton", "state"] });
       qc.invalidateQueries({ queryKey: ["decks"] });
@@ -94,6 +105,7 @@ export function useSeekClip() {
       slot: number;
       positionBeats: number;
     }) => api.abletonSeekClip(track, slot, positionBeats),
+    meta: { attempt: "jump to that spot" },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ableton", "state"] }),
   });
 }

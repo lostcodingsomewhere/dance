@@ -7,6 +7,13 @@ import type { GridFocus } from "./lib/gridNav";
 import { pageOfScene } from "./lib/pages";
 import type { LoadedDeck, ViewName } from "./types";
 
+export interface LoadWarning {
+  id: number;
+  title: string;
+  warnings: string[];
+  times: number;
+}
+
 interface AppState {
   currentSessionId: number | null;
   currentView: ViewName;
@@ -37,14 +44,14 @@ interface AppState {
    */
   stemColumnOrder: string[];
   /**
-   * Warnings from the most recent load-to-Live, chiefly the warp check
+   * Warnings and failed commands, newest first: chiefly the warp check
    * (``bridge._check_warp_agreement``): "Live warped this stem at HALF the
    * tempo of the others". Ephemeral and explicitly dismissed — a stem that
    * warped wrong sounds like a mistake YOU made, so the one thing that must
-   * not happen is the message scrolling past unread. ``null`` = nothing to
-   * report.
+   * not happen is the message scrolling past unread. Each one stays until it
+   * is dismissed; empty = nothing to report.
    */
-  loadWarnings: { title: string; warnings: string[] } | null;
+  loadWarnings: LoadWarning[];
   /**
    * The scene each deck's ▶ should fire next — set when you load a track to
    * that deck, cleared once Live reports it firing.
@@ -137,7 +144,7 @@ const initial: AppState = {
   commandBarOpen: false,
   previewing: null,
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
-  loadWarnings: null,
+  loadWarnings: [],
   armed: { a: null, b: null },
   boothPage: 0,
   gridFocus: null,
@@ -145,6 +152,7 @@ const initial: AppState = {
 };
 
 let state: AppState = initial;
+let nextLoadWarningId = 1;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -295,12 +303,29 @@ export const store = {
    *  path never flashes an empty banner. */
   setLoadWarnings(title: string, warnings: string[]): void {
     if (!warnings || warnings.length === 0) return;
-    state = { ...state, loadWarnings: { title, warnings } };
+    const saidBefore = (w: LoadWarning) =>
+      w.title === title && w.warnings.join("\n") === warnings.join("\n");
+    const timesBefore = state.loadWarnings.find(saidBefore)?.times ?? 0;
+    state = {
+      ...state,
+      loadWarnings: [
+        { id: nextLoadWarningId++, title, warnings, times: timesBefore + 1 },
+        ...state.loadWarnings.filter((w) => !saidBefore(w)),
+      ],
+    };
+    emit();
+  },
+  reportFailure(attempt: string | null, reasons: string[]): void {
+    store.setLoadWarnings(attempt ? `Couldn't ${attempt}` : "That didn't work", reasons);
+  },
+  dismissLoadWarning(id: number): void {
+    if (!state.loadWarnings.some((w) => w.id === id)) return;
+    state = { ...state, loadWarnings: state.loadWarnings.filter((w) => w.id !== id) };
     emit();
   },
   clearLoadWarnings(): void {
-    if (state.loadWarnings == null) return;
-    state = { ...state, loadWarnings: null };
+    if (state.loadWarnings.length === 0) return;
+    state = { ...state, loadWarnings: [] };
     emit();
   },
   /** Read the cursor from a non-React callsite (the shape subscriber). */

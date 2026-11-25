@@ -50,6 +50,12 @@ export function TwoDeckStrip() {
       : null;
   const setPfl = useMutation({
     mutationFn: (side: "a" | "b" | "off") => api.abletonSetPfl(side),
+    meta: {
+      attempt: (side: "a" | "b" | "off") =>
+        side === "off"
+          ? "stop monitoring in headphones"
+          : `monitor Deck ${side.toUpperCase()} in headphones`,
+    },
   });
   function togglePfl(side: "a" | "b") {
     // Optimistic command only — lit state is recomputed from soloed_kinds
@@ -57,7 +63,10 @@ export function TwoDeckStrip() {
     const next = pflSide === side ? "off" : side;
     setPfl.mutate(next);
   }
-  const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
+  const setTempo = useMutation({
+    mutationFn: api.abletonSetTempo,
+    meta: { attempt: "set the tempo" },
+  });
   // Bring the original full-song (mix) clip in on a side — the "fall back
   // to the record" parachute. The mix clip sits loaded-but-silent until
   // fired; firing it unmutes the anchor reference. (No mute OSC endpoint
@@ -65,13 +74,16 @@ export function TwoDeckStrip() {
   const unmuteMix = useMutation({
     mutationFn: (vars: { trackIdx: number; sceneIdx: number }) =>
       api.abletonFireClip(vars.trackIdx, vars.sceneIdx),
+    meta: { attempt: "play the original record" },
   });
   const fireDeck = useMutation({
     mutationFn: (vars: { side: "a" | "b"; sceneIdx: number; loadedOnly?: boolean }) =>
       api.abletonFireDeck(vars.side, vars.sceneIdx, vars.loadedOnly),
+    meta: { attempt: ({ side }: { side: "a" | "b" }) => `play Deck ${side.toUpperCase()}` },
   });
   const stopDeck = useMutation({
     mutationFn: (side: "a" | "b") => api.abletonStopDeck(side),
+    meta: { attempt: (side: "a" | "b") => `stop Deck ${side.toUpperCase()}` },
   });
   // FX state — light read every 2s so the HPF toggle stays in sync if
   // the user filters from elsewhere (Live, OSC). Cheap, single endpoint.
@@ -83,6 +95,10 @@ export function TwoDeckStrip() {
   const fxToggle = useMutation({
     mutationFn: (vars: { fx: "filter" | "reverb" | "delay"; side: "a" | "b" }) =>
       api.abletonFxToggle(vars.fx, vars.side),
+    meta: {
+      attempt: ({ fx, side }: { fx: string; side: "a" | "b" }) =>
+        `switch the ${fx} on Deck ${side.toUpperCase()}`,
+    },
     onSuccess: () => fxState.refetch(),
   });
   const fxSweep = useMutation({
@@ -96,10 +112,15 @@ export function TwoDeckStrip() {
         bars: vars.bars,
         direction: vars.direction ?? "auto",
       }),
+    meta: {
+      attempt: ({ fx, side }: { fx: string; side: "a" | "b" }) =>
+        `sweep the ${fx} on Deck ${side.toUpperCase()}`,
+    },
     onSuccess: () => fxState.refetch(),
   });
   const fxFire = useMutation({
     mutationFn: (name: string) => api.abletonFxFire(name),
+    meta: { attempt: (name: string) => `fire the ${name}` },
   });
   const filterActive = fxState.data?.filter ?? { a: false, b: false };
   const reverbActive = fxState.data?.reverb ?? { a: false, b: false };

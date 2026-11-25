@@ -109,9 +109,18 @@ function StripRow({
     ? deckBpms.b - deckBpms.a
     : null;
 
-  const play = useMutation({ mutationFn: api.abletonPlay });
-  const stop = useMutation({ mutationFn: api.abletonStop });
-  const setTempo = useMutation({ mutationFn: api.abletonSetTempo });
+  const play = useMutation({
+    mutationFn: api.abletonPlay,
+    meta: { attempt: "start Live's transport" },
+  });
+  const stop = useMutation({
+    mutationFn: api.abletonStop,
+    meta: { attempt: "stop Live's transport" },
+  });
+  const setTempo = useMutation({
+    mutationFn: api.abletonSetTempo,
+    meta: { attempt: "set the tempo" },
+  });
 
   // Click-to-edit BPM: opens a slider popover with genre BPM anchors.
   // Commit fires on slider release (or Enter); Escape / outside-click cancels.
@@ -392,7 +401,10 @@ function HealthLight({ health }: { health: BridgeHealth }) {
  */
 function PanicButton() {
   const [armed, setArmed] = useState(false);
-  const panic = useMutation({ mutationFn: api.abletonStopAllClips });
+  const panic = useMutation({
+    mutationFn: api.abletonStopAllClips,
+    meta: { attempt: "stop all clips" },
+  });
   if (!armed) {
     return (
       <button
@@ -433,11 +445,14 @@ function RecordButton({ onNotice }: { onNotice: (notice: RecordNotice | null) =>
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const toggle = useMutation({
-    mutationFn: (on: boolean) => api.abletonRecord(on),
+    mutationFn: (on: boolean): Promise<{ ok: boolean; recording: boolean; warnings?: string[] }> =>
+      api.abletonRecord(on),
+    meta: { attempt: (on: boolean) => (on ? "start recording" : "stop recording") },
     onSuccess: (res) => {
       setRecording(res.recording);
       setStartedAt(res.recording ? Date.now() : null);
       setElapsed(0);
+      store.setLoadWarnings("Recording", res.warnings ?? []);
     },
   });
   useEffect(() => {
