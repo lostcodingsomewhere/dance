@@ -94,6 +94,10 @@ def _is_the_file_of(mine: LibraryCut, release: _Release) -> bool:
     )
 
 
+def _file_of(release: _Release, library: Sequence[LibraryCut]) -> LibraryCut | None:
+    return next((cut for cut in library if _is_the_file_of(cut, release)), None)
+
+
 def versions_among(
     song: LibraryCut, hits: Sequence[SpotifyTrackHit], library: Sequence[LibraryCut]
 ) -> list[SpotifyVersion]:
@@ -101,7 +105,7 @@ def versions_among(
     for release in _one_per_recording(song, hits):
         if _is_the_file_of(song, release):
             continue
-        mine = next((cut for cut in library if _is_the_file_of(cut, release)), None)
+        mine = _file_of(release, library)
         versions.append(SpotifyVersion(release.hit, release.cut.label_seen_from(song), mine))
     return versions
 
@@ -141,3 +145,14 @@ def versions_on_spotify(
     query = versions_query(song)
     hits = client.search_tracks(query, limit=MOST_RESULTS_READ)
     return VersionsOnSpotify(query, versions_among(song, hits, _whole_library(session)))
+
+
+def _holder_of(hit: SpotifyTrackHit, library: Sequence[LibraryCut]) -> LibraryCut | None:
+    if not hit.duration_ms:
+        return next((cut for cut in library if cut.spotify_id == hit.spotify_id), None)
+    return _file_of(_Release(hit, _cut_of(hit), {hit.spotify_id}), library)
+
+
+def held_in_library(session: Session, hits: Sequence[SpotifyTrackHit]) -> list[LibraryCut | None]:
+    library = _whole_library(session)
+    return [_holder_of(hit, library) for hit in hits]
