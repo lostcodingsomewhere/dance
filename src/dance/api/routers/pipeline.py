@@ -57,7 +57,7 @@ from dance.pipeline.dispatcher_lock import (
 )
 from dance.pipeline.events import StageEvent
 from dance.pipeline.heal_ledger import HealLedger
-from dance.pipeline.placeholders import not_placeholder
+from dance.pipeline.placeholders import download_failed, is_placeholder_hash, not_placeholder
 from dance.spotify.csv_importer import (
     CsvRow,
     download_track,
@@ -495,8 +495,7 @@ def _download_ahead_of_bulk_work(
 
 
 def _download_again_if_it_failed(session: Session, track: Track, settings: Settings) -> str | None:
-    failed = track.state == TrackState.ERROR.value
-    if not failed or not str(track.file_hash).startswith(NEVER_DOWNLOADED):
+    if not download_failed(track):
         return None
     session.query(Track).filter(Track.id == track.id).update(
         {Track.state: TrackState.PENDING.value, Track.error_message: None}
@@ -1301,7 +1300,7 @@ def retry_track(
         raise HTTPException(status_code=404, detail=f"Track {track_id} is not in the library.")
     if track.state != TrackState.ERROR.value:
         raise HTTPException(status_code=409, detail=NOTHING_TO_RETRY)
-    if str(track.file_hash).startswith(NEVER_DOWNLOADED):
+    if is_placeholder_hash(str(track.file_hash)):
         # No stage can claim a row whose download never finished, so no run is waited for.
         _download_again_if_it_failed(session, track, settings)
     else:

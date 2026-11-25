@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from dance.core.database import Track, TrackState
+from dance.pipeline.placeholders import PLACEHOLDER_HASH_PREFIX, is_placeholder_hash
 from dance.recommender.versions import Cut, first_credited_artist
 from dance.spotify.matching import passes_duration_gate
 from dance.spotify.search import SpotifySearchClient, SpotifyTrackHit
@@ -17,7 +18,7 @@ class NothingToSearchWithError(ValueError):
     pass
 
 
-NEVER_DOWNLOADED = "pending:"
+NEVER_DOWNLOADED = PLACEHOLDER_HASH_PREFIX
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ def _library_cut(track: Track, stands_for: Track | None = None) -> LibraryCut:
         track_id=int(kept.id),
         spotify_id=_text(track.spotify_id),
         state=str(kept.state),
-        has_a_file=not str(kept.file_hash).startswith(NEVER_DOWNLOADED),
+        has_a_file=not is_placeholder_hash(str(kept.file_hash)),
     )
 
 

@@ -49,12 +49,11 @@ from dance.core.database import (
     SetTrack,
     StemKind,
     Track,
-    TrackState,
     now_utc,
 )
+from dance.pipeline.placeholders import download_failed
 from dance.recommender.recommender import recommend_by_column
 from dance.recommender.tail import DEFAULT_WINDOW, tail_recs_for_set
-from dance.spotify.versions import NEVER_DOWNLOADED
 
 router = APIRouter(prefix="/sets", tags=["sets"])
 
@@ -535,11 +534,6 @@ def _validate_role(role: str) -> str:
     return role
 
 
-def _download_failed(track: Track) -> bool:
-    never_arrived = str(track.file_hash).startswith(NEVER_DOWNLOADED)
-    return never_arrived and str(track.state) == TrackState.ERROR.value
-
-
 def _plan_out(session: Session, s: Set) -> dict:
     """Decorate a set's plan: per-role queues of items with display fields."""
     queues = sq.parse_plan(s.plan)
@@ -572,7 +566,7 @@ def _plan_out(session: Session, s: Set) -> dict:
             "bpm": float(a.bpm) if a and a.bpm is not None else None,
             "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
             "state": str(t.state) if t else None,
-            "download_failed": _download_failed(t) if t else False,
+            "download_failed": download_failed(t) if t else False,
         }
 
     return {
