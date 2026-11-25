@@ -147,6 +147,12 @@ def versions_on_spotify(
     return VersionsOnSpotify(query, versions_among(song, hits, _whole_library(session)))
 
 
+def _holder_of(hit: SpotifyTrackHit, library: Sequence[LibraryCut]) -> LibraryCut | None:
+    if not hit.duration_ms:
+        return next((cut for cut in library if cut.spotify_id == hit.spotify_id), None)
+    return _file_of(_Release(hit, _cut_of(hit), {hit.spotify_id}), library)
+
+
 def held_in_library(session: Session, hits: Sequence[SpotifyTrackHit]) -> list[LibraryCut | None]:
     library = _whole_library(session)
-    return [_file_of(_Release(hit, _cut_of(hit), {hit.spotify_id}), library) for hit in hits]
+    return [_holder_of(hit, library) for hit in hits]

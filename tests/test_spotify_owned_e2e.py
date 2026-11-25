@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from dance.api import create_app
 from dance.core.database import Track, _reset_engine_for_tests, get_session_factory
 from dance.spotify import csv_importer, download_pool
+from dance.spotify import search as spotify_search
+from dance.spotify.search import SpotifySearchClient
 from tests.spotify_stand_in import APP_ID, APP_SECRET, CatalogTrack, SpotifyStandIn
 from tests.test_acquisition import _FAKE_YT_DLP, FFMPEG, FakeYtDlp, _entry, needs_ffmpeg
 from tests.test_api import FakeAbletonBridge
@@ -40,6 +42,8 @@ EXTENDED = CatalogTrack("extended", "Shallow Water - Extended Mix", ("Elderbrook
 LONG_CUT = CatalogTrack("long-cut", "Shallow Water", ("Elderbrook",), LONG_CUT_SECONDS)
 ANOTHER_BANDS = CatalogTrack("another-bands", "Shallow Water", ("Other Band",), SONG_SECONDS)
 NOT_OWNED = CatalogTrack("not-owned", "Deep End", ("Elderbrook",), SONG_SECONDS)
+NO_LENGTH_ON_SPOTIFY = CatalogTrack("no-length", "Shallow Water", ("Elderbrook",), 0.0)
+GONE_FROM_SPOTIFY = CatalogTrack("gone", "Shallow Water", ("Elderbrook",), SONG_SECONDS)
 WHAT_SPOTIFY_HAS = [
     THE_SONG,
     ITS_ALBUM_RELEASE,
@@ -49,6 +53,7 @@ WHAT_SPOTIFY_HAS = [
     LONG_CUT,
     ANOTHER_BANDS,
     NOT_OWNED,
+    NO_LENGTH_ON_SPOTIFY,
 ]
 
 
@@ -106,14 +111,14 @@ def _searched(booth: Booth, query: str) -> list[tuple[str, int | None, str | Non
     ]
 
 
-def _asked_for(booth: Booth, song: CatalogTrack, only_the_id: bool = False) -> dict:
+def _asked_for(
+    booth: Booth, song: CatalogTrack, only_the_id: bool = False, with_its_length: bool = True
+) -> dict:
     wanted: dict = {"spotify_id": song.spotify_id}
     if not only_the_id:
-        wanted |= {
-            "title": song.name,
-            "artist": ", ".join(song.artists),
-            "duration_ms": int(song.seconds * 1000),
-        }
+        wanted |= {"title": song.name, "artist": ", ".join(song.artists)}
+        if with_its_length:
+            wanted["duration_ms"] = int(song.seconds * 1000)
     queued = booth.client.post(f"{API}/pipeline/ingest/track", json=wanted)
     assert queued.status_code == 200, queued.text
     return queued.json()
@@ -143,6 +148,7 @@ def test_a_search_marks_the_song_the_library_holds_and_none_of_its_other_version
         (EXTENDED.spotify_id, None, None),
         (LONG_CUT.spotify_id, None, None),
         (ANOTHER_BANDS.spotify_id, None, None),
+        (NO_LENGTH_ON_SPOTIFY.spotify_id, None, None),
     ]
     assert _searched(booth, "deep end") == [(NOT_OWNED.spotify_id, None, None)]
 
@@ -271,3 +277,63 @@ def test_asking_for_another_release_of_a_failed_download_tries_that_download_aga
     assert booth.finished(again["job_id"])["items"][0]["status"] == "ok"
     assert _rows(booth) == [(booth.ids["owned"], None), (first["track_id"], REMIX.spotify_id)]
     assert youtube.downloads == [REMIX_UPLOAD, REMIX_UPLOAD]
+
+
+@needs_ffmpeg
+def test_a_request_that_leaves_out_the_length_has_it_read_from_spotify_first(booth, monkeypatch):
+    owned = booth.ids["owned"]
+    youtube = _youtube(monkeypatch, {})
+
+    for release in (THE_SONG, ITS_ALBUM_RELEASE):
+        assert _asked_for(booth, release, with_its_length=False) == {
+            "track_id": owned,
+            "state": "complete",
+            "job_id": None,
+            "already_existed": True,
+        }
+    assert youtube.search_cmds == []
+
+    long_cut = _asked_for(booth, LONG_CUT, with_its_length=False)
+    assert booth.finished(long_cut["job_id"])["items"][0]["status"] == "fail"
+
+    assert long_cut["already_existed"] is False
+    assert _rows(booth) == [(owned, None), (long_cut["track_id"], LONG_CUT.spotify_id)]
+    added = booth.client.get(f"{API}/tracks/{long_cut['track_id']}").json()
+    assert added["duration_seconds"] == LONG_CUT_SECONDS
+    assert set(youtube.queries) == {"Elderbrook Shallow Water"}
+    paths_asked = [request.url.path for request in booth.spotify.requests]
+    assert [path for path in paths_asked if path.startswith("/v1/tracks/")] == [
+        f"/v1/tracks/{release.spotify_id}" for release in (THE_SONG, ITS_ALBUM_RELEASE, LONG_CUT)
+    ]
+
+
+@needs_ffmpeg
+def test_a_song_whose_length_cannot_be_learned_is_recognised_by_its_spotify_id_alone(
+    booth, monkeypatch
+):
+    owned = booth.ids["owned"]
+    youtube = _youtube(monkeypatch, {})
+
+    def asked_for_the_first_time(song: CatalogTrack) -> int:
+        answer = _asked_for(booth, song, with_its_length=False)
+        assert booth.finished(answer["job_id"])["items"][0]["status"] == "fail"
+        assert answer["already_existed"] is False
+        return answer["track_id"]
+
+    no_length = asked_for_the_first_time(NO_LENGTH_ON_SPOTIFY)
+    gone = asked_for_the_first_time(GONE_FROM_SPOTIFY)
+    monkeypatch.setattr(spotify_search, "_default_client", SpotifySearchClient(None, None))
+    not_set_up = asked_for_the_first_time(LONG_CUT)
+
+    assert _rows(booth) == [
+        (owned, None),
+        (no_length, NO_LENGTH_ON_SPOTIFY.spotify_id),
+        (gone, GONE_FROM_SPOTIFY.spotify_id),
+        (not_set_up, LONG_CUT.spotify_id),
+    ]
+    assert set(youtube.queries) == {"Elderbrook Shallow Water"}
+    again = _asked_for(booth, GONE_FROM_SPOTIFY, with_its_length=False)
+    booth.finished(again["job_id"])
+    assert (again["track_id"], again["already_existed"]) == (gone, True)
+    only_an_id = booth.client.post(f"{API}/pipeline/ingest/track", json={"spotify_id": "new"})
+    assert only_an_id.status_code == 503, only_an_id.text

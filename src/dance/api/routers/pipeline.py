@@ -528,6 +528,8 @@ def ingest_track(
     A recording the library already holds, under another Spotify ID or none,
     also answers with its existing Track: no row is created and nothing is
     downloaded. A track marked as a duplicate answers with the one it stands for.
+    A length the caller left out is read from Spotify; while it is unknown the
+    recording is recognised by its Spotify ID alone.
     Asking again for a track whose download failed queues the download again.
     """
     from dance.spotify.search import (
@@ -565,9 +567,20 @@ def ingest_track(
     existing = track_already_held(title, artist, duration_ms)
 
     # Fill metadata server-side if the caller didn't ship it.
-    if existing is None and (not title or not artist):
+    named = bool(title and artist)
+    if existing is None and not (named and duration_ms):
         client = get_default_client(settings)
-        if not client.configured:
+        hit = None
+        if client.configured:
+            try:
+                hit = client.get_track(spotify_id)
+            except SpotifyAuthError as exc:
+                if not named:
+                    raise HTTPException(status_code=503, detail=f"Spotify auth: {exc}") from exc
+            except SpotifySearchError as exc:
+                if not named:
+                    raise HTTPException(status_code=502, detail=f"Spotify error: {exc}") from exc
+        elif not named:
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -575,16 +588,11 @@ def ingest_track(
                     "DANCE_SPOTIFY_CLIENT_ID/SECRET in ~/.dance/.env"
                 ),
             )
-        try:
-            hit = client.get_track(spotify_id)
-        except SpotifyAuthError as exc:
-            raise HTTPException(status_code=503, detail=f"Spotify auth: {exc}") from exc
-        except SpotifySearchError as exc:
-            raise HTTPException(status_code=502, detail=f"Spotify error: {exc}") from exc
-        title = title or hit.title
-        artist = artist or hit.artist
-        duration_ms = duration_ms or hit.duration_ms
-        existing = track_already_held(title, artist, duration_ms)
+        if hit is not None:
+            title = title or hit.title
+            artist = artist or hit.artist
+            duration_ms = duration_ms or hit.duration_ms
+            existing = track_already_held(title, artist, duration_ms)
 
     if existing is not None:
         job_id = _download_again_if_it_failed(session, existing, settings)
