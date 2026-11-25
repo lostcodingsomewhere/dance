@@ -27,9 +27,10 @@ const VIEWS: { id: ViewName; label: string; hint: string }[] = [
  */
 export function MasterStrip() {
   const health = useBridgeHeartbeat();
+  const [recordNotice, setRecordNotice] = useState<RecordNotice | null>(null);
   return (
     <>
-      <StripRow health={health} />
+      <StripRow health={health} onRecordNotice={setRecordNotice} />
       {health === "server_down" && (
         <div
           role="alert"
@@ -38,11 +39,26 @@ export function MasterStrip() {
           The Dance server is not answering. This screen shows the last known state.
         </div>
       )}
+      {recordNotice && (
+        <div
+          role="alert"
+          title={recordNotice.detail}
+          className="shrink-0 border-b border-amber-500/40 bg-amber-950/60 px-4 py-1.5 text-xs text-amber-100"
+        >
+          {recordNotice.text}
+        </div>
+      )}
     </>
   );
 }
 
-function StripRow({ health }: { health: BridgeHealth }) {
+function StripRow({
+  health,
+  onRecordNotice,
+}: {
+  health: BridgeHealth;
+  onRecordNotice: (notice: RecordNotice | null) => void;
+}) {
   const state = useAbletonState();
   const view = useAppStore((s) => s.currentView);
   const deckMap = useDeckMap();
@@ -215,7 +231,7 @@ function StripRow({ health }: { health: BridgeHealth }) {
           <IconStop />
         </button>
         <PanicButton />
-        <RecordButton />
+        <RecordButton onNotice={onRecordNotice} />
       </div>
 
       {/* Camelot key of the dominant playing scene (the anchor for compat). */}
@@ -412,7 +428,7 @@ function PanicButton() {
  * we received the ok response — no separate /status endpoint needed
  * since record is binary and we own the source of truth here.
  */
-function RecordButton() {
+function RecordButton({ onNotice }: { onNotice: (notice: RecordNotice | null) => void }) {
   const [recording, setRecording] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -433,45 +449,45 @@ function RecordButton() {
   }, [recording, startedAt]);
   const mm = Math.floor(elapsed / 60_000).toString().padStart(2, "0");
   const ss = Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0");
-  const warnings = warningsIn(toggle.data);
-  const whyNotSent = reasonLiveWasNotTold(toggle.data);
+  const notice = useMemo(() => recordNoticeIn(toggle.data), [toggle.data]);
+  useEffect(() => onNotice(notice), [notice, onNotice]);
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => toggle.mutate(!recording)}
-        disabled={toggle.isPending}
-        className={`min-h-[40px] rounded-md flex items-center justify-center gap-1.5 font-mono tabular-nums text-[11px] transition-colors disabled:opacity-50 ${
-          recording
-            ? "w-[72px] px-2 bg-rose-600 text-white"
-            : "w-10 bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40"
-        }`}
-        aria-label={recording ? `Stop recording (${mm}:${ss})` : "Start recording"}
-        title={
-          recording
-            ? `Recording — ${mm}:${ss}. Click to stop.`
-            : "Start session record (Live captures into armed tracks)"
-        }
-      >
-        {recording ? <IconRecordStop /> : <IconRecordDot />}
-        {recording && <span>{mm}:{ss}</span>}
-      </button>
-      {warnings.length > 0 && (
-        <span role="alert" className={RECORD_WARNING_CLASS}>
-          {warnings.join(" ")}
-        </span>
-      )}
-      {whyNotSent != null && (
-        <span role="alert" title={whyNotSent} className={RECORD_WARNING_CLASS}>
-          Live could not be reached, so recording did not change. Check that Live is open, then
-          try again.
-        </span>
-      )}
-    </>
+    <button
+      type="button"
+      onClick={() => toggle.mutate(!recording)}
+      disabled={toggle.isPending}
+      className={`min-h-[40px] rounded-md flex items-center justify-center gap-1.5 font-mono tabular-nums text-[11px] transition-colors disabled:opacity-50 ${
+        recording
+          ? "w-[72px] px-2 bg-rose-600 text-white"
+          : "w-10 bg-neutral-900 text-neutral-500 hover:text-rose-300 hover:bg-rose-950/40"
+      }`}
+      aria-label={recording ? `Stop recording (${mm}:${ss})` : "Start recording"}
+      title={
+        recording
+          ? `Recording — ${mm}:${ss}. Click to stop.`
+          : "Start session record (Live captures into armed tracks)"
+      }
+    >
+      {recording ? <IconRecordStop /> : <IconRecordDot />}
+      {recording && <span>{mm}:{ss}</span>}
+    </button>
   );
 }
 
-const RECORD_WARNING_CLASS = "max-w-56 text-[10px] leading-tight text-amber-300";
+interface RecordNotice {
+  text: string;
+  detail?: string;
+}
+
+const RECORDING_DID_NOT_CHANGE =
+  "Live could not be reached, so recording did not change. Check that Live is open, then try again.";
+
+function recordNoticeIn(answer: unknown): RecordNotice | null {
+  const whyNotSent = reasonLiveWasNotTold(answer);
+  if (whyNotSent != null) return { text: RECORDING_DID_NOT_CHANGE, detail: whyNotSent };
+  const warnings = warningsIn(answer);
+  return warnings.length > 0 ? { text: warnings.join(" ") } : null;
+}
 
 function warningsIn(answer: unknown): string[] {
   if (answer == null || typeof answer !== "object") return [];

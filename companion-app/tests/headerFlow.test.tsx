@@ -144,6 +144,16 @@ function header(): HTMLElement {
   return screen.getByRole("banner");
 }
 
+function noticeUnderTheHeader(text: string): HTMLElement {
+  const notice = screen.getByText(text);
+  expect(notice).toHaveAttribute("role", "alert");
+  expect(header()).not.toContainElement(notice);
+  expect(
+    header().compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  return notice;
+}
+
 function at(bpm: number, cells: Cell[]): Cell[] {
   return cells.map((cell) => ({ ...cell, bpm }));
 }
@@ -439,7 +449,7 @@ describe("the tempo of each deck", () => {
 });
 
 describe("the record button", () => {
-  it("says so beside the timer when Live may be recording nothing", async () => {
+  it("says so in a row under the header when Live may be recording nothing", async () => {
     recordAnswer = {
       ok: true,
       recording: true,
@@ -451,25 +461,24 @@ describe("the record button", () => {
     fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
     const stop = await within(header()).findByRole("button", { name: /^Stop recording/ });
     expect(stop).toHaveTextContent("00:00");
-    expect(within(header()).getByText(UNCONFIRMED_RECORDING)).toBeInTheDocument();
+    await screen.findByText(UNCONFIRMED_RECORDING);
+    noticeUnderTheHeader(UNCONFIRMED_RECORDING);
 
     fireEvent.click(stop);
     await within(header()).findByRole("button", { name: "Start recording" });
-    expect(within(header()).queryByText(UNCONFIRMED_RECORDING)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(UNCONFIRMED_RECORDING)).not.toBeInTheDocument());
 
     recordAnswer = { ok: false, recording: false, warning: RECORD_NOT_SENT };
     fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
-    expect(await within(header()).findByText(RECORD_DID_NOT_CHANGE)).toHaveAttribute(
-      "title",
-      RECORD_NOT_SENT,
-    );
-    expect(within(header()).queryByText(RECORD_NOT_SENT)).not.toBeInTheDocument();
+    await screen.findByText(RECORD_DID_NOT_CHANGE);
+    expect(noticeUnderTheHeader(RECORD_DID_NOT_CHANGE)).toHaveAttribute("title", RECORD_NOT_SENT);
+    expect(screen.queryByText(RECORD_NOT_SENT)).not.toBeInTheDocument();
     expect(within(header()).getByRole("button", { name: "Start recording" })).toBeInTheDocument();
 
     recordAnswer = { ok: true, recording: true, armed_track: 10, warnings: [] };
     fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
     await within(header()).findByRole("button", { name: /^Stop recording/ });
-    expect(within(header()).queryByText(RECORD_DID_NOT_CHANGE)).not.toBeInTheDocument();
-    expect(within(header()).queryByText(UNCONFIRMED_RECORDING)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(RECORD_DID_NOT_CHANGE)).not.toBeInTheDocument());
+    expect(screen.queryByText(UNCONFIRMED_RECORDING)).not.toBeInTheDocument();
   });
 });
