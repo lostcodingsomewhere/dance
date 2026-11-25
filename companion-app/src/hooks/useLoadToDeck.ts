@@ -26,8 +26,8 @@ function loadKinds(role: PlanRole): string[] | undefined {
  *  - ``armDeck`` points that deck's ▶ at what was just loaded. Without it the
  *    play button falls back to an anchor heuristic that replays whatever is
  *    already going.
- *  - ``registerDeck`` is what makes the play LOGGABLE; the auto-logger only
- *    recognises a playing clip whose deck it knows about.
+ *  - ``registerDeck`` notes the load in this browser. Plays are logged from
+ *    the backend's deck map, so logging no longer depends on it.
  *  - ``scheduleWarpCheck`` audits the stems against each other once Live's
  *    analysis settles, because Live warps stems independently and gets it
  *    wrong often enough to matter.

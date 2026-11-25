@@ -63,6 +63,7 @@ export function useDeckMap() {
 export function useResetDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "reset the decks" },
     mutationFn: api.abletonResetDecks,
     onSuccess: () => {
       store.clearDecks();
@@ -80,6 +81,7 @@ export function useResetDecks() {
 export function useCleanDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "clean up the decks" },
     mutationFn: api.abletonCleanDecks,
     onSuccess: () => {
       store.clearDecks();
@@ -97,6 +99,7 @@ export function useCleanDecks() {
 export function useResyncDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "resync with Live" },
     mutationFn: api.abletonResyncDecks,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });

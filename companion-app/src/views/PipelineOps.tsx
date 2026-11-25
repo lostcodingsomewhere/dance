@@ -173,6 +173,7 @@ function IngestPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const previewMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: () => api.ingestPreview(csvText),
     onSuccess: (data) => {
       setPreview(data);
@@ -186,6 +187,7 @@ function IngestPanel({
   });
 
   const commitMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: () =>
       api.ingestCommit(csvText, { selected_keys: Array.from(selected) }),
     onSuccess: () => {
@@ -684,11 +686,13 @@ export function PipelineOps() {
   });
 
   const watchMutation = useMutation({
+    meta: { attempt: "change the watch setting" },
     mutationFn: api.setWatchState,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-watch"] }),
   });
 
   const scanMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: api.scanLibrary,
     onSuccess: (data) => {
       setScanToast({
@@ -708,6 +712,7 @@ export function PipelineOps() {
   });
 
   const playlistMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: (args: { url: string; token?: string }) =>
       api.ingestSpotifyPlaylist(args.url, args.token),
     onSuccess: (r) => {
@@ -734,6 +739,7 @@ export function PipelineOps() {
   });
 
   const deleteMutation = useMutation({
+    meta: { attempt: "delete that track" },
     mutationFn: api.deleteTrack,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pipeline-status"] });
@@ -767,6 +773,7 @@ export function PipelineOps() {
   );
 
   const processMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: api.triggerPipelineProcess,
     onMutate: () => setRefusal(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-status"] }),
@@ -781,6 +788,7 @@ export function PipelineOps() {
   });
 
   const retryMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: api.retryPipelineTrack,
     onMutate: () => setRefusal(null),
     onSuccess: async (waiting) => {

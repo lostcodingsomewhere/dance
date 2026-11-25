@@ -22,6 +22,7 @@ export function useCurrentSession() {
 export function useCreateSession() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "start a session" },
     mutationFn: (name?: string) => api.createSession(name),
     onSuccess: (session) => {
       store.setSessionId(session.id);
@@ -33,6 +34,7 @@ export function useCreateSession() {
 export function useAddPlay(sessionId: number | null | undefined) {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "log that play" },
     mutationFn: (body: AddPlayBody) => {
       if (sessionId == null) {
         throw new Error("No active session — start one first.");
@@ -48,6 +50,7 @@ export function useAddPlay(sessionId: number | null | undefined) {
 export function useEndSession() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "end the session" },
     mutationFn: (sessionId: number) => api.endSession(sessionId),
     onSuccess: () => {
       store.setSessionId(null);

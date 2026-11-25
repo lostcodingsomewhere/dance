@@ -63,6 +63,7 @@ export function usePlanMutations(setId: number | null) {
 
   const append = useAppendToPlan();
   const put = useMutation({
+    meta: { showsOwnFailure: true },
     mutationKey: SAVE_KEY(setId),
     mutationFn: async (queues: Record<string, number[]>) =>
       (await putPlanWithoutDeletedTracks(setId as number, queues)).plan,
@@ -165,6 +166,7 @@ export function usePlanMutations(setId: number | null) {
 export function useAppendToPlan() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "add that pick to the plan" },
     mutationFn: (v: {
       setId: number;
       role: string;

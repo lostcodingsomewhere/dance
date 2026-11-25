@@ -19,9 +19,12 @@ async function writeSetAndOpenIt(setId: number): Promise<SetSentToLive> {
 }
 
 export function useOpenSetInLive() {
-  return useMutation({ mutationFn: writeSetAndOpenIt });
+  return useMutation({ mutationFn: writeSetAndOpenIt, meta: { showsOwnFailure: true } });
 }
 
 export function useRevealInFinder() {
-  return useMutation({ mutationFn: (path: string) => api.revealPath(path) });
+  return useMutation({
+    mutationFn: (path: string) => api.revealPath(path),
+    meta: { attempt: "show the file in Finder" },
+  });
 }

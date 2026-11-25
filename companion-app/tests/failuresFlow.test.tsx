@@ -163,7 +163,7 @@ const BOOTH_COMMANDS = [
     command: "a resync",
     press: () => press("↻ resync"),
     sends: ["POST", "/ableton/decks/resync"],
-    says: "That didn't work",
+    says: "Couldn't resync with Live",
   },
 ];
 

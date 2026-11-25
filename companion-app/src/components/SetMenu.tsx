@@ -161,6 +161,7 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
   }
 
   const duplicate = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: async (name: string) => {
       const { copy, picksLeftOut } = await copyWithItsPlan(set, name);
       try {

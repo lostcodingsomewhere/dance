@@ -57,6 +57,7 @@ export function SceneGrid() {
   const qc = useQueryClient();
   const scheduleWarpCheck = useWarpCheck();
   const anchorFill = useMutation({
+    meta: { attempt: "load the rest of that song's stems" },
     mutationFn: (vars: { trackId: number; sceneIdx: number; side: "a" | "b" }) =>
       pushTrackToLive(vars.trackId, {
         includeStems: true,

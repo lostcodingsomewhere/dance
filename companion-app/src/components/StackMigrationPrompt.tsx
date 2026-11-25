@@ -59,6 +59,7 @@ export function StackMigrationPrompt() {
   }, []);
 
   const importMutation = useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: async () => {
       const created = await createSet(name.trim() || "Imported Stack");
       // POST each track in order. Sequential keeps positions stable.
