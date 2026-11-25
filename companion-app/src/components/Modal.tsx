@@ -12,14 +12,24 @@ interface ModalProps {
 const FOCUSABLE = [
   "a[href]",
   "button:not([disabled])",
-  "input:not([disabled])",
+  'input:not([disabled]):not([type="hidden"])',
   "select:not([disabled])",
   "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
+  "[tabindex]",
 ].join(", ");
 
+function isShown(control: HTMLElement, dialog: HTMLElement): boolean {
+  if (getComputedStyle(control).visibility === "hidden") return false;
+  for (let node: HTMLElement | null = control; node && node !== dialog; node = node.parentElement) {
+    if (getComputedStyle(node).display === "none") return false;
+  }
+  return true;
+}
+
 function focusableIn(dialog: HTMLElement): HTMLElement[] {
-  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (control) => control.tabIndex >= 0 && isShown(control, dialog),
+  );
 }
 
 function focusIsNowhere(): boolean {
