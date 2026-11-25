@@ -15,7 +15,10 @@ import { useAbletonState } from "../hooks/useAbletonState";
  */
 export function Crossfader() {
   const state = useAbletonState();
-  const setX = useMutation({ mutationFn: abletonSetCrossfader });
+  const setX = useMutation({
+    mutationFn: abletonSetCrossfader,
+    meta: { attempt: "move the crossfader" },
+  });
   const trackRef = useRef<HTMLDivElement>(null);
 
   // Live's crossfader: -1 (full A) to +1 (full B). Normalize to 0..1

@@ -28,13 +28,26 @@ function loadKinds(role: PlanRole): string[] | undefined {
  *    wrong often enough to matter.
  *
  * A second commit path that quietly skipped any of these would reintroduce
- * the exact bugs they were added to close — hence one hook, two callers.
+ * the exact bugs they were added to close — hence one hook, three callers.
  */
 export interface LoadToDeckVars {
   trackId: number;
   role: PlanRole;
   title: string | null;
-  side: "a" | "b";
+  /** Left out, Live picks the deck and the answer says which. */
+  side?: "a" | "b";
+}
+
+function songName({ title, trackId }: LoadToDeckVars): string {
+  return title ?? `Track #${trackId}`;
+}
+
+function deckName(side?: "a" | "b" | null): string {
+  return side ? `Deck ${side.toUpperCase()}` : "a deck";
+}
+
+function loadingOnto(load: LoadToDeckVars, side?: "a" | "b" | null): string {
+  return `load ${songName(load)} onto ${deckName(side)}`;
 }
 
 export function useLoadToDeck() {
@@ -48,22 +61,28 @@ export function useLoadToDeck() {
         side,
         page: store.peekBoothPage(),
       }),
-    onSuccess: (result, { trackId, title, side }) => {
+    meta: { attempt: (load: LoadToDeckVars) => loadingOnto(load, load.side) },
+    onSuccess: (result, load) => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
-      const label = `${title ?? `Track #${trackId}`} → Deck ${side.toUpperCase()}`;
+      const landedOn = result.side ?? load.side ?? null;
+      if (result.stems_loaded === 0) {
+        store.reportFailure(
+          loadingOnto(load, landedOn),
+          result.warnings.length > 0 ? result.warnings : ["No stems were loaded."],
+        );
+        return;
+      }
+      const label = `${songName(load)} → ${deckName(landedOn)}`;
       // Immediate misses (missing stem file, Live unreachable) surface now…
       store.setLoadWarnings(label, result.warnings);
       // …and the warp audit follows once Live's analysis settles.
       scheduleWarpCheck(result.scene_index, label);
-      store.armDeck(result.side ?? side, result.scene_index);
+      store.armDeck(landedOn, result.scene_index);
       store.registerDeck({
-        track_id: trackId,
+        track_id: load.trackId,
         scene_index: result.scene_index,
-        side: result.side ?? side,
-        stem_track_indices: sideTrackIndices(
-          result.track_indices,
-          result.side ?? side,
-        ),
+        side: landedOn,
+        stem_track_indices: sideTrackIndices(result.track_indices, landedOn),
         loaded_at: Date.now(),
       });
     },
