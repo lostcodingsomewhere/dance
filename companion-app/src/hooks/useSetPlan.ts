@@ -12,6 +12,41 @@ const SAVE_KEY = (setId: number | null) => ["sets", setId, "plan", "save"] as co
 
 type OnSaved = (plan: SetPlan) => void;
 
+export interface PlanWritten {
+  plan: SetPlan;
+  picksLeftOut: number;
+}
+
+// PUT /plan refuses a whole plan that names a deleted track, and its 404 lists those ids.
+const DELETED_TRACKS = /unknown track ids in plan: \[([^\]]*)\]/;
+
+function deletedTracksNamedBy(error: unknown): Set<number> {
+  if (!(error instanceof api.ApiError) || error.status !== 404) return new Set();
+  const listed = api.serverMessage(error).match(DELETED_TRACKS)?.[1] ?? "";
+  return new Set((listed.match(/\d+/g) ?? []).map(Number));
+}
+
+function picksIn(queues: Record<string, number[]>): number {
+  return Object.values(queues).reduce((picks, ids) => picks + ids.length, 0);
+}
+
+export async function putPlanWithoutDeletedTracks(
+  setId: number,
+  queues: Record<string, number[]>,
+): Promise<PlanWritten> {
+  try {
+    return { plan: await api.putPlan(setId, queues), picksLeftOut: 0 };
+  } catch (error) {
+    const deleted = deletedTracksNamedBy(error);
+    const kept = Object.fromEntries(
+      Object.entries(queues).map(([role, ids]) => [role, ids.filter((id) => !deleted.has(id))]),
+    );
+    const picksLeftOut = picksIn(queues) - picksIn(kept);
+    if (picksLeftOut === 0) throw error;
+    return { plan: await api.putPlan(setId, kept), picksLeftOut };
+  }
+}
+
 export function useSetPlan(setId: number | null | undefined) {
   return useQuery({
     queryKey: setId ? KEY(setId) : ["sets", "none", "plan"],
@@ -29,7 +64,8 @@ export function usePlanMutations(setId: number | null) {
   const append = useAppendToPlan();
   const put = useMutation({
     mutationKey: SAVE_KEY(setId),
-    mutationFn: (queues: Record<string, number[]>) => api.putPlan(setId as number, queues),
+    mutationFn: async (queues: Record<string, number[]>) =>
+      (await putPlanWithoutDeletedTracks(setId as number, queues)).plan,
     onSuccess: (plan) => {
       if (setId == null) return;
       qc.setQueryData(KEY(setId), plan);
@@ -94,13 +130,13 @@ export function usePlanMutations(setId: number | null) {
     save(q, onSaved);
   };
 
-  const restoreToRole = (role: string, index: number, trackId: number) => {
+  const restoreToRole = (role: string, index: number, trackId: number, onSaved?: OnSaved) => {
     const q = currentQueues();
     if (q == null) return;
     const list = [...(q[role] ?? [])];
     list.splice(Math.min(index, list.length), 0, trackId);
     q[role] = list;
-    save(q);
+    save(q, onSaved);
   };
 
   const moveInRole = (role: string, from: number, to: number, onSaved?: OnSaved) => {

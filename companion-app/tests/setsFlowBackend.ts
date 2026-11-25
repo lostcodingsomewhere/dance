@@ -60,6 +60,10 @@ export class SetsOnTheServer {
     for (const song of library) this.titles.set(song.track_id, song.title);
   }
 
+  deletesTrack(trackId: number): void {
+    this.titles.delete(trackId);
+  }
+
   has(name: string, plan: Partial<Plan> = {}, active = false): number {
     const stored = { id: this.nextId++, name, active, plan: { ...emptyPlan(), ...plan } };
     this.sets.push(stored);
@@ -109,7 +113,12 @@ export class SetsOnTheServer {
       return this.detail(set);
     }
     if (rest === "/plan" && method === "PUT") {
-      set.plan = { ...emptyPlan(), ...(body as { queues: Partial<Plan> }).queues };
+      const wanted = { ...emptyPlan(), ...(body as { queues: Partial<Plan> }).queues };
+      const unknown = this.unknownTracksIn(wanted);
+      if (unknown.length > 0) {
+        return json({ detail: `unknown track ids in plan: [${unknown.join(", ")}]` }, 404);
+      }
+      set.plan = wanted;
       return this.planOut(set);
     }
     if (rest === "/plan") return this.planOut(set);
@@ -148,15 +157,30 @@ export class SetsOnTheServer {
     return { ...summary, tracks: [] };
   }
 
+  private unknownTracksIn(plan: Plan): number[] {
+    const wanted = new Set(ROLES.flatMap((role) => plan[role]));
+    return [...wanted].filter((trackId) => !this.titles.has(trackId)).sort((a, b) => a - b);
+  }
+
   private planOut(set: StoredSet) {
-    const item = (track_id: number) => ({
+    const known = (track_id: number) => ({
       track_id,
-      title: this.titles.get(track_id) ?? null,
+      title: this.titles.get(track_id),
       artist: "Test Artist",
       key_camelot: "8A",
       bpm: 128,
       floor_energy: 6,
     });
+    const deleted = (track_id: number) => ({
+      track_id,
+      title: null,
+      artist: null,
+      key_camelot: null,
+      bpm: null,
+      floor_energy: null,
+    });
+    const item = (track_id: number) =>
+      this.titles.has(track_id) ? known(track_id) : deleted(track_id);
     return {
       set_id: set.id,
       queues: Object.fromEntries(ROLES.map((role) => [role, set.plan[role].map(item)])),

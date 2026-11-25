@@ -141,6 +141,86 @@ describe("duplicating a set from the set menu", () => {
   });
 });
 
+describe("duplicating a set that still plans a track deleted from the library", () => {
+  it("copies the picks that are left, opens the copy and says how many it left out", async () => {
+    const server = new SetsOnTheServer(LIBRARY);
+    const friday = server.has("Friday night", SEVEN_PICKS, true);
+    server.deletesTrack(LOW_TIDE.track_id);
+    const withoutLowTide = {
+      ...SEVEN_PICKS,
+      bass: [],
+      song: [NIGHT_DRIVE.track_id, HALF_LIGHT.track_id],
+    };
+    backend = new BoothBackend(server.answer);
+    renderSetView();
+    await waitFor(() =>
+      expect(picksIn("song")).toEqual(["Night Drive", `Track #${LOW_TIDE.track_id}`, "Half Light"]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Friday night" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate as new" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    const leftOut = await screen.findByText("This copy leaves out 2 picks whose track was deleted.");
+    expect(leftOut).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const copyId = server.idOf("Friday night (copy)")!;
+    expect(server.planOf(copyId)).toEqual(withoutLowTide);
+    expect(server.activeName()).toBe("Friday night (copy)");
+    expect(server.planOf(friday)).toEqual(SEVEN_PICKS);
+    await waitFor(() => expect(picksOnScreen()).toEqual(titlesOf(withoutLowTide)));
+    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
+  });
+});
+
+describe("a plan that still holds a pick whose track was deleted", () => {
+  it("saves a move of another pick, and the pick that plays nothing goes with it", async () => {
+    const { server, setId } = aSetWithSevenPicks();
+    server.deletesTrack(LOW_TIDE.track_id);
+    renderSetView();
+    await waitFor(() => expect(picksIn("bass")).toEqual([`Track #${LOW_TIDE.track_id}`]));
+
+    fireEvent.click(within(planned("drums")).getByRole("button", { name: "Move Night Drive up" }));
+
+    await waitFor(() => expect(picksIn("drums")).toEqual(["Night Drive", "Half Light"]));
+    expect(server.planOf(setId)).toEqual({
+      ...SEVEN_PICKS,
+      drums: [NIGHT_DRIVE.track_id, HALF_LIGHT.track_id],
+      bass: [],
+      song: [NIGHT_DRIVE.track_id, HALF_LIGHT.track_id],
+    });
+    expect(picksOnScreen()).toEqual(titlesOf(server.planOf(setId)));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("can be removed though another column holds it too, and undo has nothing to bring back", async () => {
+    const { server, setId } = aSetWithSevenPicks();
+    server.deletesTrack(LOW_TIDE.track_id);
+    renderSetView();
+    const deletedTrack = `Track #${LOW_TIDE.track_id}`;
+    await waitFor(() => expect(picksIn("bass")).toEqual([deletedTrack]));
+
+    fireEvent.click(pick("bass", deletedTrack).getByTitle("Remove from plan"));
+
+    const bass = within(planned("bass"));
+    expect(await bass.findByText(`Removed ${deletedTrack}`)).toBeInTheDocument();
+    const withoutLowTide = {
+      ...SEVEN_PICKS,
+      bass: [],
+      song: [NIGHT_DRIVE.track_id, HALF_LIGHT.track_id],
+    };
+    expect(server.planOf(setId)).toEqual(withoutLowTide);
+    expect(picksIn("song")).toEqual(["Night Drive", "Half Light"]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(bass.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(bass.queryByText(`Removed ${deletedTrack}`)).not.toBeInTheDocument());
+    expect(server.planOf(setId)).toEqual(withoutLowTide);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
 describe("a copy that was made but could not be opened", () => {
   it("is reported in the menu and listed to switch to, with its picks", async () => {
     const server = new SetsOnTheServer(LIBRARY);

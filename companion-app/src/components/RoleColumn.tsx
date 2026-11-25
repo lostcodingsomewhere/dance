@@ -830,7 +830,9 @@ function PlanZone({
       <RemovedPickLine
         key="removed"
         title={titleOf(removed.item)}
-        onUndo={() => restoreToRole(role, removed.index, removed.item.track_id)}
+        onUndo={() =>
+          restoreToRole(role, removed.index, removed.item.track_id, () => setRemoved(null))
+        }
       />,
     );
   }
