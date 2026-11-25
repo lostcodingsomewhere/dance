@@ -1,6 +1,6 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { pushTrackToLive } from "../api";
+import { useQueryClient } from "@tanstack/react-query";
 import { useClipPlayhead } from "../hooks/useClipPlayhead";
+import { useLoadToDeck } from "../hooks/useLoadToDeck";
 import { useStopPreview, usePreviewState } from "../hooks/usePreview";
 import { useTrack } from "../hooks/useTracks";
 import { useRegions } from "../hooks/useRegions";
@@ -8,10 +8,14 @@ import { useTrackWaveform } from "../hooks/useWaveform";
 import { useSeekClip } from "../hooks/useTransport";
 import { formatDuration, formatRemaining } from "../lib/format";
 import { ratioToSeconds } from "../lib/seek";
-import { roleLabel, sideTrackIndices } from "../lib/roles";
-import { store } from "../store";
+import { roleLabel } from "../lib/roles";
+import { PLAN_ROLES, type PlanRole } from "../types";
 import { RoleIcon } from "./RoleIcon";
 import { Waveform } from "./Waveform";
+
+function planRoleOf(column: string): PlanRole {
+  return PLAN_ROLES.find((role) => role === column) ?? "song";
+}
 
 /**
  * Cue strip — the parallel surface to TwoDeckStrip for *what's in headphones*.
@@ -56,39 +60,25 @@ export function CueStrip() {
     positionUnit: "seconds",
   });
 
-  const commit = useMutation({
-    mutationFn: () => {
-      if (!previewing) throw new Error("nothing to commit");
-      const kinds =
-        previewing.column === "mix" ? undefined : [previewing.column];
-      return pushTrackToLive(previewing.trackId, {
-        includeStems: true,
-        kinds,
-        page: store.peekBoothPage(),
-      });
-    },
-    onSuccess: (result) => {
-      if (!previewing) return;
-      // Whole-song commits register a deck locally; single-stem commits
-      // don't (the row may already have cells from other tracks).
-      if (previewing.column === "mix") {
-        store.registerDeck({
-          track_id: previewing.trackId,
-          scene_index: result.scene_index,
-          side: result.side ?? null,
-        stem_track_indices: sideTrackIndices(result.track_indices, result.side),
-          loaded_at: Date.now(),
-        });
-      }
-      stopPreview.mutate();
-      qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
-      qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
-    },
-  });
+  const load = useLoadToDeck();
 
   if (!previewing) return null;
 
   const track = trackQuery.data;
+  const loadToMaster = () =>
+    load.mutate(
+      {
+        trackId: previewing.trackId,
+        role: planRoleOf(previewing.column),
+        title: track?.title ?? null,
+      },
+      {
+        onSuccess: () => {
+          stopPreview.mutate();
+          qc.invalidateQueries({ queryKey: ["recommend", "by-column"] });
+        },
+      },
+    );
   const analysis = track?.analysis ?? null;
   const isSong = previewing.column === "mix";
   const commitLabel = isSong ? "→ Load song to master" : `→ Load ${roleLabel(previewing.column).toLowerCase()} to master`;
@@ -191,12 +181,12 @@ export function CueStrip() {
         </button>
         <button
           type="button"
-          onClick={() => commit.mutate()}
-          disabled={commit.isPending || !track}
+          onClick={loadToMaster}
+          disabled={load.isPending || !track}
           className="h-8 px-3 rounded text-[11px] bg-cyan-500/80 hover:bg-cyan-500 text-neutral-950 font-semibold transition-colors disabled:opacity-50"
           title="Promote this candidate from cue to master"
         >
-          {commit.isPending ? "loading…" : commitLabel}
+          {load.isPending ? "loading…" : commitLabel}
         </button>
       </div>
     </div>

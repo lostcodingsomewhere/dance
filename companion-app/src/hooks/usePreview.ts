@@ -13,6 +13,7 @@ export function useStartPreview() {
   return useMutation({
     mutationFn: (vars: { trackId: number; column: string }) =>
       api.abletonPreview({ track_id: vars.trackId, column: vars.column }),
+    meta: { showsOwnFailure: true },
     onMutate: (vars) => {
       store.setPreviewing({ trackId: vars.trackId, column: vars.column });
     },
@@ -51,10 +52,11 @@ export function useStartPreview() {
         store.setLoadWarnings(`Preview · ${vars.column}`, result.warnings);
       }
     },
-    onError: () => {
+    onError: (error) => {
       // If the request fails, drop the optimistic preview state so the
       // button doesn't get stuck.
       store.setPreviewing(null);
+      store.reportFailure("start the preview", [api.serverMessage(error)]);
     },
   });
 }
@@ -62,7 +64,8 @@ export function useStartPreview() {
 export function useStopPreview() {
   return useMutation({
     mutationFn: () => api.abletonPreviewStop(),
-    onSettled: () => {
+    meta: { attempt: "stop the preview" },
+    onSuccess: () => {
       store.setPreviewing(null);
     },
   });
