@@ -22,6 +22,7 @@ const NO_STEMS_ON_DISK = ["drums", "bass", "vocals", "other"].map(
   (stem) => `No ${stem} stem available for track ${RECOMMENDED.track_id}`,
 );
 
+const BASS_AT_HALF_TEMPO = "bass is warped at half the tempo of the other stems";
 const ONLY_THE_SONG = "No stems were loaded, only the song.";
 
 function sessionUnderWay() {
@@ -99,6 +100,41 @@ describe("a deck load that loads nothing", () => {
       ]),
     );
     await expectWarningLines([`Couldn't load Half Light onto Deck A: ${LIVE_DID_NOT_ANSWER}`]);
+  });
+});
+
+describe("the warp check that follows a deck load", () => {
+  it("still runs when the rec that was loaded has left the list", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+    let loaded = false;
+    booth.liveAnswers = (request) => {
+      if (isCommand(request, "/ableton/load-track")) {
+        loaded = true;
+        booth.inLive = [...booth.inLive, ...songOn(1, "a", RECOMMENDED)];
+        return loadAnswer({ page: 1, side: "a", stems: 4, warnings: [] });
+      }
+      if (isCommand(request, `/ableton/warp-check/${PADS_PER_PAGE}`)) {
+        return { ok: true, scene_index: PADS_PER_PAGE, checked: 4, warnings: [BASS_AT_HALF_TEMPO] };
+      }
+      if (loaded && request.path.endsWith("/recommend/by-column")) {
+        return { column: (request.body as { column: string }).column, combo_size: 0, recs: [] };
+      }
+      return undefined;
+    };
+    await booth.open();
+
+    loadOnto("A");
+    await waitFor(() => expect(booth.sent("POST", "/ableton/load-track")).toHaveLength(1));
+    await waitFor(() => expect(songOnDeck("A", RECOMMENDED.title)).not.toHaveLength(0));
+    booth.liveNowPlays({ [String(LIVE_TRACK_OF.drums_a)]: PADS_PER_PAGE });
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: RECOMMENDED.title })).not.toBeInTheDocument(),
+    );
+    act(() => {
+      vi.advanceTimersByTime(WARP_CHECK_DELAY_MS);
+    });
+
+    await expectWarningLines([`Half Light → Deck A: ${BASS_AT_HALF_TEMPO}`]);
   });
 });
 

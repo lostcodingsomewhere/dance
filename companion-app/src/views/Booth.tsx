@@ -43,8 +43,8 @@ import { useAutoSession } from "../hooks/useAutoSession";
  *   - Auto-logs plays as Ableton fires clips loaded via Load-to-Live.
  */
 export function Booth() {
-  useAutoSession();
-  useAutoLog();
+  const sessionTakingPlays = useAutoSession();
+  useAutoLog(sessionTakingPlays);
 
   // The active set (if any) backs the plan zone of each role column. Null is
   // fine — the grid then shows only the live recs (no plan zone).

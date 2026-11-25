@@ -7,6 +7,7 @@ import type { AbletonState } from "../src/types";
 import {
   BoothBackend,
   LIVE_TRACK_OF,
+  PADS_PER_PAGE,
   renderApp,
   songOn,
   type Cell,
@@ -18,6 +19,8 @@ const SERVER_DOWN_BANNER =
   "The Dance server is not answering. This screen shows the last known state.";
 const SERVER_DOWN_TOOLTIP =
   "The Dance server is not answering, so this screen cannot reach Ableton Live. Start the server again.";
+const OLD_SERVER_TOOLTIP =
+  "The Dance server was started before its last update, so it cannot say whether Ableton Live answers. Stop it and start it again.";
 const UNCONFIRMED_RECORDING =
   "Could not confirm an armed Recorder track — Live may capture nothing. Check Live is reachable, then retry.";
 const RECORD_NOT_SENT = "[Errno 65] No route to host";
@@ -47,7 +50,11 @@ const FFMPEG = {
 };
 const ALL_READY = { ok: true, all_green: true, checks: [] };
 
-type Server = "up" | "refusing connections" | "down behind the dev proxy";
+type Server =
+  | "up"
+  | "refusing connections"
+  | "down behind the dev proxy"
+  | "started before the health check existed";
 type AppSocket = { url: string; onmessage: ((event: MessageEvent) => void) | null };
 
 const LIVE_AT_REST: AbletonState = {
@@ -73,19 +80,22 @@ let inLive: Cell[];
 let setup: unknown;
 let session: unknown;
 let recordAnswer: unknown;
+let stopAnswer: unknown;
 let liveState: AbletonState;
 
 function theDanceServer({ method, path }: SeenRequest): unknown {
   if (server === "refusing connections") throw new TypeError("Failed to fetch");
   if (server === "down behind the dev proxy") return new Response("", { status: 500 });
-  if (path === `${API}/ableton/health`) return { live_reachable: liveAnswers };
+  if (path === `${API}/ableton/health`) {
+    return server === "started before the health check existed"
+      ? new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })
+      : { live_reachable: liveAnswers };
+  }
   if (path === `${API}/ableton/decks`) return { columns: LIVE_TRACK_OF, cells: inLive };
   if (path === `${API}/health/deps`) return setup;
   if (path === `${API}/sessions/current` && session) return session;
   if (method === "POST" && path === `${API}/ableton/record/on`) return recordAnswer;
-  if (method === "POST" && path === `${API}/ableton/record/off`) {
-    return { ok: true, recording: false, armed_track: null, warnings: [] };
-  }
+  if (method === "POST" && path === `${API}/ableton/record/off`) return stopAnswer;
   return undefined;
 }
 
@@ -175,6 +185,7 @@ beforeEach(() => {
   setup = ALL_READY;
   session = null;
   recordAnswer = { ok: true, recording: true, armed_track: 10, warnings: [] };
+  stopAnswer = { ok: true, recording: false, armed_track: null, warnings: [] };
   liveState = LIVE_AT_REST;
   store.setView("booth");
   store.setBoothPage(0);
@@ -236,6 +247,16 @@ describe("the health light", () => {
     expect(light.closest("[title]")).toHaveAttribute("title", SERVER_DOWN_TOOLTIP);
     expect(within(header()).queryByText("Live offline")).not.toBeInTheDocument();
     expect(screen.getByText(SERVER_DOWN_BANNER)).toHaveAttribute("role", "alert");
+  });
+
+  it("says Restart server when the Dance server is older than this screen", async () => {
+    server = "started before the health check existed";
+    renderApp();
+
+    const light = await within(header()).findByText("Restart server");
+    expect(light.closest("[title]")).toHaveAttribute("title", OLD_SERVER_TOOLTIP);
+    expect(within(header()).queryByText("Server down")).not.toBeInTheDocument();
+    expect(screen.queryByText(SERVER_DOWN_BANNER)).not.toBeInTheDocument();
   });
 
   it("keeps asking after the computer loses its network, since the server is on this computer", async () => {
@@ -447,7 +468,39 @@ describe("the tempo of each deck", () => {
   });
 });
 
+describe("the tempo of a deck whose playing song has no tempo", () => {
+  it("is left out, not filled in from another song on the page in front", async () => {
+    inLive = [
+      ...at(120, songOn(0, "a", NIGHT_DRIVE)),
+      ...at(127, songOn(0, "b", CLUB_MIX)),
+      ...songOn(1, "a", HALF_LIGHT).map((cell) => ({ ...cell, bpm: null })),
+    ];
+    renderApp();
+    liveSends({});
+    await within(header()).findByText("A 120 · B 127");
+
+    liveSends({ is_playing: true, playing_clips: deckAPlaysRow(PADS_PER_PAGE) });
+
+    await waitFor(() =>
+      expect(within(header()).queryByText(/^A \d/)).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("the record button", () => {
+  it("goes on counting when Live could not be told to stop", async () => {
+    renderApp();
+    fireEvent.click(within(header()).getByRole("button", { name: "Start recording" }));
+    const stop = await within(header()).findByRole("button", { name: /^Stop recording/ });
+
+    stopAnswer = { ok: false, recording: false, warning: RECORD_NOT_SENT };
+    fireEvent.click(stop);
+
+    await screen.findByText(RECORD_DID_NOT_CHANGE);
+    expect(within(header()).getByRole("button", { name: /^Stop recording/ })).toBeEnabled();
+    expect(within(header()).queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
+  });
+
   it("says so in a row under the header when Live may be recording nothing", async () => {
     recordAnswer = {
       ok: true,

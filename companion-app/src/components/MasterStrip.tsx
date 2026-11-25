@@ -339,12 +339,13 @@ function deckBpm(
   const columns = deckMap?.columns ?? {};
   const cells = deckMap?.cells ?? [];
   const pageInFront = Math.min(boothPage, pageCount(cells) - 1);
-  const onDeck = cells.filter((cell) => cell.kind.endsWith(`_${side}`) && cell.bpm != null);
+  const onDeck = cells.filter((cell) => cell.kind.endsWith(`_${side}`));
   const playingNow = onDeck.find((cell) => playing[columns[cell.kind]] === cell.scene_index);
+  if (playingNow) return playingNow.bpm ?? null;
   const inFront = onDeck
-    .filter((cell) => pageOfScene(cell.scene_index) === pageInFront)
+    .filter((cell) => cell.bpm != null && pageOfScene(cell.scene_index) === pageInFront)
     .sort((one, other) => one.scene_index - other.scene_index)[0];
-  return (playingNow ?? inFront)?.bpm ?? null;
+  return inFront?.bpm ?? null;
 }
 
 function bpmText(bpm: number | null): string {
@@ -364,6 +365,11 @@ const HEALTH_WORDS: Record<BridgeHealth, { label: string; tooltip: string }> = {
     label: "Live not answering",
     tooltip:
       "The Dance server is running, but Ableton Live did not answer it. Check that Live is open with AbletonOSC on as a Control Surface.",
+  },
+  server_out_of_date: {
+    label: "Restart server",
+    tooltip:
+      "The Dance server was started before its last update, so it cannot say whether Ableton Live answers. Stop it and start it again.",
   },
   server_down: {
     label: "Server down",
@@ -449,6 +455,7 @@ function RecordButton({ onNotice }: { onNotice: (notice: RecordNotice | null) =>
       api.abletonRecord(on),
     meta: { attempt: (on: boolean) => (on ? "start recording" : "stop recording") },
     onSuccess: (res) => {
+      if (res.ok === false) return;
       setRecording(res.recording);
       setStartedAt(res.recording ? Date.now() : null);
       setElapsed(0);

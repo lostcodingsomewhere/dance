@@ -95,6 +95,29 @@ describe("duplicating a set from the set menu", () => {
     expect(backend.sent("GET", planOfTheCopy).length).toBeGreaterThan(0);
   });
 
+  it("cannot be left and started again while the copy is being made", async () => {
+    const server = new SetsOnTheServer(LIBRARY);
+    const friday = server.has("Friday night", SEVEN_PICKS, true);
+    backend = new BoothBackend(server.answer);
+    renderSetView();
+    await waitFor(() => expect(picksOnScreen()).toEqual(titlesOf(SEVEN_PICKS)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Friday night" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate as new" }));
+    const planOfTheCopy = `${API}/sets/${friday + 1}/plan`;
+    const letThePlanBeWritten = holdAnswersTo("PUT", planOfTheCopy);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(backend.sent("PUT", planOfTheCopy)).toHaveLength(1));
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByPlaceholderText("Friday night (copy)"), { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "Duplicate as new" })).not.toBeInTheDocument();
+    letThePlanBeWritten();
+
+    await screen.findByRole("button", { name: "Friday night (copy)" });
+    expect(backend.sent("POST", `${API}/sets`)).toHaveLength(1);
+  });
+
   it("says in the menu that the copy failed and stays on the set you were on", async () => {
     const server = new SetsOnTheServer(LIBRARY);
     const friday = server.has("Friday night", SEVEN_PICKS, true);
