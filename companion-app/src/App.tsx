@@ -1,4 +1,5 @@
-import { MutationCache, QueryClient, type Mutation } from "@tanstack/react-query";
+import { MutationCache, QueryClient, useQueryClient, type Mutation } from "@tanstack/react-query";
+import { Component, type ReactNode } from "react";
 
 import { serverMessage } from "./api";
 import { CommandBar } from "./components/CommandBar";
@@ -87,6 +88,46 @@ export function createAppQueryClient(): QueryClient {
   });
 }
 
+class ScreenBoundary extends Component<
+  { onReload: () => void; children: ReactNode },
+  { broke: Error | null }
+> {
+  state: { broke: Error | null } = { broke: null };
+
+  static getDerivedStateFromError(thrown: unknown): { broke: Error } {
+    return { broke: thrown instanceof Error ? thrown : new Error(String(thrown)) };
+  }
+
+  reload = (): void => {
+    this.props.onReload();
+    this.setState({ broke: null });
+  };
+
+  render(): ReactNode {
+    const { broke } = this.state;
+    if (!broke) return this.props.children;
+    return (
+      <div
+        role="alert"
+        className="m-4 rounded-md border border-rose-500/50 bg-rose-500/10 px-4 py-3"
+      >
+        <h2 className="text-sm font-semibold text-rose-100">Something broke on this screen</h2>
+        <p className="mt-1 break-words font-mono text-xs text-rose-200/90">{broke.message}</p>
+        <p className="mt-2 text-xs text-neutral-300">
+          The transport and Panic above still work.
+        </p>
+        <button
+          type="button"
+          onClick={this.reload}
+          className="mt-3 min-h-[40px] rounded-md bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-500"
+        >
+          Reload
+        </button>
+      </div>
+    );
+  }
+}
+
 /**
  * Top-level shell. One model, no sidebar:
  *   - **Booth** performs the set (now-playing → Ableton grid → plan grid →
@@ -97,6 +138,7 @@ export function createAppQueryClient(): QueryClient {
  */
 export function App() {
   const view = useAppStore((s) => s.currentView);
+  const queryClient = useQueryClient();
 
   return (
     <div className="h-full w-full flex flex-col bg-neutral-950 text-neutral-100">
@@ -105,9 +147,11 @@ export function App() {
           auto-warp is impossible to miss before you fire the deck. */}
       <LoadWarnings />
       <main className="flex-1 flex flex-col min-h-0">
-        {view === "booth" && <Booth />}
-        {view === "pipeline" && <PipelineOps />}
-        {view === "set" && <SetEditor />}
+        <ScreenBoundary key={view} onReload={() => void queryClient.resetQueries()}>
+          {view === "booth" && <Booth />}
+          {view === "pipeline" && <PipelineOps />}
+          {view === "set" && <SetEditor />}
+        </ScreenBoundary>
       </main>
       <CommandBar />
       <StackMigrationPrompt />
