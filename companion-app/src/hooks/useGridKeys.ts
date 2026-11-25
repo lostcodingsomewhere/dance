@@ -39,6 +39,25 @@ function isTyping(target: EventTarget | null): boolean {
   );
 }
 
+const CONTROLS = [
+  "button",
+  "a[href]",
+  "select",
+  "summary",
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="tab"]',
+  '[role="switch"]',
+  '[role="checkbox"]',
+  '[role="slider"]',
+].join(", ");
+
+function controlOutsidePlanGrid(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement) || target.closest(CONTROLS) == null) return null;
+  return target.closest("[data-plan-grid]") == null ? target : null;
+}
+
 export interface GridKeyActions {
   /** space — audition the focused card in headphones (toggles). */
   onAudition: (trackId: number, focus: GridFocus) => void;
@@ -86,7 +105,10 @@ export function useGridKeys(actions: GridKeyActions, enabled = true): void {
 
       if (isNavKey(e.key)) {
         e.preventDefault(); // don't scroll the page out from under the grid
-        store.setGridFocus(moveFocus(shape, focus, e.key));
+        const moved = moveFocus(shape, focus, e.key);
+        store.setGridFocus(moved);
+        // Enter and Space now follow the cursor, so the control that had them gives them up.
+        if (moved != null) controlOutsidePlanGrid(e.target)?.blur();
         return;
       }
       if (e.key === "Escape") {
@@ -99,15 +121,14 @@ export function useGridKeys(actions: GridKeyActions, enabled = true): void {
       const trackId = focusedTrackId(shape, current);
       if (current == null || trackId == null) return;
 
-      if (e.key === " " || e.key === "Spacebar") {
-        e.preventDefault(); // space scrolls otherwise
-        actions.onAudition(trackId, current);
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        actions.onCommit(trackId, current, e.shiftKey);
-      }
+      const isAudition = e.key === " " || e.key === "Spacebar";
+      const isCommit = e.key === "Enter";
+      if (!isAudition && !isCommit) return;
+      if (controlOutsidePlanGrid(e.target)) return;
+      e.preventDefault(); // space scrolls otherwise
+      if (e.repeat) return;
+      if (isAudition) actions.onAudition(trackId, current);
+      else actions.onCommit(trackId, current, e.shiftKey);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
