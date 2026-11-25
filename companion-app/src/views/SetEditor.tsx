@@ -15,15 +15,23 @@ import { RoleColumnsGrid } from "../components/RoleColumnsGrid";
 import { SetExportStrip } from "../components/SetExportStrip";
 import { SetMenu } from "../components/SetMenu";
 import { useOpenSetInLive } from "../hooks/useSetExport";
-import { useActivateSet, useActiveSet, useCreateSet } from "../hooks/useSets";
+import { useActivateSet, useActiveSet, useCreateSet, useSets } from "../hooks/useSets";
+import { roleLabel } from "../lib/roles";
 import { store } from "../store";
-import type { DanceSet } from "../types";
+import { PLAN_ROLES, type DanceSet, type SetSummary } from "../types";
+
+const COLUMN_LABELS = PLAN_ROLES.map((role) => roleLabel(role === "song" ? "mix" : role)).join(", ");
+const CENTERED_PAGE =
+  "flex-1 flex flex-col items-center justify-center px-8 py-12 text-center gap-4";
 
 export function SetEditor() {
   const active = useActiveSet();
   const set = active.data;
 
   if (active.isLoading) return <CenteredMsg>Loading…</CenteredMsg>;
+  if (!set && active.isError) {
+    return <ActiveSetUnknown retrying={active.isFetching} onRetry={() => active.refetch()} />;
+  }
   if (!set) return <NoSetState />;
 
   return (
@@ -91,9 +99,72 @@ function Header({ set }: { set: DanceSet }) {
   );
 }
 
+function ActiveSetUnknown({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+  return (
+    <div className={CENTERED_PAGE}>
+      <div role="alert" className="flex flex-col items-center gap-4">
+        <h1 className="text-xl font-medium text-neutral-100">Could not reach the server</h1>
+        <p className="text-sm text-neutral-400 max-w-lg leading-relaxed">
+          The app cannot tell which set is active. Check that the server is running, then retry.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        className="h-9 px-4 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-sm disabled:opacity-50"
+      >
+        {retrying ? "Retrying…" : "Retry"}
+      </button>
+    </div>
+  );
+}
+
+function picksIn(set: SetSummary): string {
+  return `${set.track_count} pick${set.track_count === 1 ? "" : "s"}`;
+}
+
+function ExistingSets({
+  sets,
+  disabled,
+  onOpen,
+}: {
+  sets: SetSummary[];
+  disabled: boolean;
+  onOpen: (setId: number) => void;
+}) {
+  return (
+    <div className="w-full max-w-md">
+      <h2 className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">Your sets</h2>
+      <ul
+        aria-label="Your sets"
+        className="divide-y divide-neutral-800 rounded-md border border-neutral-800 text-left"
+      >
+        {sets.map((set) => (
+          <li key={set.id} className="flex items-center gap-3 px-3 py-2">
+            <span className="min-w-0 flex-1 truncate text-sm text-neutral-100">{set.name}</span>
+            <span className="shrink-0 text-xs tabular-nums text-neutral-400">{picksIn(set)}</span>
+            <button
+              type="button"
+              aria-label={`Open ${set.name}`}
+              onClick={() => onOpen(set.id)}
+              disabled={disabled}
+              className="h-7 shrink-0 rounded bg-neutral-800 px-3 text-xs text-neutral-100 hover:bg-neutral-700 disabled:opacity-50"
+            >
+              Open
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function NoSetState() {
   const create = useCreateSet();
   const activate = useActivateSet();
+  const sets = useSets();
+  const existing = sets.data ?? [];
   const pending = create.isPending || activate.isPending;
   function bootstrap() {
     create.mutate(
@@ -102,14 +173,33 @@ function NoSetState() {
     );
   }
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-8 py-12 text-center gap-4">
+    <div className={CENTERED_PAGE}>
       <h1 className="text-xl font-medium text-neutral-100">No active set yet</h1>
       <p className="text-sm text-neutral-500 max-w-lg leading-relaxed">
-        A set is a plan — per-role queues of the stems you'll bring in (drums,
-        bass, vocals, other, song). Create one, then queue picks from the recs
-        or ⌘K. The same grid drives the Booth live, where you load picks onto a
-        deck.
+        A set is a plan — per-role queues of the stems you'll bring in ({COLUMN_LABELS}). Create
+        one, then queue picks from the recs or ⌘K. The same grid drives the Booth live, where you
+        load picks onto a deck.
       </p>
+      {existing.length > 0 && (
+        <ExistingSets sets={existing} disabled={pending} onOpen={(id) => activate.mutate(id)} />
+      )}
+      {sets.isError && sets.data == null && (
+        <p role="alert" className="text-sm text-rose-300">
+          Could not reach the server, so your sets are not listed.{" "}
+          <button
+            type="button"
+            onClick={() => sets.refetch()}
+            className="underline hover:text-rose-100"
+          >
+            Retry
+          </button>
+        </p>
+      )}
+      {(create.isError || activate.isError) && (
+        <p role="alert" className="text-sm text-rose-300">
+          Could not reach the server. Try again.
+        </p>
+      )}
       <button
         type="button"
         onClick={bootstrap}

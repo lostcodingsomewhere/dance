@@ -13,7 +13,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { addTrackToSet, createSet } from "../api";
+import { createSet, deleteSet, getPlan, serverMessage } from "../api";
+import { putPlanWithoutDeletedTracks } from "../hooks/useSetPlan";
 import {
   useActivateSet,
   useCreateSet,
@@ -21,8 +22,49 @@ import {
   useSets,
   useUpdateSet,
 } from "../hooks/useSets";
-import { useQueryClient } from "@tanstack/react-query";
-import type { DanceSet } from "../types";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { DanceSet, SetPlan } from "../types";
+
+function trackIdsByRole(plan: SetPlan): Record<string, number[]> {
+  return Object.fromEntries(
+    Object.entries(plan.queues).map(([role, picks]) => [role, picks.map((pick) => pick.track_id)]),
+  );
+}
+
+interface CopyMade {
+  copy: DanceSet;
+  picksLeftOut: number;
+}
+
+async function copyWithItsPlan(source: DanceSet, name: string): Promise<CopyMade> {
+  const plan = await getPlan(source.id);
+  const copy = await createSet(name);
+  try {
+    const { picksLeftOut } = await putPlanWithoutDeletedTracks(copy.id, trackIdsByRole(plan));
+    return { copy, picksLeftOut };
+  } catch (error) {
+    await deleteSet(copy.id).catch(() => undefined);
+    throw error;
+  }
+}
+
+function leftOutWords(picksLeftOut: number): string {
+  const picks = picksLeftOut === 1 ? "1 pick" : `${picksLeftOut} picks`;
+  return `This copy leaves out ${picks} whose track was deleted.`;
+}
+
+class CopyNotOpened extends Error {}
+
+function duplicateFailureWords(error: Error): string {
+  if (error instanceof CopyNotOpened) {
+    return "The copy was made but could not be opened. Pick it under Switch to.";
+  }
+  const reason = serverMessage(error);
+  const serverGaveAReason = reason !== error.message;
+  return serverGaveAReason
+    ? `Could not duplicate this set. The server said: ${reason}`
+    : "Could not duplicate this set. Try again.";
+}
 
 interface Props {
   set: DanceSet;
@@ -85,6 +127,7 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
   const [nameDraft, setNameDraft] = useState(set.name);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState<"new" | "duplicate" | null>(null);
+  const [picksLeftOut, setPicksLeftOut] = useState(0);
 
   function saveRename() {
     const trimmed = nameDraft.trim();
@@ -117,25 +160,29 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
     );
   }
 
-  async function duplicateCurrent() {
-    const name = newName.trim() || `${set.name} (copy)`;
-    try {
-      const copy = await createSet(name);
-      for (const t of set.tracks) {
-        try {
-          await addTrackToSet(copy.id, t.track_id, { note: t.note ?? undefined });
-        } catch {
-          // skip tracks that have since been deleted
-        }
+  const duplicate = useMutation({
+    mutationFn: async (name: string) => {
+      const { copy, picksLeftOut } = await copyWithItsPlan(set, name);
+      try {
+        await activate.mutateAsync(copy.id);
+      } catch {
+        qc.invalidateQueries({ queryKey: ["sets"] });
+        throw new CopyNotOpened();
       }
-      await activate.mutateAsync(copy.id);
-      qc.invalidateQueries({ queryKey: ["sets"] });
+      return picksLeftOut;
+    },
+    onSuccess: (leftOut) => {
       setNewName("");
       setCreating(null);
-      onClose();
-    } catch (e) {
-      console.error("duplicate failed", e);
-    }
+      if (leftOut === 0) onClose();
+      else setPicksLeftOut(leftOut);
+    },
+  });
+  const busy = createMut.isPending || activate.isPending || duplicate.isPending;
+
+  function duplicateCurrent() {
+    if (busy) return;
+    duplicate.mutate(newName.trim() || `${set.name} (copy)`);
   }
 
   function confirmDelete() {
@@ -250,6 +297,11 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
               }
             }}
           />
+          {creating === "duplicate" && duplicate.isError && (
+            <p role="alert" className="text-xs leading-snug text-rose-300">
+              {duplicateFailureWords(duplicate.error)}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -266,13 +318,22 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
               onClick={() =>
                 creating === "duplicate" ? duplicateCurrent() : createBlank()
               }
-              disabled={createMut.isPending || activate.isPending}
+              disabled={busy}
               className="text-xs px-3 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-50"
             >
-              {createMut.isPending || activate.isPending ? "…" : "Create"}
+              {busy ? "…" : "Create"}
             </button>
           </div>
         </div>
+      )}
+
+      {creating === null && picksLeftOut > 0 && (
+        <p
+          role="status"
+          className="px-3 py-2 border-t border-neutral-900 text-xs leading-snug text-neutral-300"
+        >
+          {leftOutWords(picksLeftOut)}
+        </p>
       )}
 
       {/* Action list. */}
@@ -289,7 +350,11 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
           <ActionRow
             icon="⎘"
             label="Duplicate as new"
-            onClick={() => setCreating("duplicate")}
+            onClick={() => {
+              duplicate.reset();
+              setPicksLeftOut(0);
+              setCreating("duplicate");
+            }}
           />
           <ActionRow
             icon="+"

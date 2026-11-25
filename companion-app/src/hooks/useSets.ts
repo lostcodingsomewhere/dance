@@ -7,7 +7,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api";
-import type { DanceSet } from "../types";
+import type { DanceSet, SetSummary } from "../types";
 
 const KEYS = {
   list: () => ["sets"] as const,
@@ -71,7 +71,8 @@ export function useDeleteSet() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.deleteSet(id),
-    onSuccess: () => {
+    onSuccess: (_nothing, id) => {
+      qc.setQueryData<SetSummary[]>(KEYS.list(), (sets) => sets?.filter((set) => set.id !== id));
       qc.invalidateQueries({ queryKey: KEYS.list() });
       qc.invalidateQueries({ queryKey: KEYS.active() });
     },

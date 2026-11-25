@@ -9,7 +9,7 @@ import { store } from "../store";
 import { PLAN_ROLES, type PlanItem, type PlanRole } from "../types";
 import { Modal } from "./Modal";
 import { PadEditor } from "./PadEditor";
-import { ColumnHeader, PlanBand, RecsBand } from "./RoleColumn";
+import { ColumnHeader, PlanBand, PlanRow, RecsBand, RecsRow } from "./RoleColumn";
 import { VersionFinder } from "./VersionFinder";
 
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
@@ -124,7 +124,7 @@ export function RoleColumnsGrid({
 
       {setId != null && (
         <>
-          <div className={`${cols} items-stretch`}>
+          <PlanRow setId={setId} className={`${cols} items-stretch`}>
             {PLAN_ROLES.map((role) => (
               <PlanBand
                 key={role}
@@ -135,17 +135,17 @@ export function RoleColumnsGrid({
                 onFindVersions={mode === "plan" && role === "song" ? setVersionsPick : undefined}
               />
             ))}
-          </div>
+          </PlanRow>
           {/* seam between added (plan) and recommended (recs) */}
           <div className="mt-1 border-t border-neutral-800" />
         </>
       )}
 
-      <div className={`${cols} items-start`}>
+      <RecsRow setId={setId} mode={mode} className={`${cols} items-start`}>
         {PLAN_ROLES.map((role) => (
           <RecsBand key={role} setId={setId} role={role} mode={mode} />
         ))}
-      </div>
+      </RecsRow>
 
       <KeyHints mode={mode} />
 

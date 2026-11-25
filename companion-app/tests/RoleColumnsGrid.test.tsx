@@ -93,6 +93,8 @@ describe("RoleColumnsGrid", () => {
   });
 
   it("plan mode shows plan-scored recs and NO deck-load buttons", () => {
+    // The Set view lists recs only once something is planned.
+    state.plan = { set_id: 1, queues: { drums: [{ track_id: 7, title: "Queued Kick" }] } };
     state.planRecs = [rec({ track_id: 2, track_title: "Plan Rec" })];
     renderGrid("plan");
     // The same mocked rec surfaces in each role column.
