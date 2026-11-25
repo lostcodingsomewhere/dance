@@ -37,8 +37,8 @@ import { KeyBadge } from "./KeyBadge";
  * Keys: Down and Up move a highlight through every row in the order shown.
  * Nothing is highlighted until Down is pressed, and typing clears it; the
  * arrows then wait until the rows on screen are the ones for the new text. Enter
- * on the highlighted library row adds it to the plan in the Set view and
- * loads it to Live in every other view; Cmd+Enter adds it to the plan in
+ * on the highlighted library row loads it to Live in the Booth and adds it
+ * to the plan in every other view; Cmd+Enter adds it to the plan in
  * every view. Enter on a highlighted Spotify row presses that row's button.
  * Enter with nothing highlighted does nothing.
  */
@@ -542,8 +542,10 @@ function whyItCannotBeLoaded(state: string): NotReady | null {
   return { inWords: "processing", whatToDo: "It can be loaded once processing has finished." };
 }
 
+const NO_ACTIVE_SET = "No active set. Make one in the Set view first.";
+
 function planHelp(activeSetId: number | null, inPlan: boolean): string {
-  if (activeSetId == null) return "No active set — make one in the Set view first";
+  if (activeSetId == null) return NO_ACTIVE_SET;
   if (inPlan) return "Already in the plan's Song column";
   return "Add to the active set's plan, Song column (⌘⏎ on the highlighted row)";
 }
@@ -637,7 +639,7 @@ function RowShell({
   const addToPlan = useAppendToPlan();
   const scheduleWarpCheck = useWarpCheck();
   const plan = useSetPlan(activeSetId);
-  const enterAddsToPlan = useAppStore((s) => s.currentView === "set");
+  const enterAddsToPlan = useAppStore((s) => s.currentView !== "booth");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -688,7 +690,11 @@ function RowShell({
   }
 
   function addToActiveSet() {
-    if (activeSetId == null || !canPlan) return;
+    if (activeSetId == null) {
+      setFailure(NO_ACTIVE_SET);
+      return;
+    }
+    if (!canPlan) return;
     setFailure(null);
     addToPlan.mutate(
       { setId: activeSetId, role: "song", trackId },

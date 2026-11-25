@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderApp, type BoothBackend } from "./boothHarness";
 import {
@@ -40,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await liveStops();
   backend.restore();
 });
@@ -143,6 +144,21 @@ describe("a session left open from earlier", () => {
     await waitFor(() => expect(playsLoggedTo(1)).toEqual([{ track_id: CLUB_MIX.track_id }]));
     expect(ended(1)).toBe(1);
     expect(sessionsStarted(backend)).toBe(0);
+  });
+
+  it("is ended when the next clip fires hours after its last play, though the Booth stayed open", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    log.open(minutesAgo(50), [{ track_id: NIGHT_DRIVE.track_id, played_at: minutesAgo(3) }]);
+    await boothShowsThePreparedSet();
+    await screen.findByText("1 play");
+
+    vi.setSystemTime(Date.now() + 5 * 60 * 60_000);
+    await liveNowPlays(backend, clips("b", 0));
+
+    await waitFor(() => expect(ended(1)).toBe(1));
+    await waitFor(() => expect(sessionsStarted(backend)).toBe(1));
+    await waitFor(() => expect(playsLoggedTo(2)).toEqual([{ track_id: CLUB_MIX.track_id }]));
+    expect(playsLoggedTo(1)).toEqual([]);
   });
 
   it("is kept when its last play was minutes ago", async () => {

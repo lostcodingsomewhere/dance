@@ -150,7 +150,7 @@ Both read Spotify's catalog with the app's own credentials (`DANCE_SPOTIFY_CLIEN
 
 ## Pipeline: retrying a failed track
 
-`POST /api/v1/pipeline/tracks/{id}/retry` puts a track in the `error` state back in line and answers with the track (`PipelineRecentTrackOut`). A track whose download never arrived has its download queued again. Any other failed track has its error cleared and is picked up by the next run (**Process now**, or the watch loop); that change is made under the dispatcher lock, so the route answers 409 while another run holds it. A track that has not failed answers 409, an unknown id 404. The Pipeline view's **Retry** button on a failed row calls it.
+`POST /api/v1/pipeline/tracks/{id}/retry` puts a track in the `error` state back in line and answers with the track (`PipelineRecentTrackOut`). A track whose download never arrived has its download queued again. That includes a download the server was stopped in the middle of: at its next start the server marks each such track `error` with "The server stopped before this download finished." Any other failed track has its error cleared and is picked up by the next run (**Process now**, or the watch loop); that change is made under the dispatcher lock, so the route answers 409 while another run holds it. A track that has not failed answers 409, an unknown id 404. The Pipeline view's **Retry** button on a failed row calls it.
 
 ## Ableton — `src/dance/api/routers/ableton.py`
 

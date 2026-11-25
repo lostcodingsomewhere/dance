@@ -292,7 +292,7 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
               if (e.key === "Enter") {
                 creating === "duplicate" ? duplicateCurrent() : createBlank();
               }
-              if (e.key === "Escape") {
+              if (e.key === "Escape" && !busy) {
                 setNewName("");
                 setCreating(null);
               }
@@ -310,7 +310,8 @@ function Popover({ set, onClose }: { set: DanceSet; onClose: () => void }) {
                 setNewName("");
                 setCreating(null);
               }}
-              className="text-xs text-neutral-500 hover:text-neutral-200 px-2 py-1"
+              disabled={busy}
+              className="text-xs text-neutral-500 hover:text-neutral-200 px-2 py-1 disabled:opacity-50 disabled:hover:text-neutral-500"
             >
               Cancel
             </button>

@@ -1,5 +1,5 @@
 import { act, configure, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { store } from "../src/store";
 import type { Recommendation, SpotifyTrackHit, Track } from "../src/types";
@@ -11,6 +11,9 @@ const APPEND_PATH = `/api/v1/sets/${SET_ID}/plan/append`;
 const LOAD_PATH = "/api/v1/ableton/load-track";
 const INGEST_PATH = "/api/v1/pipeline/ingest/track";
 const NEW_TRACK_ID = 31;
+const WARP_CHECK_PATH = "/api/v1/ableton/warp-check/0";
+const WARP_CHECK_DELAY_MS = 18_000;
+const BASS_AT_HALF_TEMPO = "bass is warped at half the tempo of the other stems";
 const LIVE_IS_NOT_THERE = "Could not reach Ableton Live over OSC: [Errno 61] Connection refused";
 
 interface Song {
@@ -237,6 +240,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  store.clearLoadWarnings();
   backend.restore();
   Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 });
@@ -380,6 +385,47 @@ describe("the search palette, from the keyboard", () => {
     expect(
       await within(libraryRow("Half Light")).findByRole("button", { name: "✓ in plan" }),
     ).toBeDisabled();
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+  });
+
+  it("adds the highlighted song to the plan with Enter in the Pipeline view, and loads nothing", async () => {
+    backend = new BoothBackend(aLibrary());
+    renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipeline" }));
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+    await waitFor(() => expect(button(libraryRow("Night Drive"), "+ Plan")).toBeEnabled());
+
+    press("ArrowDown");
+    press("Enter");
+
+    await waitFor(() =>
+      expect(bodiesSentTo(APPEND_PATH)).toEqual([
+        { role: "song", track_id: NIGHT_DRIVE.track_id, after_track_id: null },
+      ]),
+    );
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+  });
+
+  it("says there is no active set when Enter has no plan to add to", async () => {
+    const library = aLibrary();
+    backend = new BoothBackend((request) =>
+      request.path === "/api/v1/sets/active" ? failure(404, "no active set") : library(request),
+    );
+    renderApp();
+    openSetView();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+
+    press("ArrowDown");
+    press("Enter");
+
+    expect(
+      await within(libraryRow("Night Drive")).findByText(
+        "No active set. Make one in the Set view first.",
+      ),
+    ).toBeInTheDocument();
+    expect(bodiesSentTo(APPEND_PATH)).toEqual([]);
     expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
   });
 
@@ -530,6 +576,34 @@ describe("the search palette's rows", () => {
     );
     expect(within(palette()).queryByText(/API 503/)).not.toBeInTheDocument();
     expect(button(libraryRow("Night Drive"), "Load")).toBeEnabled();
+  });
+});
+
+describe("a song loaded from the palette", () => {
+  it("still gets its warp check after the palette has closed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+    const library = aLibrary();
+    backend = new BoothBackend((request) =>
+      request.path === WARP_CHECK_PATH
+        ? { ok: true, scene_index: 0, checked: 4, warnings: [BASS_AT_HALF_TEMPO] }
+        : library(request),
+    );
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+
+    press("ArrowDown");
+    press("Enter");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument(),
+    );
+    act(() => {
+      vi.advanceTimersByTime(WARP_CHECK_DELAY_MS);
+    });
+
+    const warnings = await screen.findByRole("status", { name: "Warnings" });
+    expect(warnings).toHaveTextContent(`Night Drive → scene 1: ${BASS_AT_HALF_TEMPO}`);
+    expect(backend.sent("POST", WARP_CHECK_PATH)).toHaveLength(1);
   });
 });
 

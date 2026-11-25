@@ -29,7 +29,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session, sessionmaker
 
 from dance.api.dedup import find_duplicate, index_existing, match_duplicate
 from dance.api.deps import get_session, get_settings
@@ -921,6 +922,27 @@ def _mark_track_error(track_id: int, db_url: str, message: str) -> None:
         track.state = TrackState.ERROR.value
         track.error_message = message
         s.commit()
+
+
+SERVER_STOPPED_MID_DOWNLOAD = "The server stopped before this download finished."
+
+
+def fail_downloads_the_last_run_left_unfinished(session_factory: sessionmaker) -> None:
+    with session_factory() as session:
+        try:
+            waiting = (
+                session.query(Track)
+                .filter(Track.state == TrackState.PENDING.value, ~not_placeholder())
+                .all()
+            )
+        except OperationalError:
+            return
+        for track in waiting:
+            # A file that landed just before the stop is adopted by the next scan.
+            if not Path(str(track.file_path)).exists():
+                track.state = TrackState.ERROR.value
+                track.error_message = SERVER_STOPPED_MID_DOWNLOAD
+        session.commit()
 
 
 @router.get("/jobs", response_model=list[JobOut])

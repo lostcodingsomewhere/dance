@@ -54,11 +54,10 @@ function useRetry(): { retries: number; retryLater: () => void } {
   return { retries, retryLater };
 }
 
-export function useAutoLog(): void {
+export function useAutoLog(sessionId: number | null): void {
   const { trackId, source, playingTrackIds } = useNowPlayingTrack();
   const leadingTrackId = source === "ableton" ? trackId : null;
   const session = useCurrentSession().data;
-  const sessionId = session?.id ?? null;
   const lastLoggedTrackId = session?.plays.at(-1)?.track_id ?? null;
   const { mutateAsync: logPlay } = useAddPlay(sessionId);
   const { retries, retryLater } = useRetry();
