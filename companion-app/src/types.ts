@@ -84,14 +84,6 @@ export interface Recommendation {
   floor_energy: number | null;
 }
 
-export interface RecommendRequest {
-  seeds: number[];
-  k?: number;
-  kinds?: string[];
-  weights?: Record<string, number>;
-  exclude?: number[];
-}
-
 // Per-column rec stream — five parallel streams that re-score as the
 // active combo changes. ``stem_file_id`` is null for the mix column.
 export interface ColumnRec {
@@ -378,7 +370,6 @@ export interface SetSummary {
   created_at: string;
   updated_at: string;
 }
-
 
 /**
  * A track loaded into Live via "Load to Live". Records which Ableton scene the

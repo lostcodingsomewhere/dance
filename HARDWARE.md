@@ -111,7 +111,8 @@ Originally going to buy an Anker USB-A hub ($12). USB-C cable approach removed t
 
 | Item | Role |
 |---|---|
-| **MacBook Pro M2 Pro 14"** (2023, 16 GB RAM) | Primary DJ machine. The brain. |
+| **Mac mini M4** (2024, 24 GB RAM) | The DJ machine since 2026-05-30. The brain. |
+| **MacBook Pro M2 Pro 14"** (2023, 16 GB RAM) | The DJ machine until 2026-05-30. The cable choices below were made for it. |
 | **Edifier R1700BT** | Powered bookshelf speakers, RCA inputs, 66W RMS. |
 | **Bose** wired headphones | 3.5 mm jack, ANC kept off, used wired. |
 | Standing desk | Shared with work setup (Mac mini + monitor stay). |

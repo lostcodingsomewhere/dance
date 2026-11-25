@@ -7,7 +7,7 @@ Spotify playlist → analyzed tracks with **stems, cues, loops, tags, and graph 
 The repo has three pieces:
 1. **Python pipeline** (`src/dance/`) — the brain. Spotify ingest → analysis → stems → regions → embeddings → recommendation graph. SQLite is the source of truth.
 2. **FastAPI backend** (`src/dance/api/`) — read-mostly REST over the SQLite DB, plus a WebSocket for live Ableton state and an OSC passthrough that auto-loads stem clips into Live's session view (Live 12.0.5+).
-3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Everything centers on one surface, the **plan grid**: five role columns — Drums · Bass · Vocals · Other · Song — each stacking your queued plan picks on top and recommendations below. Three views: **Booth** (live performance — SceneGrid mirror + the plan grid in *live* mode, where recs tail what's playing in Ableton and each card has ⤒A/⤒B to load it onto a deck), **Set** (the same plan grid in *plan* mode — recs scored against the rest of the plan; ＋ to queue), **Pipeline** (ingest + processing status + library inventory). One hybrid **⌘K** palette covers fuzzy artist/title search and CLAP vibe search in one surface, appending picks to the Song column.
+3. **React companion app** (`companion-app/`) — Vite + TypeScript + Tailwind. Everything centers on one surface, the **plan grid**: five role columns — Drums · Bass · Vocals · Melody · Song — each stacking your queued plan picks on top and recommendations below. Three views: **Booth** (live performance — SceneGrid mirror + the plan grid in *live* mode, where recs tail what's playing in Ableton and each card has ⤒A/⤒B to load it onto a deck), **Set** (the same plan grid in *plan* mode — recs scored against the rest of the plan; ＋ to queue), **Pipeline** (ingest + processing status + library inventory). One hybrid **⌘K** palette covers fuzzy artist/title search and CLAP vibe search in one surface, appending picks to the Song column.
 
 ## Documentation
 
@@ -93,7 +93,7 @@ Ableton state is pushed over the WebSocket — install AbletonOSC first (see [do
 
 ## DJ flow
 
-Both views share **one surface** — the **plan grid** (`RoleColumnsGrid`): five role columns (Drums · Bass · Vocals · Other · Song; "song" is the full-track anchor) that stack your queued plan picks on top and recommendations below. The same unified rec brain scores both; only the context and the available actions differ.
+Both views share **one surface** — the **plan grid** (`RoleColumnsGrid`): five role columns (Drums · Bass · Vocals · Melody · Song; "melody" is the `other` stem, "song" the full-track anchor) that stack your queued plan picks on top and recommendations below. The same unified rec brain scores both; only the context and the available actions differ.
 
 ### Before the set — plan in the Set view
 

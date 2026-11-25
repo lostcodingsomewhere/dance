@@ -219,9 +219,9 @@ src/dance/
 
 companion-app/src/
   App.tsx, main.tsx, store.ts, api.ts, types.ts
-  components/             TrackCard, EnergyBar, KeyBadge, ...
-  hooks/                  useTracks, useRecommend, useSession, useAbletonState
-  views/                  NowPlaying, UpNext, Library, SessionHistory
+  components/             MasterStrip, TwoDeckStrip, SceneGrid, RoleColumnsGrid, CommandBar, ...
+  hooks/                  useColumnRecs, useLoadToDeck, useSetPlan, useSession, useAbletonState, ...
+  views/                  Booth, SetEditor, PipelineOps, PipelineBoard
 
-tests/                    500+ Python tests, all use synthetic audio
+tests/                    1,000+ Python tests, all use synthetic audio
 ```
