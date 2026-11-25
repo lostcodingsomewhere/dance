@@ -525,33 +525,47 @@ def ingest_track(
     existing pipeline picks up the row from there.
 
     Idempotent on ``spotify_id`` — calling twice returns the existing Track.
+    A recording the library already holds, under another Spotify ID or none,
+    also answers with its existing Track: no row is created and nothing is
+    downloaded. A track marked as a duplicate answers with the one it stands for.
     Asking again for a track whose download failed queues the download again.
     """
+    from dance.spotify.search import (
+        SpotifyAuthError,
+        SpotifySearchError,
+        SpotifyTrackHit,
+        get_default_client,
+    )
+    from dance.spotify.versions import held_in_library
+
     spotify_id = body.spotify_id.strip()
     if not spotify_id:
         raise HTTPException(status_code=400, detail="spotify_id is required")
 
-    existing = session.query(Track).filter(Track.spotify_id == spotify_id).first()
-    if existing is not None:
-        job_id = _download_again_if_it_failed(session, existing, settings)
-        return IngestTrackResult(
-            track_id=int(existing.id),
-            state=str(existing.state),
-            job_id=job_id,
-            already_existed=True,
+    def track_already_held(
+        title: str | None, artist: str | None, duration_ms: int | None
+    ) -> Track | None:
+        asked = SpotifyTrackHit(
+            spotify_id=spotify_id,
+            title=title or "",
+            artist=artist or "",
+            album=None,
+            duration_ms=duration_ms,
+            preview_url=None,
+            image_url=None,
+            explicit=False,
+            popularity=None,
         )
+        mine = held_in_library(session, [asked])[0]
+        return session.get(Track, mine.track_id) if mine else None
 
-    # Fill metadata server-side if the caller didn't ship it.
     title = body.title
     artist = body.artist
     duration_ms = body.duration_ms
-    if not title or not artist:
-        from dance.spotify.search import (
-            SpotifyAuthError,
-            SpotifySearchError,
-            get_default_client,
-        )
+    existing = track_already_held(title, artist, duration_ms)
 
+    # Fill metadata server-side if the caller didn't ship it.
+    if existing is None and (not title or not artist):
         client = get_default_client(settings)
         if not client.configured:
             raise HTTPException(
@@ -570,6 +584,16 @@ def ingest_track(
         title = title or hit.title
         artist = artist or hit.artist
         duration_ms = duration_ms or hit.duration_ms
+        existing = track_already_held(title, artist, duration_ms)
+
+    if existing is not None:
+        job_id = _download_again_if_it_failed(session, existing, settings)
+        return IngestTrackResult(
+            track_id=int(existing.id),
+            state=str(existing.state),
+            job_id=job_id,
+            already_existed=True,
+        )
 
     # Pre-compute the path the downloader will write to so the FE / dispatcher
     # can find the file once it lands. ``download_track`` uses the same
