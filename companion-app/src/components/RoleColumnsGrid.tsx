@@ -16,7 +16,15 @@ import {
 } from "../types";
 import { Modal } from "./Modal";
 import { PadEditor } from "./PadEditor";
-import { ColumnHeader, PlanBand, PlanRow, RecsBand, RecsRow, whyNotReady } from "./RoleColumn";
+import {
+  ColumnHeader,
+  PlanBand,
+  PlanRow,
+  RecsBand,
+  RecsRow,
+  usePlanBandShown,
+  whyNotReady,
+} from "./RoleColumn";
 import { VersionFinder } from "./VersionFinder";
 
 /** The recommender calls the whole-track role "mix"; the plan calls it "song". */
@@ -84,6 +92,7 @@ export function RoleColumnsGrid({
   const closePads = useCallback(() => setPadsPick(null), []);
   const [versionsPick, setVersionsPick] = useState<PlanItem | null>(null);
   const closeVersions = useCallback(() => setVersionsPick(null), []);
+  const planBandShown = usePlanBandShown(setId, mode);
 
   // Switching mode or set re-populates every column; a cursor left pointing
   // into the old lists would walk into tracks that are no longer there.
@@ -166,24 +175,30 @@ export function RoleColumnsGrid({
 
   // Rendered as horizontal BANDS rather than five independent columns:
   //   [headers] · [PLAN band] · divider · [RECS band]
-  // The PLAN band is a 5-col grid with ``items-stretch``, so every plan zone
-  // (filled card or empty "nothing queued") is the height of the tallest —
-  // an uneven plan no longer pushes some columns' Recs below the others. The
-  // RECS band is a separate grid with ``items-start``, so a column with fewer
-  // recs keeps its own height (no dead space). The divider gives a clear seam
-  // between what you've ADDED (plan) and what's RECOMMENDED (recs).
+  // In the Set view the PLAN band is a 5-col grid with ``items-stretch``, so
+  // every plan zone (filled card or empty "nothing queued") is the height of
+  // the tallest — an uneven plan no longer pushes some columns' Recs below the
+  // others. In the Booth it is ``items-start``: each plan zone is capped at a
+  // few one-line rows and scrolls inside itself, and the band is left out
+  // while nothing is planned. The RECS band is a separate grid with
+  // ``items-start``, so a column with fewer recs keeps its own height (no dead
+  // space). The divider gives a clear seam between what you've ADDED (plan)
+  // and what's RECOMMENDED (recs).
   const cols = "grid grid-cols-5 gap-x-2 min-w-0";
   return (
     <div data-plan-grid className="flex flex-col gap-1 min-w-0">
       <div className={cols}>
         {PLAN_ROLES.map((role) => (
-          <ColumnHeader key={role} role={role} />
+          <ColumnHeader key={role} role={role} mode={mode} />
         ))}
       </div>
 
-      {setId != null && (
+      {setId != null && planBandShown && (
         <>
-          <PlanRow setId={setId} className={`${cols} items-stretch`}>
+          <PlanRow
+            setId={setId}
+            className={`${cols} ${mode === "live" ? "items-start" : "items-stretch"}`}
+          >
             {PLAN_ROLES.map((role) => (
               <PlanBand
                 key={role}
@@ -196,7 +211,7 @@ export function RoleColumnsGrid({
             ))}
           </PlanRow>
           {/* seam between added (plan) and recommended (recs) */}
-          <div className="mt-1 border-t border-neutral-800" />
+          <div data-plan-seam className="mt-1 border-t border-neutral-800" />
         </>
       )}
 
@@ -242,15 +257,20 @@ export function RoleColumnsGrid({
  * and it doubles as the reminder that the booth uses the same motions.
  */
 function KeyHints({ mode, loading }: { mode: "plan" | "live"; loading?: LoadToDeckVars }) {
-  const commit = mode === "live" ? "load Deck A · ⇧⏎ Deck B" : "add to plan";
+  const live = mode === "live";
+  const commit = live ? "load Deck A · ⇧⏎ Deck B" : "add to plan";
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-neutral-900 pt-1.5 text-[10px] text-neutral-600">
-      <Hint keys="↑↓←→" label="move" />
-      <Hint keys="space" label="hear it (headphones)" />
-      <Hint keys="⏎" label={commit} />
-      <Hint keys="esc" label="stop" />
-      <span className="text-neutral-700">
-        same keys in {mode === "live" ? "Set" : "Booth"}
+    <div
+      className={`mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-neutral-900 pt-1.5 ${
+        live ? "text-xs text-neutral-400" : "text-[10px] text-neutral-600"
+      }`}
+    >
+      <Hint keys="↑↓←→" label="move" live={live} />
+      <Hint keys="space" label="hear it (headphones)" live={live} />
+      <Hint keys="⏎" label={commit} live={live} />
+      <Hint keys="esc" label="stop" live={live} />
+      <span className={live ? "" : "text-neutral-700"}>
+        same keys in {live ? "Set" : "Booth"}
       </span>
       {loading && (
         <span role="status" className="text-amber-200">
@@ -261,10 +281,14 @@ function KeyHints({ mode, loading }: { mode: "plan" | "live"; loading?: LoadToDe
   );
 }
 
-function Hint({ keys, label }: { keys: string; label: string }) {
+function Hint({ keys, label, live }: { keys: string; label: string; live: boolean }) {
   return (
     <span className="inline-flex items-center gap-1">
-      <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1 py-px font-mono text-[9px] text-neutral-400">
+      <kbd
+        className={`rounded border border-neutral-700 bg-neutral-900 px-1 py-px font-mono text-neutral-400 ${
+          live ? "text-xs" : "text-[9px]"
+        }`}
+      >
         {keys}
       </kbd>
       <span>{label}</span>

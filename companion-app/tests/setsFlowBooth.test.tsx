@@ -103,7 +103,8 @@ describe("recs in the Booth while nothing plays", () => {
     server.recs = () => [rec(FITS_THE_PLAN)];
     backend = new BoothBackend(aBoothWith(server, []));
     renderApp();
-    await screen.findByRole("group", { name: "Song plan" });
+    await screen.findByRole("group", { name: "Song recs" });
+    await waitFor(() => expect(backend.sent("GET", `${API}/sets/${setId}/plan`)).not.toEqual([]));
 
     backend.liveNowPlays({});
     await theAppShowsLivesTempo();
