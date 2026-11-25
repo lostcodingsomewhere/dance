@@ -51,6 +51,7 @@ from dance.core.database import (
     Track,
     now_utc,
 )
+from dance.pipeline.placeholders import download_failed
 from dance.recommender.recommender import recommend_by_column
 from dance.recommender.tail import DEFAULT_WINDOW, tail_recs_for_set
 
@@ -188,17 +189,20 @@ def _deactivate_others(session: Session, keep_id: int | None) -> None:
         other.is_active = False
 
 
+def _picks_in(plan: str) -> int:
+    return sum(len(queue) for queue in sq.parse_plan(plan).values())
+
+
 @router.get("", response_model=list[SetSummaryOut])
 def list_sets(session: Session = Depends(get_session)) -> list[dict]:
     sets = session.query(Set).order_by(Set.updated_at.desc()).all()
-    counts = dict(session.query(SetTrack.set_id, _count_func()).group_by(SetTrack.set_id).all())
     return [
         {
             "id": int(s.id),
             "name": s.name,
             "notes": s.notes,
             "is_active": bool(s.is_active),
-            "track_count": int(counts.get(s.id, 0)),
+            "track_count": _picks_in(str(s.plan or "")),
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
@@ -561,6 +565,8 @@ def _plan_out(session: Session, s: Set) -> dict:
             "key_camelot": a.key_camelot if a else None,
             "bpm": float(a.bpm) if a and a.bpm is not None else None,
             "floor_energy": int(a.floor_energy) if a and a.floor_energy is not None else None,
+            "state": str(t.state) if t else None,
+            "download_failed": download_failed(t) if t else False,
         }
 
     return {

@@ -73,9 +73,12 @@ export function DepsChip() {
   const report = q.data;
   let dot = "bg-neutral-700";
   let title = "Loading deps health…";
+  let name = "Checking setup";
+  let setupTone: string | null = null;
   if (q.isError) {
     dot = "bg-rose-500";
     title = "Couldn't reach the backend deps endpoint";
+    name = "Setup could not be checked";
   } else if (report) {
     if (!report.ok) {
       dot = "bg-rose-500";
@@ -84,12 +87,17 @@ export function DepsChip() {
         .map((c) => c.label)
         .join(", ");
       title = `Missing required: ${missing}`;
+      name = "Setup: something required is missing";
+      setupTone = "text-rose-300";
     } else if (!report.all_green) {
       dot = "bg-amber-400";
       title = "Optional deps missing — click for details";
+      name = "Setup: something optional is missing";
+      setupTone = "text-amber-300";
     } else {
       dot = "bg-emerald-400";
       title = "All deps ready";
+      name = "Setup is complete";
     }
   }
 
@@ -98,11 +106,12 @@ export function DepsChip() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="h-7 w-7 inline-flex items-center justify-center rounded hover:bg-neutral-800"
+        className="h-7 min-w-7 px-1.5 inline-flex items-center justify-center gap-1.5 rounded hover:bg-neutral-800"
         title={title}
-        aria-label="dependency health"
+        aria-label={name}
       >
         <span className={`block w-2 h-2 rounded-full ${dot}`} />
+        {setupTone && <span className={`text-[11px] ${setupTone}`}>Setup</span>}
       </button>
       {open && report && (
         <div

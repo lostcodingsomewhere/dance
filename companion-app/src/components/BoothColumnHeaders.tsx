@@ -120,7 +120,7 @@ function ColumnHeaderChip({
           ? `${deckColumnLabel(deckKind)} · APC40 fader ${faderNumber} — routes to crossfader ${sideBadge}`
           : `${deckColumnLabel(deckKind)} · Ableton track ${trackIdx ?? "?"} — outside the APC40's 8-strip window at its default position. Press Bank Select ▶ to bring it into reach (the faders and the pad grid move together).`
       }
-      className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-[10px] uppercase tracking-wider font-semibold transition-all ${
+      className={`flex items-center gap-1 px-1.5 py-1 rounded-md border text-xs uppercase tracking-wider font-semibold transition-all ${
         styles.header
       } ${side === "b" ? "opacity-75" : ""}`}
     >
@@ -128,18 +128,18 @@ function ColumnHeaderChip({
           column. Absent when the column sits outside the first eight Ableton
           tracks, because then no strip does. */}
       <span
-        className={`text-[8px] font-mono tabular-nums shrink-0 leading-none ${
-          faderNumber != null ? "text-neutral-500/80" : "text-amber-500/80"
+        className={`text-xs font-mono tabular-nums shrink-0 leading-none ${
+          faderNumber != null ? "text-neutral-400" : "text-amber-500/80"
         }`}
         data-testid={`fader-badge-${deckKind}`}
       >
         {faderNumber ?? "—"}
       </span>
       <RoleIcon role={role} size={12} />
-      <span className="flex-1 truncate text-[10px]">
+      <span className="flex-1 truncate">
         {visibleLabel}
         {sideBadge && (
-          <span className="ml-0.5 text-[9px] opacity-80">{sideBadge}</span>
+          <span className="ml-1 opacity-80">{sideBadge}</span>
         )}
       </span>
       {trackIdx != null && (
@@ -151,10 +151,10 @@ function ColumnHeaderChip({
               ? `Unsolo ${deckColumnLabel(deckKind)}`
               : `Solo ${deckColumnLabel(deckKind)} (Live's solo button must be in Cue/PFL mode)`
           }
-          className={`text-[9px] leading-none rounded px-1 py-0.5 transition-colors ${
+          className={`text-xs leading-none rounded px-1 py-0.5 transition-colors ${
             isSoloed
               ? "bg-amber-400/30 text-amber-100 border border-amber-300/60"
-              : "text-neutral-500 hover:text-amber-200 border border-transparent"
+              : "text-neutral-400 hover:text-amber-200 border border-transparent"
           }`}
           aria-label={isSoloed ? `unsolo ${deckKind}` : `solo ${deckKind}`}
           aria-pressed={isSoloed}

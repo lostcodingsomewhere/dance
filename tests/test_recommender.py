@@ -14,6 +14,7 @@ from dance.core.database import (
     EdgeKind,
     TrackEdge,
     TrackEmbedding,
+    TrackState,
     now_utc,
 )
 from dance.core.embedding_scheme import CLAP_EMBED_VERSION
@@ -344,9 +345,9 @@ def _add_full_mix_embedding(session, track_id: int, vector: np.ndarray, model: s
 
 def test_recommend_by_text_orders_by_cosine(session, make_track, settings):
     """The track whose embedding is closest to the text query ranks first."""
-    near = make_track()
-    far = make_track()
-    other = make_track()
+    near = make_track(state=TrackState.COMPLETE.value)
+    far = make_track(state=TrackState.COMPLETE.value)
+    other = make_track(state=TrackState.COMPLETE.value)
 
     # Crafted vectors — `near` aligned with [1,0,0], `far` perpendicular,
     # `other` somewhere in between.
@@ -373,8 +374,8 @@ def test_recommend_by_text_orders_by_cosine(session, make_track, settings):
 
 
 def test_recommend_by_text_excludes_listed(session, make_track, settings):
-    a = make_track()
-    b = make_track()
+    a = make_track(state=TrackState.COMPLETE.value)
+    b = make_track(state=TrackState.COMPLETE.value)
     _add_full_mix_embedding(session, a.id, np.array([1.0, 0.0]))
     _add_full_mix_embedding(session, b.id, np.array([1.0, 0.0]))
     session.commit()
@@ -388,8 +389,8 @@ def test_recommend_by_text_excludes_listed(session, make_track, settings):
 
 def test_recommend_by_text_filters_by_model(session, make_track, settings):
     """Only embeddings matching the specified model are considered."""
-    a = make_track()
-    b = make_track()
+    a = make_track(state=TrackState.COMPLETE.value)
+    b = make_track(state=TrackState.COMPLETE.value)
     _add_full_mix_embedding(session, a.id, np.array([1.0, 0.0]), model="model-A")
     _add_full_mix_embedding(session, b.id, np.array([1.0, 0.0]), model="model-B")
     session.commit()

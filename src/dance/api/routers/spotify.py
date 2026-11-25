@@ -20,7 +20,11 @@ from dance.spotify.search import (
     SpotifySearchError,
     get_default_client,
 )
-from dance.spotify.versions import NothingToSearchWithError, versions_on_spotify
+from dance.spotify.versions import (
+    NothingToSearchWithError,
+    held_in_library,
+    versions_on_spotify,
+)
 
 router = APIRouter(prefix="/spotify", tags=["spotify"])
 
@@ -41,10 +45,14 @@ def _configured_client(settings: Settings) -> SpotifySearchClient:
 def search_tracks(
     q: str = Query(..., min_length=1, description="Free-text catalog query"),
     limit: int = Query(8, ge=1, le=20),
+    session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Return Spotify catalog hits for ``q``. Used by the Cmd-K palette's
     "ADD FROM SPOTIFY" section when the local library has no matches.
+
+    A hit the library already holds carries that track's id and state in
+    ``library_track_id`` and ``library_state``; both are null otherwise.
 
     Returns 503 if credentials aren't configured (server-side), 502 if
     Spotify itself errors. The FE renders an inline hint in either case.
@@ -56,6 +64,7 @@ def search_tracks(
         raise HTTPException(status_code=503, detail=f"Spotify auth: {exc}") from exc
     except SpotifySearchError as exc:
         raise HTTPException(status_code=502, detail=f"Spotify error: {exc}") from exc
+    held = held_in_library(session, hits)
     return {
         "query": q,
         "hits": [
@@ -69,8 +78,10 @@ def search_tracks(
                 "image_url": h.image_url,
                 "explicit": h.explicit,
                 "popularity": h.popularity,
+                "library_track_id": mine.track_id if mine else None,
+                "library_state": mine.state if mine else None,
             }
-            for h in hits
+            for h, mine in zip(hits, held, strict=True)
         ],
     }
 

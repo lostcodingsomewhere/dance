@@ -1,5 +1,13 @@
 import { SCORE_FEATURES } from "../types";
 
+const CHIP = {
+  sm: "gap-1 px-1 py-[1px] text-[9px]",
+  md: "gap-1 px-1.5 py-0.5 text-[10px]",
+  line: "h-5 gap-0.5 px-1 text-xs",
+};
+// A chip that does not fit wraps to a second row, and the fixed height cuts that row off whole.
+const ONE_LINE_OF_WHOLE_CHIPS = "h-[22px] shrink-0 overflow-hidden p-px";
+
 /**
  * Renders a rec's ``score_breakdown`` as a row of compact per-feature chips,
  * in the canonical feature order (vibe · key · bpm · energy · kick · presence ·
@@ -17,16 +25,17 @@ export function ScoreBreakdown({
   className = "",
 }: {
   breakdown: Record<string, number>;
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "line";
   className?: string;
 }) {
   const present = SCORE_FEATURES.filter((f) => breakdown[f.key] != null);
   if (present.length === 0) return null;
 
-  const pad = size === "sm" ? "px-1 py-[1px] text-[9px]" : "px-1.5 py-0.5 text-[10px]";
+  const pad = CHIP[size];
+  const box = size === "line" ? ONE_LINE_OF_WHOLE_CHIPS : "";
 
   return (
-    <div className={`flex flex-wrap gap-1 ${className}`}>
+    <div className={`flex flex-wrap gap-1 ${box} ${className}`}>
       {present.map((f) => {
         const v = breakdown[f.key];
         const pct = Math.round(Math.max(0, Math.min(1, v)) * 100);
@@ -34,7 +43,7 @@ export function ScoreBreakdown({
           <span
             key={f.key}
             title={`${f.label}: ${pct}`}
-            className={`inline-flex items-center gap-1 rounded ring-1 font-mono ${pad} ${f.color}`}
+            className={`inline-flex items-center rounded ring-1 font-mono ${pad} ${f.color}`}
           >
             <span className="opacity-80">{f.short}</span>
             <span className="tabular-nums">{pct}</span>

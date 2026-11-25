@@ -107,6 +107,12 @@ function aSetWithTheOriginalPlanned({ path, query, body }: SeenRequest): unknown
   return undefined;
 }
 
+// With a plan to score against, an idle Booth asks for plan recs instead.
+function withNoSetActive(answers: (request: SeenRequest) => unknown) {
+  return (request: SeenRequest): unknown =>
+    request.path === "/api/v1/sets/active" ? undefined : answers(request);
+}
+
 function card(title: string): HTMLElement {
   return screen.getByRole("group", { name: title });
 }
@@ -149,7 +155,7 @@ describe("versions of a song", () => {
   });
 
   it("lead the Booth's Song column for the song on a deck, offered for the other deck", async () => {
-    backend = new BoothBackend(aSetWithTheOriginalPlanned);
+    backend = new BoothBackend(withNoSetActive(aSetWithTheOriginalPlanned));
     renderApp();
     await screen.findByRole("button", { name: "Page 1" });
 

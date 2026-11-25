@@ -8,6 +8,44 @@ import * as api from "../api";
 import type { ColumnRecsResponse, SetPlan } from "../types";
 
 const KEY = (setId: number) => ["sets", setId, "plan"] as const;
+const SAVE_KEY = (setId: number | null) => ["sets", setId, "plan", "save"] as const;
+
+type OnSaved = (plan: SetPlan) => void;
+
+export interface PlanWritten {
+  plan: SetPlan;
+  picksLeftOut: number;
+}
+
+// PUT /plan refuses a whole plan that names a deleted track, and its 404 lists those ids.
+const DELETED_TRACKS = /unknown track ids in plan: \[([^\]]*)\]/;
+
+function deletedTracksNamedBy(error: unknown): Set<number> {
+  if (!(error instanceof api.ApiError) || error.status !== 404) return new Set();
+  const listed = api.serverMessage(error).match(DELETED_TRACKS)?.[1] ?? "";
+  return new Set((listed.match(/\d+/g) ?? []).map(Number));
+}
+
+function picksIn(queues: Record<string, number[]>): number {
+  return Object.values(queues).reduce((picks, ids) => picks + ids.length, 0);
+}
+
+export async function putPlanWithoutDeletedTracks(
+  setId: number,
+  queues: Record<string, number[]>,
+): Promise<PlanWritten> {
+  try {
+    return { plan: await api.putPlan(setId, queues), picksLeftOut: 0 };
+  } catch (error) {
+    const deleted = deletedTracksNamedBy(error);
+    const kept = Object.fromEntries(
+      Object.entries(queues).map(([role, ids]) => [role, ids.filter((id) => !deleted.has(id))]),
+    );
+    const picksLeftOut = picksIn(queues) - picksIn(kept);
+    if (picksLeftOut === 0) throw error;
+    return { plan: await api.putPlan(setId, kept), picksLeftOut };
+  }
+}
 
 export function useSetPlan(setId: number | null | undefined) {
   return useQuery({
@@ -25,7 +63,10 @@ export function usePlanMutations(setId: number | null) {
 
   const append = useAppendToPlan();
   const put = useMutation({
-    mutationFn: (queues: Record<string, number[]>) => api.putPlan(setId as number, queues),
+    meta: { showsOwnFailure: true },
+    mutationKey: SAVE_KEY(setId),
+    mutationFn: async (queues: Record<string, number[]>) =>
+      (await putPlanWithoutDeletedTracks(setId as number, queues)).plan,
     onSuccess: (plan) => {
       if (setId == null) return;
       qc.setQueryData(KEY(setId), plan);
@@ -73,16 +114,33 @@ export function usePlanMutations(setId: number | null) {
     append.mutate({ setId, role, trackId, afterTrackId: originalOfVersion(role, trackId) });
   };
 
-  const removeFromRole = (role: string, index: number) => {
+  // A save built from the cache while another is in flight would undo that one.
+  const save = (queues: Record<string, number[]>, onSaved?: OnSaved) => {
+    if (qc.isMutating({ mutationKey: SAVE_KEY(setId) }) > 0) return;
+    put.mutate(queues, { onSuccess: onSaved });
+  };
+
+  const removeFromRole = (role: string, index: number, trackId: number, onSaved?: OnSaved) => {
     const q = currentQueues();
     // No server-side remove endpoint exists, so this stays read-modify-PUT —
     // but refuse to run against an unloaded plan rather than wiping it.
     if (q == null) return;
-    q[role] = (q[role] ?? []).filter((_, i) => i !== index);
-    put.mutate(q);
+    const list = q[role] ?? [];
+    if (list[index] !== trackId) return;
+    q[role] = list.filter((_, i) => i !== index);
+    save(q, onSaved);
   };
 
-  const moveInRole = (role: string, from: number, to: number) => {
+  const restoreToRole = (role: string, index: number, trackId: number, onSaved?: OnSaved) => {
+    const q = currentQueues();
+    if (q == null) return;
+    const list = [...(q[role] ?? [])];
+    list.splice(Math.min(index, list.length), 0, trackId);
+    q[role] = list;
+    save(q, onSaved);
+  };
+
+  const moveInRole = (role: string, from: number, to: number, onSaved?: OnSaved) => {
     const q = currentQueues();
     if (q == null) return;
     const list = [...(q[role] ?? [])];
@@ -90,10 +148,17 @@ export function usePlanMutations(setId: number | null) {
     const [it] = list.splice(from, 1);
     list.splice(to, 0, it);
     q[role] = list;
-    put.mutate(q);
+    save(q, onSaved);
   };
 
-  return { put, addToRole, removeFromRole, moveInRole, isPending: put.isPending };
+  return {
+    put,
+    addToRole,
+    removeFromRole,
+    restoreToRole,
+    moveInRole,
+    isPending: put.isPending,
+  };
 }
 
 /** Append a track to a role queue server-side — safe without the plan loaded
@@ -101,6 +166,7 @@ export function usePlanMutations(setId: number | null) {
 export function useAppendToPlan() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "add that pick to the plan" },
     mutationFn: (v: {
       setId: number;
       role: string;

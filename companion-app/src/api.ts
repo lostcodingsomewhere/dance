@@ -55,6 +55,13 @@ export function serverMessage(error: Error): string {
   return typeof detail === "string" ? detail : error.message;
 }
 
+const BACKEND_DID_NOT_ANSWER = "The Dance backend did not answer. Check it is still running.";
+
+export function whyItFailed(error: Error): string {
+  // fetch rejects with a TypeError when no answer came back at all.
+  return error instanceof TypeError ? BACKEND_DID_NOT_ANSWER : serverMessage(error);
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -230,6 +237,12 @@ export function getPlanRecs(
 }
 
 // Sessions ------------------------------------------------------------------
+
+// The backend writes its timestamps in UTC with no zone marker.
+export function serverTimeMs(timestamp: string): number {
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(timestamp);
+  return new Date(hasZone ? timestamp : `${timestamp}Z`).getTime();
+}
 
 export function createSession(name?: string): Promise<DjSession> {
   return request<DjSession>("/sessions", {
@@ -434,6 +447,10 @@ export function ingestCommit(
 
 export function triggerPipelineProcess(): Promise<Job> {
   return request<Job>("/pipeline/process", { method: "POST" });
+}
+
+export function retryPipelineTrack(id: number): Promise<PipelineRecentTrack> {
+  return request<PipelineRecentTrack>(`/pipeline/tracks/${id}/retry`, { method: "POST" });
 }
 
 export interface ScanResult {
@@ -690,6 +707,10 @@ export function abletonSetVolume(
 
 export function abletonGetState(): Promise<AbletonState> {
   return request<AbletonState>("/ableton/state");
+}
+
+export function abletonHealth(signal?: AbortSignal): Promise<{ live_reachable: boolean }> {
+  return request<{ live_reachable: boolean }>("/ableton/health", { signal });
 }
 
 export function abletonDeckMap(): Promise<DeckMap> {

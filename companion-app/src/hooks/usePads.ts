@@ -16,6 +16,7 @@ export function usePads(trackId: number | null | undefined) {
 export function useMovePad(trackId: number) {
   const qc = useQueryClient();
   return useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: (move: { target: PadTarget; slot: number; positionMs: number }) =>
       api.movePad(trackId, move.target, move.slot, move.positionMs),
     onSuccess: () => qc.invalidateQueries({ queryKey: padsKey(trackId) }),
@@ -25,6 +26,7 @@ export function useMovePad(trackId: number) {
 export function useResetPad(trackId: number) {
   const qc = useQueryClient();
   return useMutation({
+    meta: { showsOwnFailure: true },
     mutationFn: (pad: { target: PadTarget; slot: number }) =>
       api.resetPad(trackId, pad.target, pad.slot),
     onSuccess: () => qc.invalidateQueries({ queryKey: padsKey(trackId) }),

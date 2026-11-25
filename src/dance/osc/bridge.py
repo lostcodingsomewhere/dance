@@ -273,6 +273,9 @@ class AbletonBridge:
             "/live/clip/get/playing_position", self._on_playing_position
         )
         self.listener.on("/live/song/get/num_tracks", self._on_num_tracks)
+        self._live_answered = threading.Condition()
+        self._live_answered_at = float("-inf")
+        self.listener.on("/live/song/get/num_tracks", self._on_live_answered)
         self.listener.on("/live/song/get/num_scenes", self._on_num_scenes)
         self.listener.on("/live/song/get/track_names", self._on_track_names)
         self.listener.on("/live/clip/get/name", self._on_clip_name)
@@ -783,6 +786,29 @@ class AbletonBridge:
         return self._await_reply(
             "/live/song/get/num_tracks", self.client.get_num_tracks, timeout
         )
+
+    def live_answers(self, timeout: float) -> bool:
+        # _await_reply keeps one waiter per address, so asking through it could take a load's reply.
+        asked_at = time.monotonic()
+        try:
+            self.client.get_num_tracks()
+        except OSError:
+            return False
+        with self._live_answered:
+            answered = self._live_answered.wait_for(
+                lambda: self._live_answered_at >= asked_at, timeout
+            )
+        return answered or self._a_load_explains_the_silence()
+
+    def _a_load_explains_the_silence(self) -> bool:
+        # Live answers nothing while it makes clips, so a load vouches for a Live heard from lately.
+        silent_for = time.monotonic() - self._live_answered_at
+        return self._grid_lock.locked() and silent_for < self._seconds_to_wait_for_new_clips
+
+    def _on_live_answered(self, _address: str, _args: tuple[Any, ...]) -> None:
+        with self._live_answered:
+            self._live_answered_at = time.monotonic()
+            self._live_answered.notify_all()
 
     def get_num_scenes(self, timeout: float = 0.5) -> int | None:
         """How many scenes the Set currently has."""

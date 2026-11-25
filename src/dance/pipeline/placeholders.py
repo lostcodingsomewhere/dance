@@ -17,13 +17,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from dance.core.database import Track
+from dance.core.database import Track, TrackState
 
 PLACEHOLDER_HASH_PREFIX = "pending:"
 
 
 def is_placeholder_hash(file_hash: str | None) -> bool:
     return bool(file_hash) and str(file_hash).startswith(PLACEHOLDER_HASH_PREFIX)
+
+
+def download_failed(track: Track) -> bool:
+    return str(track.state) == TrackState.ERROR.value and is_placeholder_hash(str(track.file_hash))
 
 
 def not_placeholder() -> Any:

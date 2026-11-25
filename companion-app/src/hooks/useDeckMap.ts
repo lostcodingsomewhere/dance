@@ -1,8 +1,18 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api";
-import { store, useAppStore } from "../store";
+import { sideOf } from "../lib/roles";
+import { store } from "../store";
+import type { DeckCell, LoadedDeck } from "../types";
 import { useAbletonState } from "./useAbletonState";
+
+function liveHolds(cells: DeckCell[], deck: LoadedDeck): boolean {
+  return cells.some(
+    (cell) =>
+      cell.scene_index === deck.scene_index &&
+      (deck.side == null || sideOf(cell.kind) === deck.side),
+  );
+}
 
 /**
  * Poll the bridge's view of "what cells are loaded in Live". This is the
@@ -19,7 +29,6 @@ import { useAbletonState } from "./useAbletonState";
  * case where the WS frame is missed or the revision doesn't move.
  */
 export function useDeckMap() {
-  const localDecks = useAppStore((s) => s.loadedDecks);
   const qc = useQueryClient();
   const deckMapRevision = useAbletonState().deck_map_revision;
   const query = useQuery({
@@ -35,20 +44,14 @@ export function useDeckMap() {
     qc.invalidateQueries({ queryKey: ["ableton", "decks"] });
   }, [deckMapRevision, qc]);
 
+  // A load made after this map was fetched is not in it yet, so only a new map prunes.
   useEffect(() => {
     const cells = query.data?.cells;
     if (!cells) return;
-    const backendScenes = new Set(cells.map((c) => c.scene_index));
-    const localScenes = Object.keys(localDecks).map(Number);
-    // Drop any local entry whose scene the backend doesn't know about. Don't
-    // ADD missing locals — the user might have just loaded and the backend
-    // poll hasn't completed yet. Pruning only is safe in both directions.
-    for (const sceneIdx of localScenes) {
-      if (!backendScenes.has(sceneIdx)) {
-        store.unloadDeck(sceneIdx);
-      }
+    for (const deck of Object.values(store.peekLoadedDecks())) {
+      if (!liveHolds(cells, deck)) store.unloadDeck(deck.scene_index, deck.side);
     }
-  }, [query.data, localDecks]);
+  }, [query.data]);
 
   return query;
 }
@@ -60,6 +63,7 @@ export function useDeckMap() {
 export function useResetDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "reset the decks" },
     mutationFn: api.abletonResetDecks,
     onSuccess: () => {
       store.clearDecks();
@@ -77,6 +81,7 @@ export function useResetDecks() {
 export function useCleanDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "clean up the decks" },
     mutationFn: api.abletonCleanDecks,
     onSuccess: () => {
       store.clearDecks();
@@ -94,6 +99,7 @@ export function useCleanDecks() {
 export function useResyncDecks() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { attempt: "resync with Live" },
     mutationFn: api.abletonResyncDecks,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ableton", "decks"] });

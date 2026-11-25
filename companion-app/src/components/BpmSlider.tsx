@@ -29,6 +29,7 @@ export function BpmSlider({
 }: BpmSliderProps) {
   const [draft, setDraft] = useState(value);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   // Outside-click and Escape both discard the draft. Commit only happens
   // on explicit Apply / Enter so a glancing drag can't change the master
@@ -40,7 +41,11 @@ export function BpmSlider({
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
-      else if (e.key === "Enter") {
+      else if (e.key === "Enter" && containerRef.current?.contains(e.target as Node)) {
+        // The plan grid listens for Enter on window; this press belongs to the popover.
+        e.stopPropagation();
+        if (e.target === cancelRef.current) return;
+        e.preventDefault();
         commit();
       }
     }
@@ -66,7 +71,8 @@ export function BpmSlider({
   return (
     <div
       ref={containerRef}
-      className="absolute top-full left-2 mt-2 z-50 w-[480px] rounded-lg border border-amber-500/30 bg-neutral-950/95 backdrop-blur shadow-2xl px-4 pt-3 pb-3"
+      tabIndex={-1}
+      className="absolute top-full left-2 mt-2 z-50 w-[480px] rounded-lg border border-amber-500/30 bg-neutral-950/95 backdrop-blur shadow-2xl px-4 pt-3 pb-3 outline-none"
       data-testid="bpm-slider"
     >
       {/* Live value + active genre band */}
@@ -153,6 +159,7 @@ export function BpmSlider({
         </span>
         <div className="flex items-center gap-1.5">
           <button
+            ref={cancelRef}
             type="button"
             onClick={onClose}
             className="h-7 px-2.5 rounded text-[11px] text-neutral-400 hover:text-neutral-200 transition-colors"
