@@ -26,9 +26,16 @@ interface PlaylistToast {
   tone: "ok" | "err";
 }
 
+interface Refusal {
+  whatDidNotHappen: string;
+  reason: string;
+}
+
 const POLL_MS = 3000;
 const RECENT_LIMIT = 30;
 const FILTERED_LIMIT = 200;
+const REFUSAL_STAYS_MS = 12000;
+const LONGEST_REASON_SHOWN_WHOLE = 60;
 
 const STAGE_COLOR: Record<string, string> = {
   pending: "bg-neutral-800 text-neutral-400",
@@ -65,6 +72,32 @@ function formatRelative(iso: string | null): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function firstSentence(text: string): string {
+  const firstLine = text.trim().split("\n")[0];
+  const end = firstLine.search(/[.!?](\s|$)/);
+  return end === -1 ? firstLine : firstLine.slice(0, end + 1);
+}
+
+function ErrorReason({ reason }: { reason: string }) {
+  const [open, setOpen] = useState(false);
+  if (reason.length <= LONGEST_REASON_SHOWN_WHOLE) {
+    return <div className="text-rose-400 text-xs mt-0.5 truncate">{reason}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={() => setOpen((wasOpen) => !wasOpen)}
+      title={open ? "Show less" : "Show the full error"}
+      className={`block max-w-md text-left text-rose-400 hover:text-rose-300 text-xs mt-0.5 underline decoration-dotted underline-offset-2 ${
+        open ? "whitespace-pre-wrap break-words" : "truncate"
+      }`}
+    >
+      {open ? reason : firstSentence(reason)}
+    </button>
+  );
 }
 
 // =============================================================================
@@ -121,9 +154,20 @@ function RowList({
   );
 }
 
-function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
+function IngestPanel({
+  csvText,
+  setCsvText,
+  keptOpenForItsText,
+  onCancel,
+  onCommitted,
+}: {
+  csvText: string;
+  setCsvText: (text: string) => void;
+  keptOpenForItsText: boolean;
+  onCancel: () => void;
+  onCommitted: () => void;
+}) {
   const qc = useQueryClient();
-  const [csvText, setCsvText] = useState("");
   const [preview, setPreview] = useState<IngestPreviewResponse | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -136,7 +180,7 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
       setSelected(new Set(data.new_rows.map(rowKey)));
     },
     onError: (err: Error) => {
-      setPreviewErr(err.message);
+      setPreviewErr(api.serverMessage(err));
       setPreview(null);
     },
   });
@@ -151,7 +195,7 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
       qc.invalidateQueries({ queryKey: ["pipeline-status"] });
       onCommitted();
     },
-    onError: (err: Error) => setPreviewErr(err.message),
+    onError: (err: Error) => setPreviewErr(api.serverMessage(err)),
   });
 
   function toggle(key: string): void {
@@ -239,7 +283,19 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
           />
         </label>
         {previewErr && <span className="text-rose-400 text-xs">{previewErr}</span>}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="ml-auto text-xs text-neutral-500 hover:text-neutral-200"
+        >
+          Cancel
+        </button>
       </div>
+      {keptOpenForItsText && (
+        <p role="status" className="text-xs text-amber-300 mt-2">
+          Your CSV is still here. Press Cancel to discard it.
+        </p>
+      )}
 
       {preview && (
         <div className="mt-4 space-y-3">
@@ -353,6 +409,40 @@ function IngestPanel({ onCommitted }: { onCommitted: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+function IngestDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [csvText, setCsvText] = useState("");
+  const [askedToCloseWithText, setAskedToCloseWithText] = useState(false);
+  const holdsText = csvText.trim() !== "";
+
+  function close(): void {
+    setCsvText("");
+    setAskedToCloseWithText(false);
+    onClose();
+  }
+
+  function closeUnlessItHoldsText(): void {
+    if (holdsText) setAskedToCloseWithText(true);
+    else close();
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={closeUnlessItHoldsText}
+      title="Ingest from CSV"
+      widthClass="max-w-2xl"
+    >
+      <IngestPanel
+        csvText={csvText}
+        setCsvText={setCsvText}
+        keptOpenForItsText={askedToCloseWithText && holdsText}
+        onCancel={close}
+        onCommitted={close}
+      />
+    </Modal>
   );
 }
 
@@ -549,6 +639,7 @@ export function PipelineOps() {
   const [filterState, setFilterState] = useState<string | null>(null);
   const [scanToast, setScanToast] = useState<ScanToast | null>(null);
   const [playlistToast, setPlaylistToast] = useState<PlaylistToast | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [playlistUrl, setPlaylistUrl] = useState("");
   // Spotify user OAuth token. Spotify lists a playlist's songs only for the
@@ -564,6 +655,12 @@ export function PipelineOps() {
   useEffect(() => {
     window.localStorage.setItem("dance.ops.viewMode", viewMode);
   }, [viewMode]);
+
+  useEffect(() => {
+    if (!refusal) return;
+    const timer = setTimeout(() => setRefusal(null), REFUSAL_STAYS_MS);
+    return () => clearTimeout(timer);
+  }, [refusal]);
 
   const status = useQuery({
     queryKey: ["pipeline-status"],
@@ -605,7 +702,7 @@ export function PipelineOps() {
       setTimeout(() => setScanToast(null), 5000);
     },
     onError: (err: Error) => {
-      setScanToast({ text: err.message, tone: "err" });
+      setScanToast({ text: api.serverMessage(err), tone: "err" });
       setTimeout(() => setScanToast(null), 5000);
     },
   });
@@ -631,7 +728,7 @@ export function PipelineOps() {
       setTimeout(() => setPlaylistToast(null), 8000);
     },
     onError: (err: Error) => {
-      setPlaylistToast({ text: err.message, tone: "err" });
+      setPlaylistToast({ text: api.serverMessage(err), tone: "err" });
       setTimeout(() => setPlaylistToast(null), 12000);
     },
   });
@@ -671,7 +768,32 @@ export function PipelineOps() {
 
   const processMutation = useMutation({
     mutationFn: api.triggerPipelineProcess,
+    onMutate: () => setRefusal(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-status"] }),
+    onError: (err: Error) =>
+      setRefusal({
+        whatDidNotHappen:
+          err instanceof api.ApiError && err.status === 409
+            ? "Another run is in progress."
+            : "Processing did not start.",
+        reason: api.serverMessage(err),
+      }),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: api.retryPipelineTrack,
+    onMutate: () => setRefusal(null),
+    onSuccess: async (waiting) => {
+      const listShown = ["pipeline-recent", filterState];
+      await qc.cancelQueries({ queryKey: listShown });
+      qc.setQueryData<PipelineRecentTrack[]>(listShown, (rows) =>
+        rows?.map((row) => (row.id === waiting.id ? waiting : row)),
+      );
+      qc.invalidateQueries({ queryKey: ["pipeline-status"] });
+      qc.invalidateQueries({ queryKey: ["board-state"] });
+    },
+    onError: (err: Error) =>
+      setRefusal({ whatDidNotHappen: "Not retried.", reason: api.serverMessage(err) }),
   });
 
   // While a pipeline run is in flight, refresh faster.
@@ -689,6 +811,9 @@ export function PipelineOps() {
   const total = status.data?.total ?? 0;
   const weighted = status.data?.weighted_progress ?? 0;
   const inProgress = !!status.data?.in_progress;
+  // isError goes back to false on every new attempt while no status has loaded.
+  const serverIsNotAnswering =
+    status.failureCount > 0 || status.errorUpdatedAt > status.dataUpdatedAt;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -696,18 +821,24 @@ export function PipelineOps() {
       <div className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
-          <p className="text-neutral-500 text-sm">
-            {inProgress ? "Processing…" : "Idle"} · {total} tracks ·{" "}
-            <span className="text-neutral-300">
-              {weighted.toFixed(1)}% through pipeline
-            </span>
-            {status.data && status.data.complete > 0 && (
-              <span className="text-neutral-500">
-                {" "}
-                · {status.data.complete} fully complete
+          {serverIsNotAnswering ? (
+            <p className="text-rose-300 text-sm">
+              The server is not answering. Check that it is running.
+            </p>
+          ) : (
+            <p className="text-neutral-500 text-sm">
+              {inProgress ? "Processing…" : "Idle"} · {total} tracks ·{" "}
+              <span className="text-neutral-300">
+                {weighted.toFixed(1)}% through pipeline
               </span>
-            )}
-          </p>
+              {status.data && status.data.complete > 0 && (
+                <span className="text-neutral-500">
+                  {" "}
+                  · {status.data.complete} fully complete
+                </span>
+              )}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <label
@@ -794,6 +925,12 @@ export function PipelineOps() {
           </div>
         </div>
       </div>
+
+      {refusal && (
+        <div role="alert" className="px-6 py-2 text-sm bg-rose-500/10 text-rose-200">
+          <span className="font-semibold">{refusal.whatDidNotHappen}</span> {refusal.reason}
+        </div>
+      )}
 
       {scanToast && (
         <div
@@ -1033,11 +1170,7 @@ export function PipelineOps() {
                               — {t.artist ?? "?"}
                             </span>
                           </div>
-                          {t.error_message && (
-                            <div className="text-rose-400 text-xs mt-0.5 truncate">
-                              {t.error_message}
-                            </div>
-                          )}
+                          {t.error_message && <ErrorReason reason={t.error_message} />}
                         </td>
                         <td className="px-3 py-2">
                           <button
@@ -1054,7 +1187,20 @@ export function PipelineOps() {
                         <td className="px-3 py-2 text-right text-neutral-500 text-xs tabular-nums">
                           {formatRelative(t.updated_at)}
                         </td>
-                        <td className="pr-3">
+                        <td className="pr-3 whitespace-nowrap text-right">
+                          {t.state === "error" && (
+                            <button
+                              type="button"
+                              onClick={() => retryMutation.mutate(t.id)}
+                              disabled={
+                                retryMutation.isPending && retryMutation.variables === t.id
+                              }
+                              className="mr-2 px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-xs font-semibold disabled:opacity-40"
+                              title="Try this track again"
+                            >
+                              Retry
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => confirmDelete(t)}
@@ -1088,14 +1234,7 @@ export function PipelineOps() {
         </div>
       </div>
 
-      <Modal
-        open={ingestOpen}
-        onClose={() => setIngestOpen(false)}
-        title="Ingest from CSV"
-        widthClass="max-w-2xl"
-      >
-        <IngestPanel onCommitted={() => setIngestOpen(false)} />
-      </Modal>
+      <IngestDialog open={ingestOpen} onClose={() => setIngestOpen(false)} />
     </div>
   );
 }
