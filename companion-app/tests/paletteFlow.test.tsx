@@ -109,6 +109,7 @@ function failure(status: number, detail: string): Response {
 
 interface Library {
   tracks: Track[];
+  tracksWhenTyped: Record<string, Track[]>;
   byVibe: Recommendation[];
   onSpotify: SpotifyTrackHit[];
   alreadyPlanned: number[];
@@ -119,6 +120,7 @@ interface Library {
 function aLibrary(given: Partial<Library> = {}) {
   const library: Library = {
     tracks: [inLibrary(NIGHT_DRIVE), inLibrary(HALF_LIGHT)],
+    tracksWhenTyped: {},
     byVibe: [],
     onSpotify: [],
     alreadyPlanned: [],
@@ -131,7 +133,7 @@ function aLibrary(given: Partial<Library> = {}) {
     set_id: SET_ID,
     queues: { drums: [], bass: [], vocals: [], other: [], song: songQueue.map(planItem) },
   });
-  return ({ method, path, body }: SeenRequest): unknown => {
+  return ({ method, path, query, body }: SeenRequest): unknown => {
     if (path === "/api/v1/sets/active" || path === `/api/v1/sets/${SET_ID}`) return THE_ACTIVE_SET;
     if (path === "/api/v1/sets") return [];
     if (path === `/api/v1/sets/${SET_ID}/plan`) return plan();
@@ -147,7 +149,10 @@ function aLibrary(given: Partial<Library> = {}) {
       return { column: (body as { column: string }).column, combo_size: 0, recs: [] };
     }
     if (path === "/api/v1/ableton/decks") return { columns: LIVE_TRACK_OF, cells: [] };
-    if (path === "/api/v1/tracks/search") return library.tracks;
+    if (path === "/api/v1/tracks/search") {
+      const typed = new URLSearchParams(query).get("q") ?? "";
+      return library.tracksWhenTyped[typed] ?? library.tracks;
+    }
     if (path === "/api/v1/recommend/text") return library.byVibe;
     if (path === "/api/v1/spotify/search") return { query: "night drive", hits: library.onSpotify };
     if (path === LOAD_PATH && method === "POST") return library.whenLoading();
@@ -377,6 +382,53 @@ describe("the search palette, from the keyboard", () => {
       await within(libraryRow("Half Light")).findByRole("button", { name: "✓ in plan" }),
     ).toBeDisabled();
     expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+  });
+
+  it("leaves the last search's rows alone until the rows for the new text are in", async () => {
+    backend = new BoothBackend(aLibrary({ tracksWhenTyped: { slow: [inLibrary(SLOW_TIDE)] } }));
+    renderApp();
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("group", { name: "Search result: Night Drive" });
+
+    fireEvent.change(searchField(), { target: { value: "slow" } });
+    press("ArrowDown");
+    press("Enter");
+
+    expect(libraryRow("Night Drive")).toBeInTheDocument();
+    expect(highlighted()).toEqual([]);
+    await within(palette()).findByRole("group", { name: "Search result: Slow Tide" });
+    expect(highlighted()).toEqual([]);
+    expect(backend.sent("POST", LOAD_PATH)).toEqual([]);
+
+    press("ArrowDown");
+    expect(highlighted()).toEqual(["Search result: Slow Tide"]);
+    press("Enter");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument(),
+    );
+    expect(backend.sent("POST", LOAD_PATH)).toMatchObject([
+      { body: { track_id: SLOW_TIDE.track_id } },
+    ]);
+  });
+
+  it("loads a song once, however often Enter or Load is pressed before the palette closes", async () => {
+    backend = new BoothBackend(aLibrary());
+    renderApp();
+    await openPaletteAndType("night");
+    await within(palette()).findByRole("group", { name: "Search result: Night Drive" });
+
+    press("ArrowDown");
+    press("Enter");
+    const loaded = await within(libraryRow("Night Drive")).findByRole("button", {
+      name: "scene 1",
+    });
+    press("Enter");
+    clickWithTheMouse(loaded);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: PALETTE })).not.toBeInTheDocument(),
+    );
+    expect(backend.sent("POST", LOAD_PATH)).toHaveLength(1);
   });
 });
 

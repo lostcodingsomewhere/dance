@@ -35,7 +35,8 @@ import { KeyBadge } from "./KeyBadge";
  * Result actions: Load to Live + Add to the active set's plan.
  *
  * Keys: Down and Up move a highlight through every row in the order shown.
- * Nothing is highlighted until Down is pressed, and typing clears it. Enter
+ * Nothing is highlighted until Down is pressed, and typing clears it; the
+ * arrows then wait until the rows on screen are the ones for the new text. Enter
  * on the highlighted library row adds it to the plan in the Set view and
  * loads it to Live in every other view; Cmd+Enter adds it to the plan in
  * every view. Enter on a highlighted Spotify row presses that row's button.
@@ -116,6 +117,8 @@ export function CommandBar() {
     ],
     [fuzzy.data, vibe.data, spotify.data, vibeEligible, spotifyEligible],
   );
+  const rowsAreForTheTypedText =
+    q.trim().toLowerCase() === debouncedQ.trim().toLowerCase();
 
   // Global key listener — Cmd/Ctrl+K toggles, Escape closes, Down and Up
   // move the highlight.
@@ -133,11 +136,12 @@ export function CommandBar() {
       if (step == null || usesArrowKeysItself(e.target)) return;
       e.preventDefault();
       inputRef.current?.focus();
+      if (!rowsAreForTheTypedText) return;
       setHighlightedRow((current) => rowAfter(rowsInOrder, current, step));
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, rowsInOrder]);
+  }, [open, rowsInOrder, rowsAreForTheTypedText]);
 
   // Focus on open / reset on close.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -641,7 +645,7 @@ function RowShell({
   const inPlan = (plan.data?.queues.song ?? []).some((pick) => pick.track_id === trackId);
   const canPlan = activeSetId != null && !inPlan && !addToPlan.isPending;
   const notReady = whyItCannotBeLoaded(state);
-  const canLoad = notReady == null && !loading;
+  const canLoad = notReady == null && !loading && done == null;
 
   async function loadToLive() {
     if (!canLoad) return;
