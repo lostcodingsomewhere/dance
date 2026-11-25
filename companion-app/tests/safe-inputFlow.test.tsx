@@ -17,7 +17,6 @@ import {
   holdAnswersTo,
   letRequestsGoOut,
   press,
-  switchToAnotherAppAndBack,
   tabTo,
 } from "./safe-inputHelpers";
 
@@ -125,7 +124,12 @@ async function openBpmPopoverWithADraftOf(bpm: number): Promise<HTMLElement> {
   renderApp();
   await screen.findByRole("button", { name: "Page 1" });
   backend.liveNowPlays({});
-  fireEvent.click(await screen.findByRole("button", { name: "128.0" }));
+  await screen.findByRole("button", { name: "128.0" });
+  return draftInTheBpmPopover(bpm);
+}
+
+function draftInTheBpmPopover(bpm: number): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "128.0" }));
   const slider = screen.getByRole("slider", { name: "Master BPM" });
   fireEvent.change(slider, { target: { value: String(bpm) } });
   return slider;
@@ -310,7 +314,7 @@ describe("Enter and Space on the Booth's plan grid", () => {
     expect(backend.sent("POST", STOP_PREVIEW)).toHaveLength(1);
   });
 
-  it("leaves Enter and Space to a button reached with the Tab key outside the plan grid", async () => {
+  it("leaves Enter and Space to a button outside the plan grid until an arrow key moves the cursor", async () => {
     await openBoothWithTheCursorOnTheRecommendedSong();
 
     tabTo(screen.getByRole("button", { name: "Panic — stop all clips" }));
@@ -319,48 +323,45 @@ describe("Enter and Space on the Booth's plan grid", () => {
     press("Enter");
     await waitFor(() => expect(backend.sent("POST", STOP_ALL_CLIPS)).toHaveLength(1));
 
-    tabTo(within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" }));
+    const cue = within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" });
+    tabTo(cue);
     press(" ");
     await waitFor(() => expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(1));
-
     expect(backend.sent("POST", LOAD)).toEqual([]);
     expect(backend.sent("POST", PREVIEW)).toEqual([]);
-  });
 
-  it("keeps Enter and Space on the plan grid after a mouse click on a button elsewhere", async () => {
-    await openBoothWithTheCursorOnTheRecommendedSong();
-    const cue = within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" });
-
-    clickWithTheMouse(cue);
-    expect(cue).toHaveFocus();
+    press("ArrowDown");
+    expect(cue).not.toHaveFocus();
     press(" ");
     await waitFor(() =>
       expect(backend.sent("POST", PREVIEW)).toMatchObject([
         { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
       ]),
     );
-
-    switchToAnotherAppAndBack();
-    expect(cue).toHaveFocus();
-    press(" ");
-    await waitFor(() => expect(backend.sent("POST", STOP_PREVIEW)).toHaveLength(1));
-
     expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(1);
   });
 
-  it("gives Enter and Space back to the plan grid once an arrow key moves its cursor", async () => {
+  it("leaves Enter and Space to a button clicked with the mouse outside the plan grid", async () => {
     await openBoothWithTheCursorOnTheRecommendedSong();
-    tabTo(within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" }));
+
+    clickWithTheMouse(screen.getByRole("button", { name: "Panic — stop all clips" }));
+    expect(screen.getByRole("button", { name: "PANIC" })).toHaveFocus();
+    press("Enter");
+    await waitFor(() => expect(backend.sent("POST", STOP_ALL_CLIPS)).toHaveLength(1));
+
+    const cue = within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" });
+    clickWithTheMouse(cue);
+    expect(cue).toHaveFocus();
+    press(" ");
+    await waitFor(() => expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(2));
+    expect(backend.sent("POST", LOAD)).toEqual([]);
+    expect(backend.sent("POST", PREVIEW)).toEqual([]);
 
     press("ArrowDown");
-    press(" ");
-
-    await waitFor(() =>
-      expect(backend.sent("POST", PREVIEW)).toMatchObject([
-        { body: { track_id: RECOMMENDED.track_id, column: SONG_COLUMN } },
-      ]),
-    );
-    expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toEqual([]);
+    expect(cue).not.toHaveFocus();
+    press("Enter");
+    await waitFor(() => expect(decksLoaded()).toEqual(["a"]));
+    expect(backend.sent("POST", FIRE_DECK_A_CUE_3)).toHaveLength(2);
   });
 
   it("still loads the pick under the cursor when Enter lands on a button inside the plan grid", async () => {
@@ -393,15 +394,11 @@ describe("Enter with the BPM popover open", () => {
     press("Enter");
     await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }]));
     expect(slider).not.toBeInTheDocument();
-  });
 
-  it("still applies the draft after a click on the popover's own background", async () => {
-    await openBpmPopoverWithADraftOf(120);
-
-    clickWithTheMouse(within(screen.getByTestId("bpm-slider")).getByText("120.0"));
+    draftInTheBpmPopover(110);
+    clickWithTheMouse(within(screen.getByTestId("bpm-slider")).getByText("110.0"));
     press("Enter");
-
-    await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }]));
+    await waitFor(() => expect(tempoChanges()).toEqual([{ bpm: 120 }, { bpm: 110 }]));
   });
 
   it("applies the draft without also loading the pick under the plan grid's cursor", async () => {

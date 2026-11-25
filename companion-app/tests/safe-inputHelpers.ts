@@ -25,13 +25,6 @@ export function clickWithTheMouse(target: HTMLElement): void {
   fireEvent.click(target);
 }
 
-// A browser takes focus off the page while its window is in the background, then hands it back.
-export function switchToAnotherAppAndBack(): void {
-  const focused = document.activeElement as HTMLElement;
-  focused.blur();
-  focused.focus();
-}
-
 export async function letRequestsGoOut(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));

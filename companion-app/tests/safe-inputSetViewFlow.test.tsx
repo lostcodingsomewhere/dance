@@ -151,7 +151,7 @@ describe("Enter on the Set view's plan grid", () => {
     expect(picksAdded()).toEqual([FIRST_REC.track_id, SECOND_REC.track_id]);
   });
 
-  it("leaves Enter to a button reached with the Tab key outside the plan grid", async () => {
+  it("leaves Enter to a button outside the plan grid until an arrow key moves the cursor", async () => {
     await openSetViewWithTheCursorOnTheFirstRec();
 
     tabTo(screen.getByRole("button", { name: SET_NAME }));
@@ -167,8 +167,9 @@ describe("Enter on the Set view's plan grid", () => {
 });
 
 describe("a dialog opened from the Set view", () => {
-  it("takes focus, keeps Tab inside, and hands focus back when it closes", async () => {
-    renderSetView();
+  it("takes focus, keeps Tab inside, hands focus back when it closes, and leaves Tab alone under the search palette", async () => {
+    store.setView("set");
+    renderApp();
     const versions = await buttonOnThePlannedSong("Versions");
     tabTo(versions);
     press("Enter");
@@ -191,6 +192,14 @@ describe("a dialog opened from the Set view", () => {
     press("Escape");
     await dialogHasClosed();
     expect(versions).toHaveFocus();
+
+    press("Enter");
+    await screen.findByRole("dialog", { name: "Versions · Night Drive" });
+    press("k", { metaKey: true });
+    const search = await screen.findByRole("textbox");
+    await waitFor(() => expect(search).toHaveFocus());
+    press("Tab");
+    expect(search).toHaveFocus();
   });
 
   it("leaves focus where the dialog's own content put it", async () => {
@@ -215,20 +224,5 @@ describe("a dialog opened from the Set view", () => {
     press("Escape");
     await dialogHasClosed();
     expect(pads).toHaveFocus();
-  });
-
-  it("leaves Tab alone while the search palette is open above it", async () => {
-    store.setView("set");
-    renderApp();
-    tabTo(await buttonOnThePlannedSong("Versions"));
-    press("Enter");
-    await screen.findByRole("dialog", { name: "Versions · Night Drive" });
-
-    press("k", { metaKey: true });
-    const search = await screen.findByRole("textbox");
-    await waitFor(() => expect(search).toHaveFocus());
-    press("Tab");
-
-    expect(search).toHaveFocus();
   });
 });
