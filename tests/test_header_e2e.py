@@ -12,16 +12,21 @@ from fastapi.testclient import TestClient
 
 from dance.api import create_app
 from dance.config import get_settings
+from dance.core.database import _reset_engine_for_tests, get_session_factory
 from dance.osc.bridge import AbletonBridge
-from tests.live_stand_in import LiveStandIn, booth_with_live, free_port
+from tests.live_stand_in import GRID_GUARD_DELAYS, LiveStandIn, booth_with_live, free_port
 from tests.test_booth_pages_e2e import _cells_once_there_are, _exported, _settles
 from tests.test_cue_pads_e2e import API
+from tests.test_export_set_e2e import three_songs_through_the_pipeline
 
 HEALTH = f"{API}/ableton/health"
 STATE = f"{API}/ableton/state"
 TRACK_COUNT_QUESTION = "/live/song/get/num_tracks"
+MAKE_A_CLIP = "/live/clip_slot/create_audio_clip"
 PORT_NOTHING_CAN_BE_SENT_TO = 0
 SECONDS_LIVE_TAKES_UNDER_A_LOAD = 0.5
+SECONDS_LIVE_TAKES_TO_MAKE_A_CLIP = 0.5
+SECONDS_OF_SILENCE_A_LOAD_EXPLAINS = 0.5
 
 
 @contextmanager
@@ -48,6 +53,59 @@ def booth(session_factory):
 @pytest.fixture
 def booth_with_songs(monkeypatch):
     yield from booth_with_live(monkeypatch)
+
+
+@pytest.fixture
+def booth_with_little_patience(monkeypatch):
+    track_ids = three_songs_through_the_pipeline(monkeypatch)
+    settings = get_settings()
+    with LiveStandIn() as live:
+        bridge = AbletonBridge(
+            send_port=live.receive_port,
+            listen_port=live.reply_port,
+            state_file=settings.data_dir / "deck_state.json",
+            grid_guard_delays=GRID_GUARD_DELAYS,
+            seconds_to_wait_for_new_clips=SECONDS_OF_SILENCE_A_LOAD_EXPLAINS,
+        )
+        app = create_app(
+            settings=settings,
+            bridge=bridge,
+            session_factory=get_session_factory(settings.db_url),
+        )
+        bridge.start()
+        try:
+            with TestClient(app) as client:
+                yield client, track_ids, live
+        finally:
+            bridge.stop()
+    _reset_engine_for_tests()
+
+
+def _says_when_it_starts_making_a_clip(live: LiveStandIn, monkeypatch) -> threading.Event:
+    started = threading.Event()
+    answer = live._answer
+
+    def answer_and_say(address: str, args: tuple[Any, ...]) -> None:
+        if address == MAKE_A_CLIP:
+            started.set()
+        answer(address, args)
+
+    monkeypatch.setattr(live, "_answer", answer_and_say)
+    return started
+
+
+def _goes_quiet_at_its_next_track_count(live: LiveStandIn, monkeypatch) -> threading.Event:
+    quiet = threading.Event()
+    answer = live._answer
+
+    def answer_until_asked(address: str, args: tuple[Any, ...]) -> None:
+        if address == TRACK_COUNT_QUESTION:
+            live.stop_answering()
+            quiet.set()
+        answer(address, args)
+
+    monkeypatch.setattr(live, "_answer", answer_until_asked)
+    return quiet
 
 
 def _answers_its_next_track_count_late(
@@ -129,3 +187,54 @@ def test_a_health_check_leaves_a_load_the_answer_it_is_waiting_for(booth_with_so
     assert load.result().status_code == 200, load.result().text
     loaded = load.result().json()
     assert (loaded["stems_loaded"], loaded["warnings"]) == (4, [])
+
+
+def test_the_health_check_trusts_live_while_it_is_silent_making_the_clips_of_a_load(
+    booth_with_songs, monkeypatch
+):
+    client, ids, live = booth_with_songs
+    exported = _exported(client, {"song": [ids["first_song"]]})
+    live.open(exported["out_path"])
+    _cells_once_there_are(client, exported["clip_count"])
+    live.takes_to_make_a_clip(SECONDS_LIVE_TAKES_TO_MAKE_A_CLIP)
+    live_is_making_clips = _says_when_it_starts_making_a_clip(live, monkeypatch)
+
+    with ThreadPoolExecutor(max_workers=1) as beside:
+        load = beside.submit(
+            client.post,
+            f"{API}/ableton/load-track",
+            json={"track_id": ids["second_song"], "side": "b", "page": 0},
+        )
+        assert live_is_making_clips.wait(timeout=5.0)
+        checked = client.get(HEALTH)
+        live_was_still_silent = not load.done()
+
+    assert live_was_still_silent
+    assert checked.json() == {"live_reachable": True}
+    assert load.result().status_code == 200, load.result().text
+    loaded = load.result().json()
+    assert (loaded["stems_loaded"], loaded["warnings"]) == (4, [])
+
+
+def test_a_load_stops_vouching_for_a_live_that_has_been_silent_too_long(
+    booth_with_little_patience, monkeypatch
+):
+    client, ids, live = booth_with_little_patience
+    exported = _exported(client, {"song": [ids["first_song"]]})
+    live.open(exported["out_path"])
+    _cells_once_there_are(client, exported["clip_count"])
+    live_went_quiet = _goes_quiet_at_its_next_track_count(live, monkeypatch)
+
+    with ThreadPoolExecutor(max_workers=1) as beside:
+        load = beside.submit(
+            client.post,
+            f"{API}/ableton/load-track",
+            json={"track_id": ids["second_song"], "side": "b", "page": 0},
+        )
+        assert live_went_quiet.wait(timeout=5.0)
+        checked = client.get(HEALTH)
+        load_was_still_waiting = not load.done()
+
+    assert load_was_still_waiting
+    assert checked.json() == {"live_reachable": False}
+    assert load.result().json()["stems_loaded"] == 0

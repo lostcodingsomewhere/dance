@@ -795,9 +795,15 @@ class AbletonBridge:
         except OSError:
             return False
         with self._live_answered:
-            return self._live_answered.wait_for(
+            answered = self._live_answered.wait_for(
                 lambda: self._live_answered_at >= asked_at, timeout
             )
+        return answered or self._a_load_explains_the_silence()
+
+    def _a_load_explains_the_silence(self) -> bool:
+        # Live answers nothing while it makes clips, so a load vouches for a Live heard from lately.
+        silent_for = time.monotonic() - self._live_answered_at
+        return self._grid_lock.locked() and silent_for < self._seconds_to_wait_for_new_clips
 
     def _on_live_answered(self, _address: str, _args: tuple[Any, ...]) -> None:
         with self._live_answered:
