@@ -25,7 +25,10 @@ from dance.api.routers import (
     ws,
 )
 from dance.api.routers.ableton import adopt_live_decks
-from dance.api.routers.pipeline import start_watch_thread
+from dance.api.routers.pipeline import (
+    fail_downloads_the_last_run_left_unfinished,
+    start_watch_thread,
+)
 from dance.config import Settings, get_settings
 from dance.core.database import get_session_factory
 from dance.osc.bridge import AbletonBridge, AbletonState
@@ -64,6 +67,7 @@ def create_app(
     # Order matters: this MUST happen before PipelineWSManager() so the
     # manager subscribes to the persisted instance.
     init_persisted_registry(settings.data_dir / "jobs.json")
+    fail_downloads_the_last_run_left_unfinished(session_factory)
 
     # Start the watch-mode polling thread. Reads its persisted
     # enabled flag from data_dir/watch.json. Idempotent.

@@ -21,6 +21,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -248,6 +250,7 @@ def test_full_pipeline_on_synthetic_audio(e2e_settings, e2e_session, two_synth_t
 MOST_PASSES_ONE_SHORT_SONG_NEEDS = 6
 OUT_OF_MEMORY = "MPS backend out of memory"
 NOTHING_TO_RETRY = "This track has not failed, so there is nothing to retry."
+SERVER_STOPPED_MID_DOWNLOAD = "The server stopped before this download finished."
 UPLOAD = "RIGHTupload"
 SONG_ON_SPOTIFY = {
     "spotify_id": "shallow-water",
@@ -323,6 +326,24 @@ class PipelineView:
                 return job
             time.sleep(0.05)
         raise AssertionError("the newest download job never finished")
+
+    def left_mid_download_by_a_server_that_stopped(self, track_id: int) -> None:
+        with get_session_factory(self.settings.db_url)() as session:
+            track = session.get(Track, track_id)
+            track.state = TrackState.PENDING.value
+            track.error_message = None
+            session.commit()
+
+    @contextmanager
+    def started_again(self) -> Iterator[PipelineView]:
+        download_pool._reset_download_pool_for_tests()
+        app = create_app(
+            settings=self.settings,
+            bridge=FakeAbletonBridge(),
+            session_factory=get_session_factory(self.settings.db_url),
+        )
+        with TestClient(app) as client:
+            yield PipelineView(client, self.settings)
 
     def stored(self, track_id: int) -> tuple[str, str]:
         with get_session_factory(self.settings.db_url)() as session:
@@ -471,3 +492,35 @@ def test_retry_downloads_a_track_again_when_its_download_never_finished(
     assert not file_hash.startswith("pending:")
     assert Path(file_path).exists()
     assert [row["state"] for row in pipeline.rows()] == ["pending"]
+
+
+@needs_ffmpeg
+def test_a_download_the_server_stopped_in_the_middle_of_reads_as_failed_and_can_be_retried(
+    pipeline, a_song_in_the_library, monkeypatch, tmp_path
+):
+    upload = _entry(UPLOAD, "Elderbrook - Shallow Water", "Elderbrook", 60)
+    youtube = FakeYtDlp({"Elderbrook Shallow Water": [upload]}, media={UPLOAD: None})
+    monkeypatch.setattr(csv_importer, "_resolve_yt_dlp", lambda: _FAKE_YT_DLP)
+    monkeypatch.setattr(subprocess, "run", youtube)
+    asked = pipeline.client.post(f"{API_PREFIX}/pipeline/ingest/track", json=SONG_ON_SPOTIFY)
+    track_id = asked.json()["track_id"]
+    pipeline.newest_job_finished()
+    scanned = pipeline.client.post(f"{API_PREFIX}/pipeline/scan")
+    assert scanned.status_code == 200, scanned.text
+    pipeline.left_mid_download_by_a_server_that_stopped(track_id)
+    assert len(pipeline.rows("pending")) == 2
+
+    with pipeline.started_again() as after_the_restart:
+        (failed,) = after_the_restart.rows("error")
+        assert (failed["id"], failed["error_message"]) == (track_id, SERVER_STOPPED_MID_DOWNLOAD)
+        (waiting,) = after_the_restart.rows("pending")
+        assert waiting["id"] != track_id
+
+        youtube.media[UPLOAD] = _encode(tmp_path / "upload.mp3", 60, "libmp3lame")
+        retried = after_the_restart.retry(track_id)
+
+        assert retried.status_code == 200, retried.text
+        assert after_the_restart.newest_job_finished()["items"][0]["status"] == "ok"
+        file_hash, file_path = after_the_restart.stored(track_id)
+        assert not file_hash.startswith("pending:")
+        assert Path(file_path).exists()
