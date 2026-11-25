@@ -82,8 +82,9 @@ describe("a prepared Set in the Booth", () => {
     );
 
     backend.liveNowPlays({ "0": 2, "1": 2, "2": 2, "3": 2 });
-    expect(await screen.findByRole("button", { name: "Page 1, playing" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Page 2" })).toHaveAttribute("aria-pressed", "true");
+    const pageOnePlaying = await screen.findByRole("button", { name: "Page 1, playing" });
+    await waitFor(() => expect(pageOnePlaying).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByRole("button", { name: "Page 2" })).toHaveAttribute("aria-pressed", "false");
     expect(songOnDeck("A", "Night Drive")).not.toHaveLength(0);
     expect(songOnDeck("A", "Half Light")).toHaveLength(0);
     expect(within(deck("A")).getByRole("button", { name: "Deck A cue 3, drop" })).toHaveAttribute(

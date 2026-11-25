@@ -65,6 +65,7 @@ interface AppState {
    * I just loaded".
    */
   armed: { a: number | null; b: number | null };
+  armedAt: { a: number; b: number };
   boothPage: number;
   /**
    * The keyboard cursor on the plan grid — which card ↑↓←→ is standing on.
@@ -146,6 +147,7 @@ const initial: AppState = {
   stemColumnOrder: DEFAULT_STEM_COLUMN_ORDER,
   loadWarnings: [],
   armed: { a: null, b: null },
+  armedAt: { a: 0, b: 0 },
   boothPage: 0,
   gridFocus: null,
   ...readPersisted(),
@@ -211,6 +213,9 @@ export const store = {
   },
   peekBoothPage(): number {
     return state.boothPage;
+  },
+  peekArms(): Pick<AppState, "armed" | "armedAt"> {
+    return { armed: state.armed, armedAt: state.armedAt };
   },
   setSessionId(id: number | null): void {
     state = { ...state, currentSessionId: id };
@@ -283,6 +288,7 @@ export const store = {
     state = {
       ...state,
       armed: { ...state.armed, [side]: sceneIndex },
+      armedAt: { ...state.armedAt, [side]: Date.now() },
       boothPage: pageOfScene(sceneIndex),
     };
     emit();

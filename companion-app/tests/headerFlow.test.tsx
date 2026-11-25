@@ -439,7 +439,7 @@ describe("the status marks", () => {
 });
 
 describe("the tempo of each deck", () => {
-  it("reads A and B for the songs playing, or else the songs on the page in front", async () => {
+  it("reads A and B for the songs playing, or else the songs on the page in front, which follows Live", async () => {
     inLive = [
       ...at(120, songOn(0, "a", NIGHT_DRIVE)),
       ...at(127, songOn(0, "b", CLUB_MIX)),
@@ -458,7 +458,7 @@ describe("the tempo of each deck", () => {
     expect(await within(header()).findByText("A 128 · B 126")).toHaveClass("text-amber-200");
 
     liveSends({ is_playing: true, playing_clips: deckAPlaysRow(2) });
-    expect(await within(header()).findByText("A 120 · B 126")).toHaveClass("text-rose-200");
+    expect(await within(header()).findByText("A 120 · B 127")).toHaveClass("text-rose-200");
 
     liveSends({ is_playing: false, playing_clips: {} });
     fireEvent.click(screen.getByRole("button", { name: "Page 3" }));
