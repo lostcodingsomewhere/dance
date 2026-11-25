@@ -121,7 +121,7 @@ A **Set is its plan**. The plan is per-role queues of source tracks the DJ inten
 
 - `activate` is atomic: deactivates other sets in the same transaction, then sets the target — the partial unique index never sees two active rows.
 - **Plan** (`SetPlanOut` = `{set_id, queues: {role: PlanItemOut[]}}`, every role key always present):
-  - `GET /plan` returns the decoded queues, each item decorated with title/artist/key/BPM/energy for render.
+  - `GET /plan` returns the decoded queues, each item decorated with title/artist/key/BPM/energy for render, plus `state` (the track's pipeline state; null only when the track row is gone) and `download_failed` (true when the track is in `error` and its audio never arrived). `PUT /plan` and `POST /plan/append` answer with the same items. The app offers pads, preview and deck loads only for a `complete` pick.
   - `PUT /plan` replaces the whole plan; body `{queues: {role: [track_id, ...]}}`. The frontend edits locally (add / remove / reorder) and PUTs the result. Unknown roles → 400.
   - `POST /plan/append` appends one track to a role's queue with a **server-side merge** — body `{role, track_id, after_track_id?}` — so it's safe from ⌘K without the full plan loaded client-side. ⌘K appends to the `song` column. With `after_track_id` naming a track in that queue, the new one goes right after it; the app sends this when it queues a version, so the version sits next to its original and they land on opposite decks (and on the same page when the original is on deck A). No-op if the track is already queued in that role. Unknown role → 400, unknown track → 404.
   - `GET /plan-recs?role=…` returns a `ColumnRecsResponse` for one role column, scored against the **rest of the plan** (the tail of the *other* role queues, resolved to `stem_files.id`) plus the plan's journey (`plan_sequence`) so far. Tracks already queued in that role are excluded. For `role=song`, other versions of the queued songs come first (up to half of `k`), marked with `version_of`, `version_of_title` and `version_label`; a second copy of a queued song is not offered. Reuses the live per-column recommender. Plan-queue helpers live in [`src/dance/core/set_queues.py`](../src/dance/core/set_queues.py).
@@ -135,17 +135,22 @@ A **Set is its plan**. The plan is per-role queues of source tracks the DJ inten
 
 | Method | Path                         | Query               | Response                                  | 4xx / 5xx          |
 |--------|------------------------------|---------------------|-------------------------------------------|--------------------|
-| GET    | `/api/v1/spotify/search`     | `q, limit` (1–20)   | `{query, hits}`                           | 502, 503           |
+| GET    | `/api/v1/spotify/search`     | `q, limit` (1–20)   | `{query, hits}`; each hit carries `library_track_id` and `library_state` (both null when the library does not hold the song) | 502, 503           |
 | GET    | `/api/v1/spotify/versions`   | `track_id`          | `SpotifyVersionsOut` (`query`, `versions`) | 404, 422, 502, 503 |
 
 Both read Spotify's catalog with the app's own credentials (`DANCE_SPOTIFY_CLIENT_ID` / `DANCE_SPOTIFY_CLIENT_SECRET`; 503 when they are not set). A rate limit is waited out as Spotify asks, a server error is tried twice more, and what still fails comes back as 502.
 
 - **Search.** Spotify gives at most 10 results a request (measured 2026-11-24: `limit=11` answers 400 "Invalid limit"), so a larger `limit` is read in pages.
 - **Versions** looks for other versions of a library track on Spotify. It searches `track:"<title without version text>" artist:"<first credited artist>"` and reads up to 50 results. A result counts when it has the same base title and shares a credited artist with the track, the same rule as `GET /tracks/{id}/versions`. Spotify lists one recording once per release, so results with the same version text and a length within 5 s are one row. The track asked about is left out: a result with its version text whose length is within max(30 s, 10 %) of the library file, the download matcher's own gate, is that track, so a file a few seconds off Spotify's length is not offered back as a longer cut. Each row has a `label` as in `/tracks/{id}/versions`, and `library_track_id` with `library_state` when the library already holds it (same Spotify id, or the same version text within that gate). `download_failed` is true when its download was tried and no file arrived. A track with no title or no artist answers 422.
+- **Songs the library already holds.** A search hit is marked with the library's track when that track has the hit's Spotify id, or is the same song by the version-family rule with the same version text and a length inside the download matcher's gate (the test `GET /spotify/versions` uses). `POST /api/v1/pipeline/ingest/track` applies the same test before it creates a row: asking for a held song answers with the existing track (`already_existed: true`) and starts no download. A request that names no length reads it from Spotify first. A remix, an extended mix or a cut of a different length is a different recording and is downloaded as before.
 - **Getting a version in** is `POST /api/v1/pipeline/ingest/track` with the row's `spotify_id`, `title`, `artist` and `duration_ms`. The title goes to the download matcher as Spotify has it, so its version words count as asked for: a request that names a remix accepts the remix upload and the original upload scores too low. Asking again for a track whose download failed queues the download again and answers with a `job_id` and `already_existed: true`.
 - **A playlist's songs** (`POST /api/v1/pipeline/ingest/playlist`) need a Spotify user token, pasted in the form or set as `DANCE_SPOTIFY_USER_TOKEN`. Since Spotify's February 2026 change the read is `GET /playlists/{id}/items`, answered only for a playlist the token's user owns or collaborates on. No token, an expired one and someone else's playlist each answer 401 with their own message.
 
 ---
+
+## Pipeline: retrying a failed track
+
+`POST /api/v1/pipeline/tracks/{id}/retry` puts a track in the `error` state back in line and answers with the track (`PipelineRecentTrackOut`). A track whose download never arrived has its download queued again. Any other failed track has its error cleared and is picked up by the next run (**Process now**, or the watch loop); that change is made under the dispatcher lock, so the route answers 409 while another run holds it. A track that has not failed answers 409, an unknown id 404. The Pipeline view's **Retry** button on a failed row calls it.
 
 ## Ableton — `src/dance/api/routers/ableton.py`
 
@@ -161,6 +166,7 @@ All endpoints are fire-and-forget OSC sends except `/state`, `/load-track`, `/de
 | POST   | `/api/v1/ableton/fire`                          | `FireClipRequest`   | `{"ok": true}`        |     |
 | POST   | `/api/v1/ableton/volume`                        | `VolumeRequest`     | `{"ok": true}`        |     |
 | GET    | `/api/v1/ableton/state`                         | -                   | `AbletonStateOut`     |     |
+| GET    | `/api/v1/ableton/health`                        | -                   | `{"live_reachable": bool}`: Live answered a short query just now. `/state` is the bridge's cache and keeps answering after Live quits, so the header's health light reads this route |     |
 | POST   | `/api/v1/ableton/transport/fire-scene/{idx}`    | -                   | `{"ok": true, ...}`   |     |
 | POST   | `/api/v1/ableton/transport/fire-deck/{side}/{idx}` | query: `loaded_only` (bool) | `{ok, side, scene_index, fired}` | 400 |
 | POST   | `/api/v1/ableton/transport/stop-deck/{side}`    | -                   | `{ok, side, stopped}` | 400 |
