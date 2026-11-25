@@ -73,6 +73,33 @@ describe("a prepared Set opened in Live from a file", () => {
     );
   });
 
+  it("counts stems, not the mix clip that plays along with them", async () => {
+    await boothShowsThePreparedSet();
+
+    await liveNowPlays(backend, clips("a", 0, [...STEMS, "mix"]));
+    await waitFor(() => expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]));
+
+    await liveNowPlays(backend, {
+      ...clips("a", 0, [...STEMS, "mix"]),
+      ...clips("b", 1, STEMS),
+    });
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id, CLUB_MIX.track_id]),
+    );
+  });
+
+  it("logs a song that plays from its mix clip alone", async () => {
+    await boothShowsThePreparedSet();
+
+    await liveNowPlays(backend, clips("b", 0, ["mix"]));
+    await waitFor(() => expect(playsLogged(backend)).toEqual([CLUB_MIX.track_id]));
+
+    await liveNowPlays(backend, { ...clips("b", 0, ["mix"]), ...clips("a", 0, ["drums"]) });
+    await waitFor(() =>
+      expect(playsLogged(backend)).toEqual([CLUB_MIX.track_id, NIGHT_DRIVE.track_id]),
+    );
+  });
+
   it("takes the song that started later when both have as many stems playing", async () => {
     await boothShowsThePreparedSet();
 

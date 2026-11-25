@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { sourceKindOf } from "../lib/roles";
 import type { DeckMap } from "../types";
 import { useAbletonState } from "./useAbletonState";
 import { useDeckMap } from "./useDeckMap";
@@ -15,6 +16,11 @@ type StartOrder = Map<number, number>;
 
 function cellKey(scene: number, kind: string): string {
   return `${scene}:${kind}`;
+}
+
+// The bridge mutes Live's Mix tracks, so a mix clip plays along unheard.
+function isHeardStem(kind: string): boolean {
+  return sourceKindOf(kind) !== "mix";
 }
 
 function songsByCell(deckMap: DeckMap | undefined): SongOfCell {
@@ -37,7 +43,7 @@ function songsPlaying(
     const song = songs.get(trackId);
     songs.set(trackId, {
       trackId,
-      stems: (song?.stems ?? 0) + 1,
+      stems: (song?.stems ?? 0) + (isHeardStem(kind) ? 1 : 0),
       lowestScene: Math.min(song?.lowestScene ?? scene, scene),
     });
   }
