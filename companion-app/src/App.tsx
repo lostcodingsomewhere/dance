@@ -12,6 +12,8 @@ import { PipelineOps } from "./views/PipelineOps";
 import { SetEditor } from "./views/SetEditor";
 
 const UNMATCHED_CLIPS_NAMED = 3;
+// The backend is on this machine, so a venue's Wi-Fi dropping must not hold requests back.
+const SEND_EVEN_WHEN_THE_BROWSER_IS_OFFLINE = "always";
 
 const BACKEND_DID_NOT_ANSWER = "The Dance backend did not answer. Check it is still running.";
 
@@ -83,7 +85,9 @@ export function createAppQueryClient(): QueryClient {
       queries: {
         retry: 1,
         refetchOnWindowFocus: false,
+        networkMode: SEND_EVEN_WHEN_THE_BROWSER_IS_OFFLINE,
       },
+      mutations: { networkMode: SEND_EVEN_WHEN_THE_BROWSER_IS_OFFLINE },
     },
   });
 }
