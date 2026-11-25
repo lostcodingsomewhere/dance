@@ -1,6 +1,6 @@
 # Two API additions from the UI review
 
-**Status:** APPROVED 2026-11-24 (both additions, including the ingest change in section 2). Built on the working branch the same day, server and app; not merged to `main` yet.
+**Status:** APPROVED 2026-11-24 (both additions, including the ingest change in section 2). Built the same day, server and app, and merged to `main`.
 **Date:** 2026-11-24
 
 The UI review of 2026-11-24 found two defects that cannot be fixed in the
