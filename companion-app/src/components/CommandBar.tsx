@@ -6,11 +6,12 @@ import {
   recommendByText,
   revealPath,
   searchTracks,
+  serverMessage,
   spotifySearch,
 } from "../api";
 import { useActiveSet } from "../hooks/useSets";
 import { useWarpCheck } from "../hooks/useWarpCheck";
-import { useAppendToPlan } from "../hooks/useSetPlan";
+import { useAppendToPlan, useSetPlan } from "../hooks/useSetPlan";
 import { formatDuration, formatDurationMs } from "../lib/format";
 import { sideTrackIndices } from "../lib/roles";
 import { store, useAppStore } from "../store";
@@ -31,15 +32,22 @@ import { KeyBadge } from "./KeyBadge";
  * Filter chips below the input narrow both sections (BPM range, key,
  * energy). Empty query shows recent tracks for casual browsing.
  *
- * Result actions: Load to Live (primary) + Add to active set (secondary).
- * Cmd+Enter on a row adds it to the set; Enter loads. Enter alone in the
- * input runs vibe.
+ * Result actions: Load to Live + Add to the active set's plan.
+ *
+ * Keys: Down and Up move a highlight through every row in the order shown.
+ * Nothing is highlighted until Down is pressed, and typing clears it; the
+ * arrows then wait until the rows on screen are the ones for the new text. Enter
+ * on the highlighted library row adds it to the plan in the Set view and
+ * loads it to Live in every other view; Cmd+Enter adds it to the plan in
+ * every view. Enter on a highlighted Spotify row presses that row's button.
+ * Enter with nothing highlighted does nothing.
  */
 export function CommandBar() {
   const open = useAppStore((s) => s.commandBarOpen);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
+  const [highlightedRow, setHighlightedRow] = useState<string | null>(null);
 
   const [bpmMin, setBpmMin] = useState<number | null>(null);
   const [bpmMax, setBpmMax] = useState<number | null>(null);
@@ -101,7 +109,19 @@ export function CommandBar() {
     retry: false, // 503 means "no creds" — don't pound the endpoint
   });
 
-  // Global hotkey listener — Cmd/Ctrl+K toggles.
+  const rowsInOrder = useMemo(
+    () => [
+      ...(fuzzy.data ?? []).map(libraryRowKey),
+      ...(vibeEligible ? (vibe.data ?? []).map(vibeRowKey) : []),
+      ...(spotifyEligible ? (spotify.data?.hits ?? []).map(spotifyRowKey) : []),
+    ],
+    [fuzzy.data, vibe.data, spotify.data, vibeEligible, spotifyEligible],
+  );
+  const rowsAreForTheTypedText =
+    q.trim().toLowerCase() === debouncedQ.trim().toLowerCase();
+
+  // Global key listener — Cmd/Ctrl+K toggles, Escape closes, Down and Up
+  // move the highlight.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -112,16 +132,23 @@ export function CommandBar() {
       if (open && e.key === "Escape") {
         store.closeCommandBar();
       }
+      const step = open ? stepOfArrowKey(e) : null;
+      if (step == null || usesArrowKeysItself(e.target)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      if (!rowsAreForTheTypedText) return;
+      setHighlightedRow((current) => rowAfter(rowsInOrder, current, step));
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, rowsInOrder, rowsAreForTheTypedText]);
 
   // Focus on open / reset on close.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!open) {
       setQ("");
+      setHighlightedRow(null);
       setBpmMin(null);
       setBpmMax(null);
       setKeyFilter(null);
@@ -161,9 +188,13 @@ export function CommandBar() {
           </span>
           <input
             ref={inputRef}
+            id={SEARCH_FIELD_ID}
             type="text"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setHighlightedRow(null);
+            }}
             placeholder="Type an artist, title — or a vibe like 'deep rolling bass'"
             className="flex-1 bg-transparent text-lg text-neutral-100 placeholder:text-neutral-600 outline-none"
           />
@@ -181,7 +212,11 @@ export function CommandBar() {
           onKey={setKeyFilter}
         />
 
-        <div className="max-h-[60vh] overflow-y-auto">
+        {/* Some browsers drop key presses while a button that went disabled holds the focus. */}
+        <div
+          className="max-h-[60vh] overflow-y-auto"
+          onClick={() => takeFocusBackFromAButton(inputRef.current)}
+        >
           {fuzzy.isError && (
             <SectionError msg={(fuzzy.error as Error).message} />
           )}
@@ -192,10 +227,11 @@ export function CommandBar() {
           >
             {fuzzyHits.map((t, place) => (
               <TrackRow
-                key={`fuzzy-${t.id}`}
+                key={libraryRowKey(t)}
                 track={t}
                 activeSetId={activeSet?.id ?? null}
                 versionMark={versionMark(fuzzyHits, place)}
+                highlighted={highlightedRow === libraryRowKey(t)}
               />
             ))}
           </Section>
@@ -212,9 +248,10 @@ export function CommandBar() {
               >
                 {vibeHits.map((r) => (
                   <RecRow
-                    key={`vibe-${r.track_id}`}
+                    key={vibeRowKey(r)}
                     rec={r}
                     activeSetId={activeSet?.id ?? null}
+                    highlighted={highlightedRow === vibeRowKey(r)}
                   />
                 ))}
               </Section>
@@ -229,9 +266,10 @@ export function CommandBar() {
             >
               {spotify.data?.hits.map((hit) => (
                 <SpotifyHitRow
-                  key={`spot-${hit.spotify_id}`}
+                  key={spotifyRowKey(hit)}
                   hit={hit}
                   activeSetId={activeSet?.id ?? null}
+                  highlighted={highlightedRow === spotifyRowKey(hit)}
                 />
               ))}
             </Section>
@@ -250,6 +288,90 @@ export function CommandBar() {
         </div>
       </div>
     </div>
+  );
+}
+
+const SEARCH_FIELD_ID = "command-bar-search";
+const HIGHLIGHT = "bg-neutral-900 ring-2 ring-inset ring-amber-300/80";
+
+function libraryRowKey(track: Track): string {
+  return `fuzzy-${track.id}`;
+}
+
+function vibeRowKey(rec: Recommendation): string {
+  return `vibe-${rec.track_id}`;
+}
+
+function spotifyRowKey(hit: SpotifyTrackHit): string {
+  return `spot-${hit.spotify_id}`;
+}
+
+function stepOfArrowKey(e: KeyboardEvent): 1 | -1 | null {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
+  if (e.key === "ArrowDown") return 1;
+  if (e.key === "ArrowUp") return -1;
+  return null;
+}
+
+function rowAfter(rows: string[], current: string | null, step: 1 | -1): string | null {
+  const place = current == null ? -1 : rows.indexOf(current);
+  if (place === -1) return step === 1 ? rows[0] ?? null : null;
+  return rows[Math.min(rows.length - 1, Math.max(0, place + step))];
+}
+
+function tagOf(target: EventTarget | null): string {
+  return target instanceof Element ? target.tagName.toLowerCase() : "";
+}
+
+function usesArrowKeysItself(target: EventTarget | null): boolean {
+  if (target instanceof Element && target.id === SEARCH_FIELD_ID) return false;
+  return ["input", "select", "textarea"].includes(tagOf(target));
+}
+
+function usesEnterItself(target: EventTarget | null): boolean {
+  return usesArrowKeysItself(target) || ["button", "a"].includes(tagOf(target));
+}
+
+function takeFocusBackFromAButton(searchField: HTMLInputElement | null): void {
+  if (document.activeElement instanceof HTMLButtonElement) searchField?.focus();
+}
+
+interface RowKeys {
+  enter: () => void;
+  commandEnter: () => void;
+}
+
+function useHighlightedRow(highlighted: boolean, { enter, commandEnter }: RowKeys) {
+  const row = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (highlighted) row.current?.scrollIntoView?.({ block: "nearest" });
+  }, [highlighted]);
+
+  useEffect(() => {
+    if (!highlighted) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Enter" || e.repeat || e.shiftKey || e.altKey) return;
+      if (usesEnterItself(e.target)) return;
+      e.preventDefault();
+      if (e.metaKey || e.ctrlKey) commandEnter();
+      else enter();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [highlighted, enter, commandEnter]);
+
+  return row;
+}
+
+function EnterHint() {
+  return (
+    <kbd
+      aria-hidden
+      className="ml-1.5 rounded border border-current px-1 font-mono text-[10px] opacity-80"
+    >
+      ⏎
+    </kbd>
   );
 }
 
@@ -394,19 +516,55 @@ function versionMark(hits: Track[], place: number): VersionMark {
   return together > 1 ? { text: `${together} versions`, underTheRowAbove: false } : null;
 }
 
+const READY = "complete";
+const FAILED = "error";
+const NOT_STARTED = "pending";
+
+interface NotReady {
+  inWords: string;
+  whatToDo: string;
+}
+
+function whyItCannotBeLoaded(state: string): NotReady | null {
+  if (state === READY) return null;
+  if (state === FAILED) {
+    return {
+      inWords: "failed, see Pipeline",
+      whatToDo: "The download or the processing failed. The Pipeline view says why.",
+    };
+  }
+  if (state === NOT_STARTED) {
+    return {
+      inWords: "not processed yet",
+      whatToDo: "Still downloading, or waiting for Process now in the Pipeline view.",
+    };
+  }
+  return { inWords: "processing", whatToDo: "It can be loaded once processing has finished." };
+}
+
+function planHelp(activeSetId: number | null, inPlan: boolean): string {
+  if (activeSetId == null) return "No active set — make one in the Set view first";
+  if (inPlan) return "Already in the plan's Song column";
+  return "Add to the active set's plan, Song column (⌘⏎ on the highlighted row)";
+}
+
 function TrackRow({
   track,
   activeSetId,
   versionMark,
+  highlighted,
 }: {
   track: Track;
   activeSetId: number | null;
   versionMark: VersionMark;
+  highlighted: boolean;
 }) {
   const analysis = track.analysis;
   return (
     <RowShell
       versionMark={versionMark}
+      state={track.state}
+      highlighted={highlighted}
       title={track.title ?? `Track #${track.id}`}
       artist={track.artist}
       bpm={analysis?.bpm ?? null}
@@ -424,12 +582,15 @@ function TrackRow({
 function RecRow({
   rec,
   activeSetId,
+  highlighted,
 }: {
   rec: Recommendation;
   activeSetId: number | null;
+  highlighted: boolean;
 }) {
   return (
     <RowShell
+      highlighted={highlighted}
       title={rec.title ?? `Track #${rec.track_id}`}
       artist={rec.artist}
       bpm={rec.bpm}
@@ -455,6 +616,8 @@ function RowShell({
   trackId,
   filePath,
   activeSetId,
+  highlighted,
+  state = READY,
   versionMark = null,
 }: {
   title: string;
@@ -467,20 +630,28 @@ function RowShell({
   trackId: number;
   filePath: string | null;
   activeSetId: number | null;
+  highlighted: boolean;
+  state?: string;
   versionMark?: VersionMark;
 }) {
   const addToPlan = useAppendToPlan();
   const scheduleWarpCheck = useWarpCheck();
+  const plan = useSetPlan(activeSetId);
+  const enterAddsToPlan = useAppStore((s) => s.currentView === "set");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  const inActiveSet = useMemo(() => {
-    return false;
-  }, []);
+  const inPlan = (plan.data?.queues.song ?? []).some((pick) => pick.track_id === trackId);
+  const canPlan = activeSetId != null && !inPlan && !addToPlan.isPending;
+  const notReady = whyItCannotBeLoaded(state);
+  const canLoad = notReady == null && !loading && done == null;
 
   async function loadToLive() {
+    if (!canLoad) return;
     try {
       setLoading(true);
+      setFailure(null);
       const r = await pushTrackToLive(trackId, {
         includeStems: true,
         page: store.peekBoothPage(),
@@ -510,24 +681,35 @@ function RowShell({
       }
       setTimeout(() => store.closeCommandBar(), 500);
     } catch (e) {
-      setDone(`! ${(e as Error).message.slice(0, 40)}`);
+      setFailure(serverMessage(e as Error));
     } finally {
       setLoading(false);
     }
   }
 
   function addToActiveSet() {
-    if (!activeSetId) return;
-    addToPlan.mutate({ setId: activeSetId, role: "song", trackId });
+    if (activeSetId == null || !canPlan) return;
+    setFailure(null);
+    addToPlan.mutate(
+      { setId: activeSetId, role: "song", trackId },
+      { onError: (error) => setFailure(serverMessage(error)) },
+    );
   }
+
+  const row = useHighlightedRow(highlighted, {
+    enter: enterAddsToPlan ? addToActiveSet : loadToLive,
+    commandEnter: addToActiveSet,
+  });
 
   return (
     <div
+      ref={row}
       role="group"
       aria-label={`Search result: ${title}`}
+      aria-current={highlighted ? "true" : undefined}
       className={`flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60 ${
-        versionMark?.underTheRowAbove ? "ml-5 border-l border-fuchsia-500/40" : ""
-      }`}
+        highlighted ? HIGHLIGHT : ""
+      } ${versionMark?.underTheRowAbove ? "ml-5 border-l border-fuchsia-500/40" : ""}`}
     >
       <KeyBadge keyCamelot={keyCamelot ?? null} size="sm" />
       <div className="flex-1 min-w-0">
@@ -557,27 +739,45 @@ function RowShell({
           ✦ {score.toFixed(2)}
         </span>
       )}
+      {failure && (
+        <span
+          role="alert"
+          title={failure}
+          className="max-w-[14rem] text-[11px] leading-tight text-rose-300 line-clamp-2"
+        >
+          {failure}
+        </span>
+      )}
       <button
         type="button"
         onClick={addToActiveSet}
-        disabled={!activeSetId || addToPlan.isPending || inActiveSet}
-        title={
-          activeSetId
-            ? "Add to the active set's plan — Song column (⌘⏎)"
-            : "No active set — make one in the Set view first"
-        }
+        disabled={!canPlan}
+        title={planHelp(activeSetId, inPlan)}
         className="min-h-[32px] px-2 rounded-md text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40"
       >
-        + Plan
+        {inPlan ? "✓ in plan" : "+ Plan"}
+        {highlighted && enterAddsToPlan && canPlan && <EnterHint />}
       </button>
-      <button
-        type="button"
-        onClick={loadToLive}
-        disabled={loading}
-        className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-purple-700 hover:bg-purple-600 disabled:bg-neutral-800 disabled:text-neutral-500 text-white"
-      >
-        {loading ? "…" : done ?? "Load"}
-      </button>
+      {notReady ? (
+        <span
+          title={notReady.whatToDo}
+          className={`shrink-0 px-1 text-[11px] ${
+            state === FAILED ? "text-rose-300" : "text-neutral-500"
+          }`}
+        >
+          {notReady.inWords}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={loadToLive}
+          disabled={!canLoad}
+          className="min-h-[32px] px-3 rounded-md text-xs font-semibold bg-purple-700 hover:bg-purple-600 disabled:bg-neutral-800 disabled:text-neutral-500 text-white"
+        >
+          {loading ? "…" : done ?? "Load"}
+          {highlighted && !enterAddsToPlan && canLoad && <EnterHint />}
+        </button>
+      )}
     </div>
   );
 }
@@ -585,9 +785,11 @@ function RowShell({
 function SpotifyHitRow({
   hit,
   activeSetId,
+  highlighted,
 }: {
   hit: SpotifyTrackHit;
   activeSetId: number | null;
+  highlighted: boolean;
 }) {
   const qc = useQueryClient();
   const addToPlan = useAppendToPlan();
@@ -595,8 +797,10 @@ function SpotifyHitRow({
     "idle",
   );
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const canRun = state !== "pending" && state !== "done";
 
   async function ingest() {
+    if (!canRun) return;
     setState("pending");
     setErrMsg(null);
     try {
@@ -620,9 +824,18 @@ function SpotifyHitRow({
   }
 
   const durMin = hit.duration_ms != null ? formatDurationMs(hit.duration_ms) : null;
+  const row = useHighlightedRow(highlighted, { enter: ingest, commandEnter: ingest });
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60">
+    <div
+      ref={row}
+      role="group"
+      aria-label={`Spotify result: ${hit.title}`}
+      aria-current={highlighted ? "true" : undefined}
+      className={`flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-neutral-900/60 ${
+        highlighted ? HIGHLIGHT : ""
+      }`}
+    >
       {hit.image_url ? (
         <img
           src={hit.image_url}
@@ -657,7 +870,7 @@ function SpotifyHitRow({
       <button
         type="button"
         onClick={ingest}
-        disabled={state === "pending" || state === "done"}
+        disabled={!canRun}
         title={
           activeSetId
             ? "Download + analyze + add to the plan (Song column)"
@@ -669,6 +882,7 @@ function SpotifyHitRow({
         {state === "done" && "✓ added"}
         {state === "error" && "↻ retry"}
         {state === "idle" && (activeSetId ? "+ Plan" : "+ Library")}
+        {highlighted && canRun && <EnterHint />}
       </button>
     </div>
   );
