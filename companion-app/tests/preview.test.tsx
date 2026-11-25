@@ -70,8 +70,8 @@ describe("useStartPreview", () => {
     await waitFor(() => expect(result.current.start.isPending).toBe(false));
     // No lit card, no playhead — nothing claims to be auditioning.
     expect(result.current.app.previewing).toBeNull();
-    expect(result.current.app.loadWarnings?.warnings).toEqual([
-      "Could not establish a dedicated 'Cue' track in Live",
+    expect(result.current.app.loadWarnings.map((w) => w.warnings)).toEqual([
+      ["Could not establish a dedicated 'Cue' track in Live"],
     ]);
   });
 
@@ -84,7 +84,7 @@ describe("useStartPreview", () => {
     });
     await waitFor(() => expect(result.current.start.isPending).toBe(false));
     expect(result.current.app.previewing).toBeNull();
-    expect(result.current.app.loadWarnings?.warnings?.length).toBeGreaterThan(0);
+    expect(result.current.app.loadWarnings[0]?.warnings.length).toBeGreaterThan(0);
   });
 
   it("keeps the preview but shows warnings on a degraded ok:true", async () => {
@@ -103,8 +103,8 @@ describe("useStartPreview", () => {
     // The clip may well be playing, so the cue strip stays up...
     expect(result.current.app.previewing).toMatchObject({ trackId: 7, cueTrackIdx: 10 });
     // ...but the user is told what could not be confirmed.
-    expect(result.current.app.loadWarnings?.warnings).toEqual([
-      "Preview clip did not report playing within 8s",
+    expect(result.current.app.loadWarnings.map((w) => w.warnings)).toEqual([
+      ["Preview clip did not report playing within 8s"],
     ]);
   });
 
@@ -122,6 +122,6 @@ describe("useStartPreview", () => {
     });
     await waitFor(() => expect(result.current.start.isPending).toBe(false));
     expect(result.current.app.previewing).toMatchObject({ trackId: 7, cueTrackIdx: 10 });
-    expect(result.current.app.loadWarnings).toBeNull();
+    expect(result.current.app.loadWarnings).toEqual([]);
   });
 });
