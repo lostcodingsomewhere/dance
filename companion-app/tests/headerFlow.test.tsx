@@ -132,6 +132,12 @@ async function timePasses(ms: number): Promise<void> {
   });
 }
 
+async function secondsPassOneAtATime(seconds: number): Promise<void> {
+  for (let second = 0; second < seconds; second += 1) {
+    await timePasses(1_000);
+  }
+}
+
 function header(): HTMLElement {
   return screen.getByRole("banner");
 }
@@ -179,22 +185,35 @@ describe("the health light", () => {
     expect(screen.queryByText(SERVER_DOWN_BANNER)).not.toBeInTheDocument();
 
     liveAnswers = false;
-    await timePasses(2_500);
+    await secondsPassOneAtATime(3);
     expect(within(header()).getByText("Live")).toBeInTheDocument();
-    await timePasses(5_500);
+    await secondsPassOneAtATime(5);
     expect(within(header()).getByText("Live not answering")).toBeInTheDocument();
     expect(screen.queryByText(SERVER_DOWN_BANNER)).not.toBeInTheDocument();
 
     server = "refusing connections";
-    await timePasses(8_000);
+    await secondsPassOneAtATime(8);
     expect(within(header()).getByText("Server down")).toBeInTheDocument();
     expect(screen.getByText(SERVER_DOWN_BANNER)).toHaveAttribute("role", "alert");
 
     server = "up";
     liveAnswers = true;
-    await timePasses(3_000);
+    await secondsPassOneAtATime(3);
     expect(within(header()).getByText("Live")).toBeInTheDocument();
     expect(screen.queryByText(SERVER_DOWN_BANNER)).not.toBeInTheDocument();
+  });
+
+  it("says Server down once the Dance server stops while Live was answering", async () => {
+    clockIsOurs();
+    renderApp();
+    await timePasses(100);
+    expect(within(header()).getByText("Live")).toBeInTheDocument();
+
+    server = "refusing connections";
+    await secondsPassOneAtATime(10);
+
+    expect(within(header()).getByText("Server down")).toBeInTheDocument();
+    expect(screen.getByText(SERVER_DOWN_BANNER)).toHaveAttribute("role", "alert");
   });
 
   it("says Server down, not Live offline, when it opens with the Dance server down", async () => {
@@ -217,7 +236,7 @@ describe("the health light", () => {
       window.dispatchEvent(new Event("offline"));
     });
     liveAnswers = false;
-    await timePasses(8_000);
+    await secondsPassOneAtATime(8);
 
     expect(within(header()).getByText("Live not answering")).toBeInTheDocument();
   });
@@ -226,11 +245,11 @@ describe("the health light", () => {
     clockIsOurs();
     theServerNeverAnswersAHealthCheck();
     renderApp();
-    await timePasses(3_000);
+    await secondsPassOneAtATime(3);
     expect(within(header()).getByText("Checking…")).toBeInTheDocument();
     expect(screen.queryByText(SERVER_DOWN_BANNER)).not.toBeInTheDocument();
 
-    await timePasses(2_000);
+    await secondsPassOneAtATime(2);
     expect(within(header()).getByText("Server down")).toBeInTheDocument();
     expect(screen.getByText(SERVER_DOWN_BANNER)).toBeInTheDocument();
   });

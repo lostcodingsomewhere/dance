@@ -26,8 +26,8 @@ async function liveAnswers(): Promise<boolean> {
   }
 }
 
-function stillHeld(at: number | null | undefined): boolean {
-  return at != null && Date.now() - at < HELD_FOR_MS;
+function stillHeld(at: number | null | undefined, asOf: number): boolean {
+  return at != null && asOf - at < HELD_FOR_MS;
 }
 
 export function useBridgeHeartbeat(): BridgeHealth {
@@ -52,9 +52,11 @@ export function useBridgeHeartbeat(): BridgeHealth {
   });
 
   if (beat.status === "pending") return "checking";
-  if (beat.status === "success" && beat.data.liveAnswered) return "live";
-  if (stillHeld(beat.data?.liveAnsweredAt)) return "live";
-  if (beat.status === "success" || stillHeld(beat.data?.serverAnsweredAt)) {
+  // Reading the time of the last failed check redraws the light on every failure, not only the first.
+  const lastCheckedAt =
+    beat.status === "error" ? beat.errorUpdatedAt : beat.data.serverAnsweredAt;
+  if (stillHeld(beat.data?.liveAnsweredAt, lastCheckedAt)) return "live";
+  if (beat.status === "success" || stillHeld(beat.data?.serverAnsweredAt, lastCheckedAt)) {
     return "live_not_answering";
   }
   return "server_down";
