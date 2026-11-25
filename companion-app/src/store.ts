@@ -13,6 +13,7 @@ export interface LoadWarning {
   id: number;
   title: string;
   warnings: string[];
+  times: number;
 }
 
 interface AppState {
@@ -303,12 +304,11 @@ export const store = {
     if (!warnings || warnings.length === 0) return;
     const saidBefore = (w: LoadWarning) =>
       w.title === title && w.warnings.join("\n") === warnings.join("\n");
-    const [newest] = state.loadWarnings;
-    if (newest && saidBefore(newest)) return;
+    const timesBefore = state.loadWarnings.find(saidBefore)?.times ?? 0;
     state = {
       ...state,
       loadWarnings: [
-        { id: nextLoadWarningId++, title, warnings },
+        { id: nextLoadWarningId++, title, warnings, times: timesBefore + 1 },
         ...state.loadWarnings.filter((w) => !saidBefore(w)),
       ],
     };

@@ -319,6 +319,39 @@ describe("the warnings banner", () => {
     expect(screen.queryByRole("status", { name: "Warnings" })).not.toBeInTheDocument();
   });
 
+  it("counts a failure that happens again, so a retry that failed does not look like one that worked", async () => {
+    let liveIsBack = false;
+    booth.liveAnswers = (request) => (liveIsBack ? undefined : everyCommandFails(request));
+    await booth.open();
+
+    press("Play Deck A");
+    await expectWarningLines([`Couldn't play Deck A: ${LIVE_IS_DOWN}`]);
+    expect(warningLines()[0]).not.toHaveTextContent(/times/);
+
+    press("Play Deck A");
+    await waitFor(() => expect(warningLines()[0]).toHaveTextContent("2 times"));
+    await expectWarningLines([`Couldn't play Deck A: ${LIVE_IS_DOWN}`]);
+
+    press("Stop Deck A");
+    await expectWarningLines([
+      `Couldn't stop Deck A: ${LIVE_IS_DOWN}`,
+      `Couldn't play Deck A: ${LIVE_IS_DOWN}`,
+    ]);
+    press("Play Deck A");
+    await waitFor(() => expect(warningLines()[0]).toHaveTextContent("3 times"));
+    await expectWarningLines([
+      `Couldn't play Deck A: ${LIVE_IS_DOWN}`,
+      `Couldn't stop Deck A: ${LIVE_IS_DOWN}`,
+    ]);
+    expect(warningLines()[1]).not.toHaveTextContent(/times/);
+
+    liveIsBack = true;
+    press("Play Deck A");
+    await waitFor(() => expect(booth.sent("POST", "/ableton/transport/fire-deck/a/0")).toHaveLength(4));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Play Deck A" })).toBeEnabled());
+    expect(warningLines()[0]).toHaveTextContent("3 times");
+  });
+
   it("clears every line at once", async () => {
     booth.liveAnswers = everyCommandFails;
     await booth.open();

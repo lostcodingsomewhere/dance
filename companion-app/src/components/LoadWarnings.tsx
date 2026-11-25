@@ -70,6 +70,11 @@ function WarningLine({ warning }: { warning: LoadWarning }) {
           </>
         )}
       </div>
+      {warning.times > 1 && (
+        <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
+          {warning.times} times
+        </span>
+      )}
       <button
         type="button"
         onClick={() => store.dismissLoadWarning(warning.id)}
