@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isHeardThroughTheCrossfader } from "../lib/crossfader";
 import { sourceKindOf } from "../lib/roles";
 import type { DeckMap } from "../types";
 import { useAbletonState } from "./useAbletonState";
@@ -48,11 +49,12 @@ function songsPlaying(
   columns: DeckMap["columns"] | undefined,
   songOfCell: SongOfCell,
   playingClips: Record<string, number>,
+  crossfader: number | null,
 ): PlayingSong[] {
   const songs = new Map<number, PlayingSong>();
   for (const [kind, liveTrack] of Object.entries(columns ?? {})) {
     const scene = playingClips[liveTrack];
-    if (scene == null) continue;
+    if (scene == null || !isHeardThroughTheCrossfader(kind, crossfader)) continue;
     const trackId = songOfCell.get(cellKey(scene, kind));
     if (trackId == null) continue;
     const song = songs.get(trackId);
@@ -89,7 +91,7 @@ export function useNowPlayingTrack(): {
   source: "ableton" | "session" | "none";
   playingTrackIds: number[];
 } {
-  const playingClips = useAbletonState().playing_clips;
+  const { playing_clips: playingClips, crossfader } = useAbletonState();
   const deckMap = useDeckMap().data;
   const lastPlay = useCurrentSession().data?.plays.at(-1);
   const songOfCell = useMemo(() => songsByCell(deckMap), [deckMap]);
@@ -97,14 +99,14 @@ export function useNowPlayingTrack(): {
   const [nowPlaying, setNowPlaying] = useState(NOTHING_PLAYING);
 
   useEffect(() => {
-    const songs = songsPlaying(deckMap?.columns, songOfCell, playingClips ?? {});
+    const songs = songsPlaying(deckMap?.columns, songOfCell, playingClips ?? {}, crossfader);
     rememberStarts(startOrder.current, songs);
     const next: NowPlaying = {
       leadingTrackId: leadingSong(songs, startOrder.current)?.trackId ?? null,
       trackIds: songs.map((song) => song.trackId).sort((a, b) => a - b),
     };
     setNowPlaying((shown) => (isSamePlaying(shown, next) ? shown : next));
-  }, [deckMap, songOfCell, playingClips]);
+  }, [deckMap, songOfCell, playingClips, crossfader]);
 
   const { leadingTrackId, trackIds: playingTrackIds } = nowPlaying;
   if (leadingTrackId != null) {

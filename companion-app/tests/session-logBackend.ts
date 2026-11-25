@@ -249,8 +249,9 @@ export async function secondsPass(seconds: number): Promise<void> {
 export async function liveNowPlays(
   backend: BoothBackend,
   playing: Record<string, number>,
+  alsoInLive: Record<string, unknown> = {},
 ): Promise<void> {
-  backend.liveNowPlays(playing);
+  backend.liveNowPlays(playing, alsoInLive);
   await theAppShowsIt();
 }
 

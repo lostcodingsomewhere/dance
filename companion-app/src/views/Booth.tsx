@@ -7,6 +7,7 @@ import { TwoDeckStrip } from "../components/TwoDeckStrip";
 import { useActiveSet } from "../hooks/useSets";
 import { useAutoLog } from "../hooks/useAutoLog";
 import { useAutoSession } from "../hooks/useAutoSession";
+import { useBoothFollowsLive } from "../hooks/useBoothFollowsLive";
 
 /**
  * The Booth — the only screen you should look at during a set.
@@ -45,6 +46,7 @@ import { useAutoSession } from "../hooks/useAutoSession";
 export function Booth() {
   const sessionTakingPlays = useAutoSession();
   useAutoLog(sessionTakingPlays);
+  useBoothFollowsLive();
 
   // The active set (if any) backs the plan zone of each role column. Null is
   // fine — the grid then shows only the live recs (no plan zone).

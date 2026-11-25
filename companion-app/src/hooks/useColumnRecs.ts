@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "../api";
+import { isHeardThroughTheCrossfader } from "../lib/crossfader";
 import { pageOfScene } from "../lib/pages";
 import { sideOf, type DeckSide } from "../lib/roles";
 import { useAppStore } from "../store";
@@ -77,11 +78,12 @@ export function useColumnRecs(
         // Feed the embedding signal: collect stem-file ids of the cells
         // currently firing. Mix cells / not-yet-analyzed stems carry a
         // null stem_file_id — skip those.
-        if (c.stem_file_id != null) stemIds.push(c.stem_file_id);
+        const heard = isHeardThroughTheCrossfader(c.kind, ableton.crossfader);
+        if (c.stem_file_id != null && heard) stemIds.push(c.stem_file_id);
       }
     }
     return { stemIds, excludeTracks };
-  }, [deckMap.data, ableton.playing_clips]);
+  }, [deckMap.data, ableton.playing_clips, ableton.crossfader]);
 
   const boothPage = useAppStore((s) => s.boothPage);
   const deckOfSong = useMemo(() => {

@@ -110,7 +110,7 @@ export class BoothBackend {
     return this.requests.filter((request) => request.method === method && request.path === path);
   }
 
-  liveNowPlays(playingClips: Record<string, number>): void {
+  liveNowPlays(playingClips: Record<string, number>, alsoInLive: Record<string, unknown> = {}): void {
     const frame = {
       tempo: 128,
       is_playing: true,
@@ -122,6 +122,7 @@ export class BoothBackend {
       crossfader: 0,
       soloed_kinds: [],
       deck_map_revision: 1,
+      ...alsoInLive,
     };
     act(() => {
       for (const socket of socketsTheAppOpened) {

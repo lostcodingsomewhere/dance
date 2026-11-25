@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import * as api from "../api";
+import { isHeardThroughTheCrossfader } from "../lib/crossfader";
 import { useAbletonState } from "../hooks/useAbletonState";
 import { useBridgeHeartbeat, type BridgeHealth } from "../hooks/useBridgeHeartbeat";
 import { useDeckMap, useResyncDecks } from "../hooks/useDeckMap";
@@ -87,7 +88,7 @@ function StripRow({
     ];
     for (const dk of orderedDeckKinds) {
       const trackIdx = columns[dk];
-      if (trackIdx == null) continue;
+      if (trackIdx == null || !isHeardThroughTheCrossfader(dk, state.crossfader)) continue;
       const sIdx = playing[trackIdx];
       if (sIdx == null) continue;
       const cell = cells.find(
@@ -96,7 +97,7 @@ function StripRow({
       if (cell?.key_camelot) return cell.key_camelot;
     }
     return null;
-  }, [deckMap.data, state.playing_clips]);
+  }, [deckMap.data, state.playing_clips, state.crossfader]);
 
   const deckBpms = useMemo<{ a: number | null; b: number | null }>(() => {
     const playing = state.playing_clips ?? {};
