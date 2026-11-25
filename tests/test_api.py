@@ -3434,14 +3434,15 @@ def test_set_track_out_surfaces_track_state(client: TestClient, session, make_tr
 # ---------------------------------------------------------------------------
 
 
-def test_health_deps_reports_all_four_checks(client: TestClient) -> None:
+def test_health_deps_reports_every_check(client: TestClient) -> None:
     """The deps endpoint always returns checks for yt-dlp, ffmpeg, cookies,
-    and Spotify credentials so the FE chip can render every row."""
+    Spotify credentials and failed downloads so the FE chip can render every
+    row; yt-dlp's age is added when yt-dlp is found."""
     r = client.get("/api/v1/health/deps")
     assert r.status_code == 200
     body = r.json()
     keys = {c["key"] for c in body["checks"]}
-    assert keys == {"yt_dlp", "ffmpeg", "cookies", "spotify_creds"}
+    assert keys >= {"yt_dlp", "ffmpeg", "cookies", "spotify_creds", "downloads"}
     assert isinstance(body["ok"], bool)
     assert isinstance(body["all_green"], bool)
 

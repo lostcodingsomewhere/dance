@@ -22,8 +22,6 @@ export interface WaveformProps {
   durationSeconds?: number;
 }
 
-/** Section_label → muted background color. Matches the StructureTimeline
- * convention from the pre-redesign component for visual consistency. */
 const SECTION_FILL: Record<string, string> = {
   intro: "rgba(82, 82, 91, 0.25)",
   buildup: "rgba(234, 179, 8, 0.18)",

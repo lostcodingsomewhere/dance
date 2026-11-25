@@ -221,3 +221,94 @@ def test_csv_preview_respects_the_duration_guard(api, session, make_track) -> No
     body = api.post("/api/v1/pipeline/ingest/preview", json={"csv_text": csv}).json()
     assert [r["title"] for r in body["new_rows"]] == ["Cycles"]
     assert [r["title"] for r in body["duplicates"]] == ["Kerala"]
+
+
+# ---------------------------------------------------------------------------
+# One rule for playlist and single-song ingest
+# ---------------------------------------------------------------------------
+
+COMPLETE = "complete"
+VHS_RAVE_ID = "1zgs6QpTBuJ67TQvXMtp7L"
+
+
+def _ingest_one(api, spotify_id: str, title: str, artist: str, ms: int) -> dict:
+    r = api.post(
+        "/api/v1/pipeline/ingest/track",
+        json={"spotify_id": spotify_id, "title": title, "artist": artist, "duration_ms": ms},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.fixture
+def vhs_rave_three_times(session, make_track) -> tuple[int, int]:
+    """The real case: two copies of one song, and a third marked as a copy of the second
+    that holds Spotify's id. The first copy is 12 s shorter than the release."""
+    shorter = make_track(
+        title="VHS RAVE", artist="Tiësto;Swimming Paul", duration_seconds=179.0, state=COMPLETE
+    )
+    kept = make_track(
+        title="VHS RAVE", artist="Tiësto/Swimming Paul", duration_seconds=191.0, state=COMPLETE
+    )
+    make_track(
+        title="VHS RAVE",
+        artist="Tiësto, Swimming Paul",
+        duration_seconds=191.0,
+        state=COMPLETE,
+        spotify_id=VHS_RAVE_ID,
+        duplicate_of=kept.id,
+    )
+    session.commit()
+    return int(shorter.id), int(kept.id)
+
+
+def test_a_playlist_song_held_under_other_credits_is_not_downloaded_again(
+    api, session, make_track, monkeypatch
+) -> None:
+    held = make_track(
+        title="Escape", artist="Kx5 feat. Hayla", duration_seconds=240.0, state=COMPLETE
+    )
+    session.commit()
+    _playlist(
+        monkeypatch,
+        ("escape01", "Escape (feat. Hayla)", "Kx5, deadmau5, Kaskade, HAYLA", 240_000),
+    )
+
+    body = _ingest(api)
+
+    assert (body["added"], body["skipped_existing"], body["track_ids"]) == (0, 1, [held.id])
+    assert body["backfilled"] == 1
+    session.expire_all()
+    assert session.get(Track, held.id).spotify_id == "escape01"
+
+
+def test_playlist_and_single_song_ingest_name_the_same_copy(
+    api, session, monkeypatch, vhs_rave_three_times
+) -> None:
+    _, kept = vhs_rave_three_times
+    _playlist(monkeypatch, (VHS_RAVE_ID, "VHS RAVE", "Tiësto, Swimming Paul", 191_000))
+
+    from_the_playlist = _ingest(api)
+    one_song = _ingest_one(api, VHS_RAVE_ID, "VHS RAVE", "Tiësto, Swimming Paul", 191_000)
+
+    assert from_the_playlist["track_ids"] == [kept]
+    assert (one_song["track_id"], one_song["already_existed"]) == (kept, True)
+    assert session.query(Track).count() == 3
+
+
+def test_a_copy_some_seconds_off_is_held_but_gets_no_spotify_id(
+    api, session, make_track, monkeypatch
+) -> None:
+    held = make_track(
+        title="Morenita", artist="HUGEL/Cumbiafrica", duration_seconds=194.0, state=COMPLETE
+    )
+    session.commit()
+    _playlist(monkeypatch, ("morenita1", "Morenita", "HUGEL, Cumbiafrica", 179_000))
+
+    body = _ingest(api)
+    one_song = _ingest_one(api, "morenita1", "Morenita", "HUGEL, Cumbiafrica", 179_000)
+
+    assert (body["skipped_existing"], body["backfilled"], body["track_ids"]) == (1, 0, [held.id])
+    assert one_song["track_id"] == held.id
+    session.expire_all()
+    assert session.get(Track, held.id).spotify_id is None

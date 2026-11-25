@@ -9,7 +9,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from dance.api.jobs import init_persisted_registry
 from dance.api.origin_guard import OriginGuardMiddleware
@@ -156,21 +156,87 @@ def create_app(
 
     from fastapi import Depends as _Depends
 
+    from dance.api.deps import get_session as _dep_get_session
     from dance.api.deps import get_settings as _dep_get_settings
 
     @app.get(f"{API_PREFIX}/health/deps", tags=["meta"])
-    def health_deps(s: Settings = _Depends(_dep_get_settings)) -> dict:
+    def health_deps(
+        s: Settings = _Depends(_dep_get_settings),
+        session: Session = _Depends(_dep_get_session),
+    ) -> dict:
         """Report the status of every host-level + per-user dep the
         ingest path needs. Surfaced as a chip in MasterStrip so the
         user sees a problem before they try to ingest."""
-        return _deps_status(s)
+        return _deps_status(s, session)
 
     return app
 
 
-def _deps_status(s) -> dict:  # noqa: ANN001
-    """Inspect host tools + per-user creds. Returns a flat report the FE
-    can render as a checklist. Each ``status`` is "ok" / "missing" /
+DAYS_BEFORE_YT_DLP_IS_OLD = 90
+
+
+def _yt_dlp_age_check(yt_dlp_path: str) -> dict:
+    from datetime import date
+
+    from dance.spotify.csv_importer import how_to_update_yt_dlp, yt_dlp_release_date
+
+    released = yt_dlp_release_date(yt_dlp_path)
+    days_old = (date.today() - released).days if released else None
+    is_old = days_old is not None and days_old > DAYS_BEFORE_YT_DLP_IS_OLD
+    if released is None:
+        detail = "yt-dlp did not say which version it is."
+    elif is_old:
+        detail = (
+            f"yt-dlp {released:%Y.%m.%d} is {days_old} days old. YouTube changes often break "
+            f"older versions, so update it: {how_to_update_yt_dlp(yt_dlp_path)}"
+        )
+    else:
+        detail = f"yt-dlp {released:%Y.%m.%d}"
+    return {
+        "key": "yt_dlp_current",
+        "label": "yt-dlp up to date",
+        "status": "optional" if is_old else "ok",
+        "detail": detail,
+        "required": False,
+    }
+
+
+def _failed_downloads_check(session: Session) -> dict:
+    from dance.core.database import Track, TrackState
+    from dance.pipeline.placeholders import not_placeholder
+
+    failed = (
+        session.query(Track)
+        .filter(Track.state == TrackState.ERROR.value, ~not_placeholder())
+        .count()
+    )
+    one_or_many = "download" if failed == 1 else "downloads"
+    return {
+        "key": "downloads",
+        "label": "Downloads",
+        "status": "ok" if failed == 0 else "optional",
+        "detail": (
+            "No download has failed."
+            if failed == 0
+            else f"{failed} {one_or_many} failed. The Pipeline view says why, and Retry tries again."
+        ),
+        "required": False,
+    }
+
+
+def _deps_status(s, session: Session) -> dict:  # noqa: ANN001
+    checks = [*_host_checks(s), _failed_downloads_check(session)]
+    required_ok = all(c["status"] == "ok" for c in checks if c["required"])
+    optional_ok = all(c["status"] == "ok" for c in checks if not c["required"])
+    return {
+        "ok": required_ok,
+        "all_green": required_ok and optional_ok,
+        "checks": checks,
+    }
+
+
+def _host_checks(s) -> list[dict]:  # noqa: ANN001
+    """Inspect host tools + per-user creds. Each ``status`` is "ok" / "missing" /
     "optional"."""
     from pathlib import Path
 
@@ -222,7 +288,7 @@ def _deps_status(s) -> dict:  # noqa: ANN001
             "detail": str(cookies)
             if cookies
             else (
-                "Export to ~/.dance/cookies.txt via the 'Get cookies.txt "
+                f"Export to {s.data_dir / 'cookies.txt'} via the 'Get cookies.txt "
                 "LOCALLY' Chrome extension — without it, YouTube will throttle "
                 "or block downloads."
             ),
@@ -242,14 +308,9 @@ def _deps_status(s) -> dict:  # noqa: ANN001
             ),
             "required": False,
         },
+        *([_yt_dlp_age_check(yt_dlp_path)] if yt_dlp_path else []),
     ]
-    required_ok = all(c["status"] == "ok" for c in checks if c["required"])
-    optional_ok = all(c["status"] == "ok" for c in checks if not c["required"])
-    return {
-        "ok": required_ok,
-        "all_green": required_ok and optional_ok,
-        "checks": checks,
-    }
+    return checks
 
 
 __all__ = ["API_PREFIX", "create_app"]

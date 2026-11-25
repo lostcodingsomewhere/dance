@@ -1,5 +1,4 @@
 import type {
-  AbletonState,
   AddPlayBody,
   ColumnRecsRequest,
   ColumnRecsResponse,
@@ -16,7 +15,6 @@ import type {
   PreviewRequest,
   PreviewResult,
   Recommendation,
-  RecommendRequest,
   Region,
   SetPlan,
   SetSummary,
@@ -160,20 +158,6 @@ export function getStemWaveform(stemFileId: number, numPeaks = 200): Promise<Wav
 
 // Recommend -----------------------------------------------------------------
 
-export function recommend(req: RecommendRequest): Promise<Recommendation[]> {
-  return request<Recommendation[]>("/recommend", {
-    method: "POST",
-    body: JSON.stringify(req),
-  });
-}
-
-export function recommendBySeed(
-  id: number,
-  k = 10,
-): Promise<Recommendation[]> {
-  return request<Recommendation[]>(`/recommend/by-seed/${id}?k=${k}`);
-}
-
 export function recommendByText(
   query: string,
   k = 20,
@@ -258,10 +242,6 @@ export async function currentSession(): Promise<DjSession | null> {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   }
-}
-
-export function getSession(id: number): Promise<DjSession> {
-  return request<DjSession>(`/sessions/${id}`);
 }
 
 export function addPlay(
@@ -484,14 +464,6 @@ export function deleteTrack(id: number): Promise<void> {
   return request<void>(`/tracks/${id}`, { method: "DELETE" });
 }
 
-export function getJob(jobId: string): Promise<Job> {
-  return request<Job>(`/pipeline/jobs/${jobId}`);
-}
-
-export function listJobs(limit = 20): Promise<Job[]> {
-  return request<Job[]>(`/pipeline/jobs?limit=${limit}`);
-}
-
 // Ableton -------------------------------------------------------------------
 
 export function abletonPlay(): Promise<void> {
@@ -582,11 +554,6 @@ export interface FxState {
 
 export function abletonFxState(): Promise<FxState> {
   return request("/ableton/fx/state");
-}
-
-/** Back-compat alias for the older filter-only call. */
-export function abletonFxFilter(side: "a" | "b") {
-  return abletonFxToggle("filter", side);
 }
 
 export function abletonSetTempo(bpm: number): Promise<void> {
@@ -695,20 +662,6 @@ export function abletonPreviewStop(): Promise<PreviewResult> {
   return request<PreviewResult>("/ableton/preview/stop", { method: "POST" });
 }
 
-export function abletonSetVolume(
-  track: number,
-  volume: number,
-): Promise<void> {
-  return request<void>("/ableton/volume", {
-    method: "POST",
-    body: JSON.stringify({ track, volume }),
-  });
-}
-
-export function abletonGetState(): Promise<AbletonState> {
-  return request<AbletonState>("/ableton/state");
-}
-
 export function abletonHealth(signal?: AbortSignal): Promise<{ live_reachable: boolean }> {
   return request<{ live_reachable: boolean }>("/ableton/health", { signal });
 }
@@ -812,25 +765,6 @@ export function pushTrackToLive(
 }
 
 // Live Set export (.als) ---------------------------------------------------
-export interface AlsExportResult {
-  ok: boolean;
-  out_path: string;
-  size_bytes: number;
-  track_count: number;
-  locator_count: number;
-}
-
-/** Generate a .als (Ableton Live Set) file for a track on the server. */
-export function exportAls(
-  trackId: number,
-  outPath?: string,
-): Promise<AlsExportResult> {
-  return request<AlsExportResult>(`/tracks/${trackId}/als`, {
-    method: "POST",
-    body: JSON.stringify(outPath ? { out_path: outPath } : {}),
-  });
-}
-
 export interface SkippedPick {
   track_id: number;
   role: string;
@@ -875,22 +809,3 @@ export function openInLive(path: string): Promise<OpenInLiveResult> {
   });
 }
 
-/** Copy text to the clipboard. Works in modern browsers + Safari on iPad. */
-export async function copyToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  // Fallback for older browsers / non-secure contexts.
-  const el = document.createElement("textarea");
-  el.value = text;
-  el.style.position = "fixed";
-  el.style.opacity = "0";
-  document.body.appendChild(el);
-  el.select();
-  try {
-    document.execCommand("copy");
-  } finally {
-    document.body.removeChild(el);
-  }
-}

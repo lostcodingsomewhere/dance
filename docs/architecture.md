@@ -168,7 +168,7 @@ src/
     useSets.ts         -- useActiveSet, useCreateSet, useActivateSet
     usePreview.ts      -- Cue/headphones audition (start/stop/state)
     useAbletonState.ts -- /ws via lib/sharedSocket: ONE socket app-wide, 2 s reconnect, ≤1 render/frame
-    useDeckMap, useTransport, useTracks, useRecommend, useSession, …
+    useDeckMap, useTransport, useTracks, useColumnRecs, useSession, …
   views/               -- Booth, SetEditor, PipelineOps (+ PipelineBoard)
 ```
 
@@ -264,23 +264,23 @@ The three entry points:
 - `listener.py:25` — `ThreadingOSCUDPServer` on background thread. Per-address handler list, plus an `on_any("*", ...)` catch-all.
 - `bridge.py:53` — combines the two and maintains `AbletonState` (latest tempo/beat/playing-clip per track/volume). `subscribe(cb)` for downstream consumers; `push_track_to_live(track, stems)` is the high-level "create N empty audio tracks, name and color them, status-bar nudge."
 
-Known limitation: AbletonOSC has no command to load a sample into a clip slot, so `push_track_to_live` only prepares empty tracks. See `docs/abletonosc_setup.md` for the full explanation.
+Upstream AbletonOSC has no command to load a sample into a clip slot, so the local install is patched with a `/live/clip_slot/create_audio_clip` handler (Live 12.0.5+ has `ClipSlot.create_audio_clip`). Without that patch a load creates nothing. See `docs/abletonosc_setup.md`.
 
 ## Putting it together — request lifecycle
 
-User taps "Push to Live" on a TrackCard in the React UI:
+User presses ⤒A on a rec card in the Booth:
 
 ```
-React TrackCard onClick
-  -> api.pushTrackToLive(trackId)            # companion-app/src/api.ts:192
-  -> POST /api/v1/ableton/load-track          # routers/ableton.py:75
-  -> AbletonBridge.push_track_to_live(...)    # osc/bridge.py:215
-       -> client.get_num_tracks() + wait reply on listener
-       -> client.create_audio_track(-1)       # x (1 + n_stems)
-       -> client.set_track_name + set_track_color
-       -> client.show_message(...)
-  -> returns LoadTrackResult                   # schemas.py:199
-  -> React reveals stems folder in Finder via /api/v1/files/reveal
+RoleColumn rec card onClick
+  -> useLoadToDeck().mutate(...)              # companion-app/src/hooks/useLoadToDeck.ts
+  -> api.pushTrackToLive(trackId, {side})     # companion-app/src/api.ts:743
+  -> POST /api/v1/ableton/load-track          # routers/ableton.py:462
+  -> AbletonBridge.push_track_to_live(...)    # osc/bridge.py:2800
+       -> reads the deck columns from Live (get_num_tracks + names)
+       -> picks a free row on the deck's side (never a playing cell)
+       -> creates one audio clip per stem in that deck's columns, warp pinned to Beats
+  -> returns LoadTrackResult                   # schemas.py:525
+  -> the app arms the deck, refreshes the deck map and runs the warp check 18 s later
 ```
 
 Meanwhile the listener thread is receiving `/live/song/get/tempo` pushes, updating `bridge.state.tempo`, and the bridge subscriber posts to `WSManager.broadcast_latest_threadsafe` -> all open `/ws` clients see the new tempo within a frame (an isolated change goes out on the next loop tick; bursts are capped at ~30 pushes/s).

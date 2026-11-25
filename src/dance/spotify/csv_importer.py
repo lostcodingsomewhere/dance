@@ -18,8 +18,11 @@ import csv
 import io
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 from dance.spotify.acquire import (
@@ -44,6 +47,37 @@ def _resolve_yt_dlp() -> str | None:
     if venv_yt.exists():
         return str(venv_yt)
     return shutil.which("yt-dlp")
+
+
+@lru_cache(maxsize=8)
+def _release_date_of(yt_dlp: str, _changed_at_ns: int) -> date | None:
+    try:
+        said = subprocess.run(
+            [yt_dlp, "--version"], capture_output=True, text=True, timeout=10, check=False
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.match(r"\s*(\d{4})\.(\d{1,2})\.(\d{1,2})", said)
+    if found is None:
+        return None
+    try:
+        return date(*(int(part) for part in found.groups()))
+    except ValueError:
+        return None
+
+
+def yt_dlp_release_date(yt_dlp: str) -> date | None:
+    try:
+        changed_at = Path(yt_dlp).stat().st_mtime_ns
+    except OSError:
+        return None
+    return _release_date_of(yt_dlp, changed_at)
+
+
+def how_to_update_yt_dlp(yt_dlp: str) -> str:
+    if Path(yt_dlp).parent == Path(sys.executable).parent:
+        return f"{sys.executable} -m pip install -U yt-dlp"
+    return "brew upgrade yt-dlp"
 
 
 def _resolve_ffmpeg(explicit: str | None) -> str:

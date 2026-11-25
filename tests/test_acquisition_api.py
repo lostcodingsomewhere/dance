@@ -140,7 +140,7 @@ def test_api_single_track_ingest_end_to_end(
 # ---------------------------------------------------------------------------
 
 
-def test_deps_check_requires_ffprobe(tmp_path, monkeypatch) -> None:
+def test_deps_check_requires_ffprobe(tmp_path, monkeypatch, session) -> None:
     from dance.api.app import _deps_status
     from dance.config import Settings
 
@@ -150,14 +150,14 @@ def test_deps_check_requires_ffprobe(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(csv_importer, "_resolve_yt_dlp", lambda: "/usr/bin/true")
 
     monkeypatch.setattr(csv_importer, "_resolve_ffprobe", lambda _ff: "/nope/ffprobe")
-    report = _deps_status(settings)
+    report = _deps_status(settings, session)
     ff = next(c for c in report["checks"] if c["key"] == "ffmpeg")
     assert ff["status"] == "missing" and "ffprobe not found" in ff["detail"]
     assert report["ok"] is False
 
     (tmp_path / "ffprobe").write_text("")
     monkeypatch.setattr(csv_importer, "_resolve_ffprobe", lambda _ff: str(tmp_path / "ffprobe"))
-    report = _deps_status(settings)
+    report = _deps_status(settings, session)
     ff = next(c for c in report["checks"] if c["key"] == "ffmpeg")
     assert ff["status"] == "ok" and "ffprobe" in ff["detail"]
     assert report["ok"] is True

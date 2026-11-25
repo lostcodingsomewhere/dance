@@ -26,7 +26,7 @@ Or via the API:
 curl -X POST http://127.0.0.1:8000/api/v1/tracks/42/als
 ```
 
-The React UI's `LoadActions` component (`companion-app/src/components/LoadActions.tsx`) wraps this and reveals the file in Finder on success.
+The companion app writes a whole set's plan with `POST /api/v1/sets/{id}/als` instead (**Open in Live** in the Set view); nothing in the app calls the one-track route.
 
 ## What the generated .als contains
 
@@ -58,7 +58,7 @@ The React UI's `LoadActions` component (`companion-app/src/components/LoadAction
 
 Color is keyed by stem **role**, so both decks of a role share a color (e.g. `drums_a` and `drums_b` are both orange-red; `mix_a` / `mix_b` both white). Live's 70-color palette is 7 cols × 10 rows; the indices above were chosen empirically by generating Sets and reading off Live. Edit `STEM_COLOR_INDEX` to taste.
 
-The TrackCard in the React UI uses a different scheme (`STEM_TRACK_COLORS` in `osc/bridge.py`) — that's for the live "Push to Live" path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
+A deck load from the app uses a different scheme (`STEM_TRACK_COLORS` in `osc/bridge.py`) — that's for the live load path, not the .als export. The two paths intentionally diverge so the .als looks like a Live-native Set and the OSC-pushed tracks look distinct from anything Live's own scheme assigns.
 
 ## Output location
 
