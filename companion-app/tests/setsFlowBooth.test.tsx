@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -15,6 +15,7 @@ import {
   LOW_TIDE,
   NIGHT_DRIVE,
   SEVEN_PICKS,
+  picksIn,
   picksOnScreen,
   recommended,
   recsIn,
@@ -96,10 +97,10 @@ describe("recs in the Booth while nothing plays", () => {
     expect(askedOfLiveRecs().at(-1)?.exclude_track_ids).toContain(NIGHT_DRIVE.track_id);
   });
 
-  it("stay ranked on tempo when the active set has nothing planned", async () => {
-    const server = new SetsOnTheServer(LIBRARY);
-    server.has("New set", {}, true);
-    server.recs = () => [rec(FITS_THE_PLAN, 0)];
+  it("stay ranked on tempo while the active set has nothing planned, and turn to the plan at its first pick", async () => {
+    const server = new SetsOnTheServer([...LIBRARY, TEMPO_MATCH]);
+    const setId = server.has("New set", {}, true);
+    server.recs = () => [rec(FITS_THE_PLAN)];
     backend = new BoothBackend(aBoothWith(server, []));
     renderApp();
     await screen.findByRole("group", { name: "Song plan" });
@@ -111,5 +112,17 @@ describe("recs in the Booth while nothing plays", () => {
     expect(screen.queryByText("from your plan")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: FITS_THE_PLAN.title })).not.toBeInTheDocument();
     expect(askedOfLiveRecs().at(-1)).toMatchObject({ master_bpm: 128, exclude_track_ids: [] });
+    expect(backend.sent("GET", `${API}/sets/${setId}/plan-recs`)).toEqual([]);
+
+    fireEvent.click(
+      within(within(recommended("song")).getByRole("group", { name: TEMPO_MATCH.title })).getByTitle(
+        "Add to plan",
+      ),
+    );
+
+    await waitFor(() => expect(picksIn("song")).toEqual([TEMPO_MATCH.title]));
+    await waitFor(() => expect(recsIn("song")).toEqual([FITS_THE_PLAN.title]));
+    expect(within(recommended("song")).getByText("from your plan")).toBeInTheDocument();
+    expect(recsIn("drums")).toEqual([FITS_THE_PLAN.title]);
   });
 });
