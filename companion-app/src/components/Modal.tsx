@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 interface ModalProps {
   open: boolean;
@@ -7,6 +7,46 @@ interface ModalProps {
   /** Width class (Tailwind). Default: max-w-3xl. */
   widthClass?: string;
   children: React.ReactNode;
+}
+
+const FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+function focusableIn(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+}
+
+function focusIsNowhere(): boolean {
+  return document.activeElement == null || document.activeElement === document.body;
+}
+
+function keepTabInside(dialog: HTMLElement, e: KeyboardEvent): void {
+  const focused = document.activeElement;
+  const strayed = focusIsNowhere() || focused === dialog;
+  const controls = focusableIn(dialog);
+  const first = controls[0] ?? dialog;
+  const last = controls[controls.length - 1] ?? dialog;
+  const leaving = strayed || focused === (e.shiftKey ? first : last);
+  if (!leaving) return;
+  e.preventDefault();
+  (e.shiftKey ? last : first).focus();
+}
+
+function useOpener(open: boolean): React.MutableRefObject<Element | null> {
+  const opener = useRef<Element | null>(null);
+  const seenOpen = useRef(false);
+  // Read while rendering: a child's autoFocus moves focus before any effect here runs.
+  if (open !== seenOpen.current) {
+    seenOpen.current = open;
+    if (open) opener.current = document.activeElement;
+  }
+  return opener;
 }
 
 /** Small dependency-free modal. ESC closes; click on the backdrop closes;
@@ -18,6 +58,28 @@ export function Modal({
   widthClass = "max-w-3xl",
   children,
 }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const opener = useOpener(open);
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) {
+      (focusableIn(dialog)[0] ?? dialog).focus();
+    }
+    function onTab(e: KeyboardEvent): void {
+      if (e.key === "Tab" && dialogRef.current) keepTabInside(dialogRef.current, e);
+    }
+    window.addEventListener("keydown", onTab);
+    return () => {
+      window.removeEventListener("keydown", onTab);
+      const cameFrom = opener.current;
+      if (cameFrom instanceof HTMLElement && cameFrom.isConnected && focusIsNowhere()) {
+        cameFrom.focus();
+      }
+    };
+  }, [open, opener]);
+
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent): void {
@@ -41,7 +103,9 @@ export function Modal({
       role="presentation"
     >
       <div
-        className={`w-full ${widthClass} max-h-[90vh] overflow-y-auto rounded-lg border border-neutral-800 bg-neutral-950 shadow-2xl`}
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`w-full ${widthClass} max-h-[90vh] overflow-y-auto rounded-lg border border-neutral-800 bg-neutral-950 shadow-2xl outline-none`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
