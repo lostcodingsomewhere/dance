@@ -1,8 +1,6 @@
 // Tiny ad-hoc app store using useSyncExternalStore. Holds: current view,
-// session id, and the "loaded decks" map (scene_index → track_id) that
-// connects our Push-to-Live calls to the playing_clips state coming back
-// from Ableton over the websocket. That linkage is what makes auto-logging
-// of plays possible without a backend change.
+// session id, and the "loaded decks" map of what this browser loaded into
+// Live. Auto-logging of plays reads the backend deck map, not this map.
 
 import { useSyncExternalStore } from "react";
 import type { GridFocus } from "./lib/gridNav";
@@ -219,6 +217,9 @@ export const store = {
       },
     };
     emit();
+  },
+  peekLoadedDecks(): Record<string, LoadedDeck> {
+    return state.loadedDecks;
   },
   unloadDeck(sceneIndex: number, side: "a" | "b" | null = null): void {
     const next = { ...state.loadedDecks };

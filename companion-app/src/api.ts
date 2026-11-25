@@ -231,6 +231,12 @@ export function getPlanRecs(
 
 // Sessions ------------------------------------------------------------------
 
+// The backend writes its timestamps in UTC with no zone marker.
+export function serverTimeMs(timestamp: string): number {
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(timestamp);
+  return new Date(hasZone ? timestamp : `${timestamp}Z`).getTime();
+}
+
 export function createSession(name?: string): Promise<DjSession> {
   return request<DjSession>("/sessions", {
     method: "POST",
