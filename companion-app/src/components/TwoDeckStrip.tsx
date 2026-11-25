@@ -129,42 +129,18 @@ export function TwoDeckStrip() {
   if (!columns) {
     return (
       <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-3 text-xs text-neutral-600">
-        Waiting for Ableton — load a track from the recs banner to begin a combo.
+        Nothing is loaded on the decks. Load a pick with ⤒A or ⤒B below, or open a set in Live.
       </div>
     );
   }
 
   return (
-    <div className="relative" data-testid="two-deck-strip">
-      {/* One-shot FX cluster — sits ON TOP of the deck panels, centered
-          between them. Riser fires the named FX clip; quantized to the
-          next bar by the .als writer's LaunchQuantisation = 1. Disabled
-          (with a tooltip explaining why) when the .als doesn't have a
-          riser clip authored yet. */}
-      <div
-        className="absolute left-1/2 top-0 -translate-x-1/2 z-10 flex items-center gap-1 pt-1"
-        data-testid="fx-cluster"
-      >
-        <button
-          type="button"
-          onClick={() => fxFire.mutate("riser")}
-          disabled={!riserAvailable || fxFire.isPending}
-          title={
-            riserAvailable
-              ? "Fire the Riser one-shot on the next bar"
-              : "No 'Riser' clip in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
-          }
-          aria-label="Fire riser"
-          className={`text-[10px] font-bold uppercase tracking-widest leading-none rounded px-2.5 py-1.5 border transition-colors ${
-            riserAvailable
-              ? "bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
-              : "bg-neutral-900 text-neutral-700 border-neutral-800 cursor-not-allowed"
-          }`}
-        >
-          ▲ Riser
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
+    <div
+      className={`grid gap-2 ${
+        riserAvailable ? "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]" : "grid-cols-2"
+      }`}
+      data-testid="two-deck-strip"
+    >
       <DeckPanel
         side="a"
         columns={columns}
@@ -201,6 +177,21 @@ export function TwoDeckStrip() {
           seek.mutate({ track, slot, positionBeats: beats })
         }
       />
+      {riserAvailable && (
+        // Same border and top padding as a deck panel, so the Riser lines up with the deck headers.
+        <div className="border border-transparent pt-2" data-testid="fx-cluster">
+          <button
+            type="button"
+            onClick={() => fxFire.mutate("riser")}
+            disabled={fxFire.isPending}
+            title="Fire the Riser one-shot on the next bar"
+            aria-label="Fire riser"
+            className="h-6 whitespace-nowrap text-[11px] font-bold uppercase tracking-widest leading-none rounded px-2.5 border transition-colors bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 border-amber-400/50 hover:border-amber-300"
+          >
+            ▲ Riser
+          </button>
+        </div>
+      )}
       <DeckPanel
         side="b"
         columns={columns}
@@ -237,7 +228,6 @@ export function TwoDeckStrip() {
           seek.mutate({ track, slot, positionBeats: beats })
         }
       />
-      </div>
     </div>
   );
 }
@@ -535,7 +525,7 @@ function DeckCues({
             aria-pressed={isPlaying}
             aria-label={`Deck ${sideLabel} cue ${cue}${label ? `, ${label}` : ""}`}
             title={`Play Deck ${sideLabel} from cue ${cue}${label ? ` (${label})` : ""}`}
-            className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[10px] font-semibold uppercase leading-none tracking-wide transition-opacity ${sectionTone(label).head} ${
+            className={`h-7 min-w-0 flex-1 truncate rounded px-1.5 text-[11px] font-semibold uppercase leading-none tracking-wide transition-opacity ${sectionTone(label).head} ${
               isPlaying ? "ring-2 ring-emerald-300" : "opacity-70 hover:opacity-100"
             }`}
           >
@@ -622,18 +612,18 @@ function DeckHeader({
     && projectTempo != null
     && Math.abs(projectTempo - sourceBpm) > 0.5;
   return (
-    <div className="flex items-baseline gap-2">
-      <div className={`text-base font-bold tracking-wider ${accentText}`}>
+    <div className="flex items-center gap-2">
+      <div className={`shrink-0 text-base font-bold tracking-wider ${accentText}`}>
         DECK {sideLabel}
       </div>
       {firing && (
-        <span className="text-[10px] text-emerald-300 uppercase tracking-widest animate-pulse">
+        <span className="shrink-0 text-[11px] text-emerald-300 uppercase tracking-widest animate-pulse">
           ▶ live
         </span>
       )}
       {armedSceneIdx != null && (
         <span
-          className="text-[10px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
+          className="shrink-0 text-[11px] text-amber-200/90 uppercase tracking-widest rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px"
           title={`▶ will fire scene ${armedSceneIdx + 1} — the track you last loaded onto Deck ${sideLabel}`}
           data-testid={`armed-${side}`}
         >
@@ -656,7 +646,7 @@ function DeckHeader({
               : `Play Deck ${sideLabel} (fire scene ${fireSceneIdx + 1})`
         }
         aria-label={`Play Deck ${sideLabel}`}
-        className={`text-[10px] leading-none rounded px-1.5 py-1 border transition-colors ${
+        className={`h-6 min-w-6 text-[11px] leading-none rounded px-1.5 border transition-colors ${
           firing
             ? "bg-emerald-500/40 text-emerald-50 border-emerald-300/60"
             : "bg-neutral-900 text-neutral-300 hover:bg-emerald-900/40 hover:text-emerald-200 border-neutral-700 disabled:opacity-40 disabled:hover:bg-neutral-900 disabled:hover:text-neutral-300"
@@ -669,7 +659,7 @@ function DeckHeader({
         onClick={onStopDeck}
         title={`Stop Deck ${sideLabel} (halt all of this side's clips)`}
         aria-label={`Stop Deck ${sideLabel}`}
-        className="text-[10px] leading-none rounded px-1.5 py-1 border bg-neutral-900 text-neutral-400 hover:bg-rose-950/40 hover:text-rose-200 border-neutral-700 transition-colors"
+        className="h-6 min-w-6 text-[11px] leading-none rounded px-1.5 border bg-neutral-900 text-neutral-400 hover:bg-rose-950/40 hover:text-rose-200 border-neutral-700 transition-colors"
       >
         ■
       </button>
@@ -685,7 +675,7 @@ function DeckHeader({
         }
         aria-pressed={pflActive}
         aria-label={`PFL Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
+        className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
           pflActive
             ? "bg-amber-400/30 text-amber-100 border-amber-300/60"
             : "text-neutral-500 hover:text-amber-200 border-neutral-700 hover:border-amber-400/40"
@@ -693,99 +683,91 @@ function DeckHeader({
       >
         PFL
       </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          // Shift-click = continuous 4-bar sweep. Plain click = snap toggle.
-          // Gives DJs both gestures on one button: tap for instant, hold
-          // shift for analog-style ramp.
-          if (e.shiftKey) onSweepFilter(4);
-          else onToggleFilter();
-        }}
-        disabled={!filterAvailable}
-        title={
-          !filterAvailable
-            ? "No 'Filter' return in this .als — author one per docs/proposals/fx-phase-1-runbook.md"
-            : filterActive
-            ? `Filter off — Deck ${sideLabel} returns to full range\nShift-click = 4-bar sweep`
-            : `Filter on — HPF Deck ${sideLabel} (cuts lows)\nShift-click = 4-bar sweep`
-        }
-        aria-pressed={filterActive}
-        aria-label={`HPF Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !filterAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : filterActive
-            ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
-            : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
-        }`}
-      >
-        HPF
-      </button>
-      <button
-        type="button"
-        onClick={onToggleReverb}
-        disabled={!reverbAvailable}
-        title={
-          !reverbAvailable
-            ? "No 'Reverb' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
-            : reverbActive
-            ? `Reverb off — Deck ${sideLabel} dry`
-            : `Reverb throw — send Deck ${sideLabel} into the reverb tail`
-        }
-        aria-pressed={reverbActive}
-        aria-label={`Reverb throw Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !reverbAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : reverbActive
-            ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
-            : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
-        }`}
-      >
-        REV
-      </button>
-      <button
-        type="button"
-        onClick={onToggleDelay}
-        disabled={!delayAvailable}
-        title={
-          !delayAvailable
-            ? "No 'Delay' return in this .als — see fx-phase-1-runbook.md (same pattern as Filter)"
-            : delayActive
-            ? `Delay off — Deck ${sideLabel} dry`
-            : `Delay throw — echo Deck ${sideLabel} into the next bars`
-        }
-        aria-pressed={delayActive}
-        aria-label={`Delay throw Deck ${sideLabel}`}
-        className={`text-[9px] font-mono uppercase tracking-widest leading-none rounded px-1.5 py-1 border transition-colors ${
-          !delayAvailable
-            ? "text-neutral-700 border-neutral-800 cursor-not-allowed"
-            : delayActive
-            ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
-            : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
-        }`}
-      >
-        DLY
-      </button>
+      {filterAvailable && (
+        <button
+          type="button"
+          onClick={(e) => {
+            // Shift-click = continuous 4-bar sweep. Plain click = snap toggle.
+            // Gives DJs both gestures on one button: tap for instant, hold
+            // shift for analog-style ramp.
+            if (e.shiftKey) onSweepFilter(4);
+            else onToggleFilter();
+          }}
+          title={
+            filterActive
+              ? `Filter off — Deck ${sideLabel} returns to full range\nShift-click = 4-bar sweep`
+              : `Filter on — HPF Deck ${sideLabel} (cuts lows)\nShift-click = 4-bar sweep`
+          }
+          aria-pressed={filterActive}
+          aria-label={`HPF Deck ${sideLabel}`}
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+            filterActive
+              ? "bg-rose-500/30 text-rose-100 border-rose-400/60"
+              : "text-neutral-500 hover:text-rose-200 border-neutral-700 hover:border-rose-400/40"
+          }`}
+        >
+          HPF
+        </button>
+      )}
+      {reverbAvailable && (
+        <button
+          type="button"
+          onClick={onToggleReverb}
+          title={
+            reverbActive
+              ? `Reverb off — Deck ${sideLabel} dry`
+              : `Reverb throw — send Deck ${sideLabel} into the reverb tail`
+          }
+          aria-pressed={reverbActive}
+          aria-label={`Reverb throw Deck ${sideLabel}`}
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+            reverbActive
+              ? "bg-cyan-500/30 text-cyan-100 border-cyan-400/60"
+              : "text-neutral-500 hover:text-cyan-200 border-neutral-700 hover:border-cyan-400/40"
+          }`}
+        >
+          REV
+        </button>
+      )}
+      {delayAvailable && (
+        <button
+          type="button"
+          onClick={onToggleDelay}
+          title={
+            delayActive
+              ? `Delay off — Deck ${sideLabel} dry`
+              : `Delay throw — echo Deck ${sideLabel} into the next bars`
+          }
+          aria-pressed={delayActive}
+          aria-label={`Delay throw Deck ${sideLabel}`}
+          className={`h-6 text-[11px] font-mono uppercase tracking-widest leading-none rounded px-1.5 border transition-colors ${
+            delayActive
+              ? "bg-fuchsia-500/30 text-fuchsia-100 border-fuchsia-400/60"
+              : "text-neutral-500 hover:text-fuchsia-200 border-neutral-700 hover:border-fuchsia-400/40"
+          }`}
+        >
+          DLY
+        </button>
+      )}
       {anchorCell ? (
         <>
-          <div className="text-sm text-neutral-100 truncate font-medium min-w-0 flex-1">
+          {/* The artist and the original chip shrink 100 times as fast as the BPM and key, so they give way first. */}
+          <div className="text-sm text-neutral-100 truncate font-medium min-w-[12ch] flex-1">
             {anchorCell.title ?? `Track #${anchorCell.track_id}`}
           </div>
           {anchorCell.artist && (
-            <div className="text-[11px] text-neutral-400 truncate shrink-[2] min-w-0">
+            <div className="text-[11px] text-neutral-400 truncate shrink-[100] min-w-0">
               {anchorCell.artist}
             </div>
           )}
-          <div className="text-[10px] font-mono tabular-nums text-neutral-500 shrink-0 flex items-baseline gap-1.5">
+          <div className="text-[11px] font-mono tabular-nums text-neutral-500 min-w-0 overflow-hidden whitespace-nowrap flex items-baseline gap-1.5">
             {sourceBpm != null && <span>{sourceBpm.toFixed(0)}</span>}
             {showSync && (
               <button
                 type="button"
                 onClick={() => onSyncTempo(Number(sourceBpm!.toFixed(2)))}
                 title={`Set master tempo to ${sourceBpm!.toFixed(1)} BPM (currently ${projectTempo!.toFixed(1)})`}
-                className="text-[9px] font-bold leading-none rounded px-1 py-0.5 bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 transition-colors"
+                className="h-6 text-[11px] font-bold leading-none rounded px-1 bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 transition-colors"
               >
                 SYNC
               </button>
@@ -801,7 +783,7 @@ function DeckHeader({
           </div>
           {!isPureAnchor && (
             <span
-              className="text-[10px] uppercase tracking-wider text-amber-400/70"
+              className="text-[11px] uppercase tracking-wider text-amber-400/70"
               title="Stems from multiple source tracks — not a single-song anchor"
             >
               mixed
@@ -822,7 +804,7 @@ function DeckHeader({
               }
               aria-label={`Play original mix on Deck ${sideLabel}`}
               aria-pressed={mixFiring}
-              className={`shrink-0 text-[9px] font-mono uppercase tracking-wider leading-none rounded px-1.5 py-1 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
+              className={`h-6 shrink-[100] min-w-7 text-[11px] font-mono uppercase tracking-wider leading-none rounded px-1.5 border transition-colors inline-flex items-center gap-1 max-w-[8rem] ${
                 mixFiring
                   ? "bg-emerald-500/30 text-emerald-100 border-emerald-400/60"
                   : "text-neutral-400 hover:text-neutral-100 border-neutral-700 hover:border-neutral-500"
@@ -940,7 +922,7 @@ function DeckWaveform({
         durationSeconds={duration ?? undefined}
         onSeek={anchorCell ? handleSeek : undefined}
       />
-      <div className="flex items-baseline justify-between text-[10px] font-mono tabular-nums text-neutral-500">
+      <div className="flex items-baseline justify-between text-[11px] font-mono tabular-nums text-neutral-500">
         <span>
           {elapsedSec != null && duration != null
             ? formatDuration(elapsedSec % duration)
