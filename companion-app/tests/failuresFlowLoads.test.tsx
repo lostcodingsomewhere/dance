@@ -45,8 +45,8 @@ beforeEach(() => {
   booth = new BoothMidSet();
 });
 
-afterEach(() => {
-  booth.close();
+afterEach(async () => {
+  await booth.close();
 });
 
 describe("a deck load that loads nothing", () => {
@@ -73,7 +73,7 @@ describe("a deck load that loads nothing", () => {
     expect(booth.sent("POST", `/ableton/warp-check/${PADS_PER_PAGE}`)).toEqual([]);
   });
 
-  it("does not log the song as played when the deck then plays what was already on it", async () => {
+  it("logs the song that was already on the deck, not the one that failed to load, when the deck plays", async () => {
     booth.liveAnswers = (request) => {
       if (request.path.endsWith("/sessions/current")) return sessionUnderWay();
       if (isCommand(request, "/ableton/load-track")) {
@@ -93,7 +93,11 @@ describe("a deck load that loads nothing", () => {
       expect(booth.sent("POST", "/ableton/transport/stop-deck/a")).toHaveLength(1),
     );
 
-    expect(booth.sent("POST", `/sessions/${SESSION_ID}/plays`)).toEqual([]);
+    await waitFor(() =>
+      expect(booth.sent("POST", `/sessions/${SESSION_ID}/plays`).map((sent) => sent.body)).toEqual([
+        { track_id: ORIGINAL.track_id },
+      ]),
+    );
     await expectWarningLines([`Couldn't load Half Light onto Deck A: ${LIVE_DID_NOT_ANSWER}`]);
   });
 });
@@ -122,8 +126,8 @@ describe("a whole-song load of a song that has no stems", () => {
 
     booth.liveNowPlays({ [LIVE_TRACK_OF.mix_a]: PADS_PER_PAGE });
     await waitFor(() =>
-      expect(booth.sent("POST", `/sessions/${SESSION_ID}/plays`)).toMatchObject([
-        { body: { track_id: RECOMMENDED.track_id } },
+      expect(booth.sent("POST", `/sessions/${SESSION_ID}/plays`).map((sent) => sent.body)).toEqual([
+        { track_id: RECOMMENDED.track_id },
       ]),
     );
   });

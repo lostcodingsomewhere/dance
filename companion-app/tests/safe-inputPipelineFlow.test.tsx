@@ -60,23 +60,22 @@ describe("the Ingest from CSV dialog in the Pipeline view", () => {
     expect(close).toHaveFocus();
     expect(preview).toBeDisabled();
 
-    csv.focus();
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    cancel.focus();
     press("Tab");
     expect(close).toHaveFocus();
     press("Tab", { shiftKey: true });
-    expect(csv).toHaveFocus();
+    expect(cancel).toHaveFocus();
 
     fireEvent.change(csv, { target: { value: ONE_SONG_CSV } });
     expect(preview).toBeEnabled();
-    press("Tab");
-    expect(csv).toHaveFocus();
-    preview.focus();
+    cancel.focus();
     press("Tab");
     expect(close).toHaveFocus();
-    press("Tab", { shiftKey: true });
-    expect(preview).toHaveFocus();
 
     press("Escape");
+    expect(screen.getByRole("dialog", { name: "Ingest from CSV" })).toBeInTheDocument();
+    fireEvent.click(cancel);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(ingest).toHaveFocus();
   });

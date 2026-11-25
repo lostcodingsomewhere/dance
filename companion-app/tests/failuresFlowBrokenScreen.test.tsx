@@ -24,8 +24,8 @@ beforeEach(() => {
   hushTheErrorReactLogsWhenAScreenBreaks();
 });
 
-afterEach(() => {
-  booth.close();
+afterEach(async () => {
+  await booth.close();
 });
 
 describe("a screen that breaks while it is drawn", () => {
@@ -55,8 +55,7 @@ describe("a screen that breaks while it is drawn", () => {
     booth.show();
     await screen.findByRole("alert");
 
-    fireEvent.click(screen.getByTitle("Set, Pipeline, Course"));
-    press("Pipeline");
+    fireEvent.click(screen.getByRole("tab", { name: "Pipeline" }));
 
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");

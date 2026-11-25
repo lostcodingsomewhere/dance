@@ -452,7 +452,6 @@ function RecordButton({ onNotice }: { onNotice: (notice: RecordNotice | null) =>
       setRecording(res.recording);
       setStartedAt(res.recording ? Date.now() : null);
       setElapsed(0);
-      store.setLoadWarnings("Recording", res.warnings ?? []);
     },
   });
   useEffect(() => {

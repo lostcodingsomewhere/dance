@@ -27,9 +27,9 @@ beforeEach(() => {
   booth = new BoothMidSet();
 });
 
-afterEach(() => {
+afterEach(async () => {
   onlineManager.setOnline(true);
-  booth.close();
+  await booth.close();
 });
 
 describe("the venue's network dropping mid-set", () => {

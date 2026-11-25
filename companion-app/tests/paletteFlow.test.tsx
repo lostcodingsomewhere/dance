@@ -216,8 +216,7 @@ function bodiesSentTo(path: string): unknown[] {
 }
 
 function openSetView(): void {
-  fireEvent.click(screen.getByTitle("Set, Pipeline, Course"));
-  fireEvent.click(screen.getByRole("button", { name: "Set" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Set" }));
 }
 
 configure({ asyncUtilTimeout: 3000 });

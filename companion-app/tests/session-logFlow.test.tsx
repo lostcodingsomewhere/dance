@@ -239,8 +239,7 @@ describe("a prepared Set opened in Live from a file", () => {
     await waitFor(() => expect(playsLogged(backend)).toEqual([NIGHT_DRIVE.track_id]));
     await screen.findByText("1 play");
 
-    fireEvent.click(screen.getByTitle("Set, Pipeline, Course"));
-    fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Set" }));
     await screen.findByText("No active set yet");
     fireEvent.click(screen.getByRole("tab", { name: "Booth" }));
     await screen.findByRole("button", { name: "Page 1, playing" });

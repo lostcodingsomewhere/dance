@@ -243,7 +243,7 @@ function KeyHints({ mode, loading }: { mode: "plan" | "live"; loading?: LoadToDe
       </span>
       {loading && (
         <span role="status" className="text-amber-200">
-          {`loading ${loading.title ?? `Track #${loading.trackId}`} onto Deck ${loading.side.toUpperCase()}…`}
+          {`loading ${loading.title ?? `Track #${loading.trackId}`}${loading.side ? ` onto Deck ${loading.side.toUpperCase()}` : ""}…`}
         </span>
       )}
     </div>

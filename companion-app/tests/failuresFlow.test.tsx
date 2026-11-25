@@ -33,8 +33,8 @@ beforeEach(() => {
   booth = new BoothMidSet();
 });
 
-afterEach(() => {
-  booth.close();
+afterEach(async () => {
+  await booth.close();
 });
 
 const BOOTH_COMMANDS = [
@@ -64,10 +64,14 @@ const BOOTH_COMMANDS = [
   },
   {
     command: "removing a clip from the grid",
-    press: () =>
+    press: () => {
       fireEvent.click(
         within(grid()).getAllByRole("button", { name: "Remove Drums clip from scene" })[0],
-      ),
+      );
+      fireEvent.click(
+        within(grid()).getByRole("button", { name: "Press again to remove Drums clip from scene" }),
+      );
+    },
     sends: ["DELETE", "/ableton/decks/cell/0/0"],
     says: "Couldn't remove that clip",
   },
@@ -115,7 +119,7 @@ const BOOTH_COMMANDS = [
   },
   {
     command: "changing the tempo",
-    press: () => press("×2"),
+    press: () => press("÷2"),
     sends: ["POST", "/ableton/tempo"],
     says: "Couldn't set the tempo",
   },
@@ -130,7 +134,7 @@ const BOOTH_COMMANDS = [
   },
   {
     command: "starting Live's transport",
-    press: () => press("Pause"),
+    press: () => press("Play"),
     sends: ["POST", "/ableton/play"],
     says: "Couldn't start Live's transport",
   },
@@ -242,7 +246,7 @@ describe("a Booth command that fails", () => {
 
     press("Start recording");
 
-    await expectWarningLines([`Recording: ${NO_ARMED_RECORDER}`]);
+    expect(await screen.findAllByText(NO_ARMED_RECORDER)).toHaveLength(1);
     expect(screen.getByRole("button", { name: /^Stop recording/ })).toBeInTheDocument();
   });
 });

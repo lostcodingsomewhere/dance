@@ -46,8 +46,8 @@ beforeEach(() => {
   booth = new BoothMidSet();
 });
 
-afterEach(() => {
-  booth.close();
+afterEach(async () => {
+  await booth.close();
 });
 
 describe("the cue preview", () => {

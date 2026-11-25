@@ -280,7 +280,7 @@ describe("Enter and Space on the Booth's plan grid", () => {
     press("Enter", { shiftKey: true });
 
     const warning = await screen.findByTestId("load-warnings");
-    expect(within(warning).getByText("Half Light → Deck B")).toBeInTheDocument();
+    expect(within(warning).getByText("Half Light → Deck B:")).toBeInTheDocument();
     expect(within(warning).getByText(MISSING_STEM)).toBeInTheDocument();
   });
 
