@@ -500,16 +500,18 @@ def _tool_version(run: Callable[..., Any], exe: str) -> tuple[str | None, str | 
 
 def check_ingest_deps(settings: Any) -> list[CheckResult]:
     """yt-dlp, YouTube cookies and Spotify credentials — straight from the
-    same ``_deps_status`` the companion's MasterStrip chip renders (ffmpeg is
+    same ``_host_checks`` the companion's MasterStrip chip renders (ffmpeg is
     handled by :func:`check_ffmpeg`, which also checks PATH and ffprobe)."""
-    from dance.api.app import _deps_status
+    from dance.api.app import _host_checks
 
     out: list[CheckResult] = []
-    for c in _deps_status(settings)["checks"]:
+    for c in _host_checks(settings):
         if c["key"] == "ffmpeg":
             continue
         if c["status"] == "ok":
             out.append(CheckResult(c["key"], c["label"], OK, str(c["detail"])))
+        elif c["key"] == "yt_dlp_current":
+            out.append(CheckResult(c["key"], c["label"], WARN, "out of date", fix=str(c["detail"])))
         elif c["required"]:
             out.append(CheckResult(c["key"], c["label"], FAIL, "missing", fix=str(c["detail"])))
         else:

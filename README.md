@@ -75,7 +75,7 @@ DANCE_SPOTIFY_CLIENT_ID=...        # https://developer.spotify.com/dashboard
 DANCE_SPOTIFY_CLIENT_SECRET=...
 ```
 
-For reliable YouTube downloads, export cookies via the **Get cookies.txt LOCALLY** Chrome extension and save to `~/.dance/cookies.txt`. The setup script tells you when this is missing.
+For reliable YouTube downloads, export cookies via the **Get cookies.txt LOCALLY** Chrome extension and save to `~/.dance/cookies.txt` (`cookies.txt` in the data folder, `DANCE_DATA_DIR`). The setup script tells you when this is missing.
 
 ### Pipeline runbook
 

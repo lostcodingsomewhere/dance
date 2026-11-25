@@ -173,7 +173,7 @@ dance doctor --json    # {"ok", "counts", "checks": [{key, label, status, summar
 |---|---|
 | Database migrations | Alembic revision of `settings.db_url` vs the scripts' head (lists pending revisions, unknown revisions, multiple heads, unversioned DBs, schema drift). Opens SQLite with `immutable=1`; never upgrades or stamps. |
 | ffmpeg / ffprobe | On `PATH` (the `process`/`sync` preflight uses PATH) and actually runs. |
-| yt-dlp, YouTube cookies, Spotify search | Same logic as `GET /api/v1/health/deps`. |
+| yt-dlp, YouTube cookies, Spotify search, yt-dlp's age | Same logic as `GET /api/v1/health/deps`. A yt-dlp whose version date is more than 90 days old is a warning with the command that updates it. |
 | Ableton Live | Every `/Applications/Ableton Live*.app` version vs the `.als` template's `Creator`/`Revision`; warns about Lite/Intro and multiple installs sharing `com.ableton.live`, and prints the `open -a` line to use. |
 | AbletonOSC | Upstream commit of the Remote Script clone, and which OSC addresses dance sends (derived from `dance/osc/client.py`) have no handler in the installed source — named against the patch docs. Static scan; Live still needs a full restart after patching. |
 | CLAP / Demucs weights | Presence in the Hugging Face / torch.hub caches (never downloads). |

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Local API origin guard (``dance.api.origin_guard``): the loopback hostnames
@@ -55,17 +55,11 @@ class Settings(BaseSettings):
     # Tokens last about an hour.
     spotify_user_token: Optional[str] = Field(default=None)
 
-    # YouTube cookies for yt-dlp ingest. Default: ~/.dance/cookies.txt if
+    # YouTube cookies for yt-dlp ingest. Default: cookies.txt in data_dir if
     # present, otherwise None (yt-dlp will run unauthenticated and likely
     # hit bot detection). Export via the "Get cookies.txt LOCALLY" Chrome
     # extension — portable across machines, unlike Chrome-profile auth.
-    youtube_cookies_file: Optional[Path] = Field(
-        default_factory=lambda: (
-            (Path.home() / ".dance" / "cookies.txt")
-            if (Path.home() / ".dance" / "cookies.txt").exists()
-            else None
-        )
-    )
+    youtube_cookies_file: Optional[Path] = Field(default=None)
 
     # Directory paths
     library_dir: Path = Field(default=Path.home() / "Music" / "DJ" / "library")
@@ -172,6 +166,13 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return Path(v).expanduser()
         return v.expanduser()
+
+    @model_validator(mode="after")
+    def cookies_from_the_data_dir(self) -> "Settings":
+        in_the_data_dir = self.data_dir / "cookies.txt"
+        if self.youtube_cookies_file is None and in_the_data_dir.exists():
+            self.youtube_cookies_file = in_the_data_dir
+        return self
 
     @property
     def db_url(self) -> str:
