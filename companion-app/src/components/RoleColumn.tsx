@@ -284,6 +284,217 @@ function StemRow({
   );
 }
 
+const FOCUS_RING = "ring-2 ring-amber-300/80 ring-offset-1 ring-offset-neutral-950";
+const PREVIEWING_TONE =
+  "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]";
+const LIVE_BUTTON =
+  "inline-flex h-7 w-11 shrink-0 items-center justify-center rounded text-sm transition-colors disabled:opacity-50";
+const LIVE_RECS_MIN_HEIGHT = "min-h-[396px]";
+// 3 px of padding on every side keeps a row's focus ring inside the scroll box.
+const LIVE_PLAN_BOX =
+  "-m-[3px] flex max-h-[122px] flex-col gap-1 overflow-y-auto p-[3px] scroll-py-[3px] [@media(max-height:1000px)]:max-h-[82px]";
+
+function usePreviewToggle(trackId: number, role: PlanRole) {
+  const startPreview = useStartPreview();
+  const stopPreview = useStopPreview();
+  const previewing = usePreviewState();
+  const column = visRole(role);
+  const isPreviewing = previewing?.trackId === trackId && previewing?.column === column;
+  return {
+    isPreviewing,
+    busy: startPreview.isPending || stopPreview.isPending,
+    toggle: () => {
+      if (isPreviewing) stopPreview.mutate();
+      else startPreview.mutate({ trackId, column });
+    },
+  };
+}
+
+function LivePreviewButton({ preview }: { preview: ReturnType<typeof usePreviewToggle> }) {
+  return (
+    <button
+      type="button"
+      onClick={preview.toggle}
+      disabled={preview.busy}
+      className={`${LIVE_BUTTON} ${
+        preview.isPreviewing
+          ? "border border-cyan-400/40 bg-cyan-500/30 text-cyan-200 hover:bg-cyan-500/40"
+          : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+      }`}
+      title={preview.isPreviewing ? "Stop preview" : "Preview in headphones (cue)"}
+    >
+      {preview.isPreviewing ? "⏹" : "▶"}
+    </button>
+  );
+}
+
+function LiveDeckButtons({
+  trackId,
+  role,
+  title,
+  besideOriginalOn,
+}: {
+  trackId: number;
+  role: PlanRole;
+  title: string | null;
+  besideOriginalOn?: DeckSide;
+}) {
+  const load = useLoadToDeck();
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {(["a", "b"] as const).map((side) => (
+        <button
+          key={side}
+          type="button"
+          disabled={load.isPending}
+          onClick={() => load.mutate({ trackId, role, title, side })}
+          className={`${LIVE_BUTTON} gap-0.5 font-bold text-white ${LOAD_BUTTON_TONE[side]} ${
+            side === besideOriginalOn ? "ring-2 ring-fuchsia-300/80" : ""
+          }`}
+          title={
+            side === besideOriginalOn
+              ? `Load → Deck ${side.toUpperCase()}, the deck beside its original`
+              : `Load → Deck ${side.toUpperCase()}`
+          }
+        >
+          {load.isPending ? "…" : <><span>⤒</span><span>{side.toUpperCase()}</span></>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LivePlanRow({
+  item,
+  role,
+  index,
+  focused,
+  onFocus,
+}: {
+  item: PlanItem;
+  role: PlanRole;
+  index: number;
+  focused?: boolean;
+  onFocus?: () => void;
+}) {
+  const styles = ROLE_STYLES[visRole(role)];
+  const preview = usePreviewToggle(item.track_id, role);
+  const rowRef = useScrollIntoViewWhenFocused(focused);
+  const notReady = whyNotReady(item);
+  return (
+    <div
+      ref={rowRef}
+      role="group"
+      aria-label={titleOf(item)}
+      onMouseDown={onFocus}
+      className={`flex h-9 shrink-0 items-center gap-2 rounded-md border border-l-2 border-l-emerald-500/70 px-2 ${
+        focused ? `${FOCUS_RING} ` : ""
+      }${preview.isPreviewing ? PREVIEWING_TONE : `${styles.border} ${styles.bg}`}`}
+    >
+      <span className="w-5 shrink-0 text-right font-mono text-xs tabular-nums text-neutral-400">
+        {index + 1}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-neutral-50">
+        {titleOf(item)}
+      </span>
+      {notReady != null ? (
+        <span className="shrink-0 text-xs text-amber-300">{notReady}</span>
+      ) : (
+        <>
+          <LivePreviewButton preview={preview} />
+          <LiveDeckButtons trackId={item.track_id} role={role} title={item.title} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function LiveRecCard({
+  rec,
+  role,
+  focused,
+  onFocus,
+  onAdd,
+  besideOriginalOn,
+}: {
+  rec: ColumnRec;
+  role: PlanRole;
+  focused?: boolean;
+  onFocus?: () => void;
+  onAdd?: () => void;
+  besideOriginalOn?: DeckSide;
+}) {
+  const styles = ROLE_STYLES[visRole(role)];
+  const preview = usePreviewToggle(rec.track_id, role);
+  const cardRef = useScrollIntoViewWhenFocused(focused);
+  const title = rec.track_title ?? `Track #${rec.track_id}`;
+  const version = versionNote(rec);
+  const facts = [
+    rec.bpm != null ? rec.bpm.toFixed(0) : null,
+    rec.key_camelot,
+    rec.floor_energy != null ? `E${rec.floor_energy}` : null,
+    rec.track_artist,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div
+      ref={cardRef}
+      role="group"
+      aria-label={title}
+      onMouseDown={onFocus}
+      title={rec.reasons.join(" · ")}
+      className={`flex shrink-0 flex-col gap-1 overflow-hidden rounded-md border px-2 py-1.5 ${
+        version ? "h-[120px]" : "h-24"
+      } ${focused ? `${FOCUS_RING} ` : ""}${
+        preview.isPreviewing ? PREVIEWING_TONE : `${styles.border} ${styles.bg}`
+      }`}
+    >
+      <div className="flex h-6 shrink-0 items-center gap-2">
+        <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-400">
+          {Math.round(rec.score * 100)}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-neutral-50">
+          {title}
+        </span>
+      </div>
+      {version && (
+        <div className="flex h-5 shrink-0 items-center gap-1 text-xs text-fuchsia-200/90">
+          <span className="shrink-0 rounded bg-fuchsia-500/25 px-1 font-semibold uppercase tracking-wide">
+            version
+          </span>
+          <span className="min-w-0 truncate">{version}</span>
+        </div>
+      )}
+      <div className="flex h-7 shrink-0 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-[13px] tabular-nums text-neutral-400">
+          {facts}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <LivePreviewButton preview={preview} />
+          {onAdd && (
+            <button
+              type="button"
+              onClick={onAdd}
+              className={`${LIVE_BUTTON} bg-emerald-700/70 text-white hover:bg-emerald-600`}
+              title="Add to plan"
+            >
+              ＋
+            </button>
+          )}
+        </div>
+        <LiveDeckButtons
+          trackId={rec.track_id}
+          role={role}
+          title={rec.track_title}
+          besideOriginalOn={besideOriginalOn}
+        />
+      </div>
+      {rec.score_breakdown && <ScoreBreakdown breakdown={rec.score_breakdown} size="line" />}
+    </div>
+  );
+}
+
 // The grid's window key handler would take Enter/Space as commit/audition and cancel the click.
 function keepActivationKeysFromGrid(e: React.KeyboardEvent) {
   if (e.key === "Enter" || e.key === " ") e.stopPropagation();
@@ -479,9 +690,13 @@ function PlanRecCard({
 }
 
 /** Small uppercase zone label so PLAN vs RECS is unmistakable. */
-function ZoneLabel({ children }: { children: React.ReactNode }) {
+function ZoneLabel({ live, children }: { live?: boolean; children: React.ReactNode }) {
   return (
-    <div className="px-0.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-neutral-600">
+    <div
+      className={`px-0.5 pt-1 font-bold uppercase tracking-wider ${
+        live ? "text-xs text-neutral-400" : "text-[9px] text-neutral-600"
+      }`}
+    >
       {children}
     </div>
   );
@@ -573,9 +788,12 @@ function LiveRecsZone({ setId, role }: { setId: number | null; role: PlanRole })
   }
   if (cold) {
     return (
-      <div className="px-1 text-[10px] italic leading-snug text-neutral-600">
-        nothing playing — load a deck or start a set
-      </div>
+      <>
+        <ZoneLabel live>Recs</ZoneLabel>
+        <div className={`px-1 text-xs italic leading-snug text-neutral-500 ${LIVE_RECS_MIN_HEIGHT}`}>
+          nothing playing — load a deck or start a set
+        </div>
+      </>
     );
   }
   return (
@@ -617,57 +835,77 @@ function RecsList({
 }) {
   const focus = useAppStore((s) => s.gridFocus);
   usePublishZone(role, "recs", recs.map((r) => r.track_id), loading);
+  const live = mode === "live";
+  const showNote = note != null && !loading && recs.length > 0;
+  const quiet = live ? "px-1 text-xs text-neutral-500" : "text-[10px] text-neutral-600 px-1";
   return (
-    <div className="flex flex-col gap-1">
-      {note && !loading && recs.length > 0 && (
-        <div className="px-1 text-[9px] uppercase tracking-wider text-neutral-600">
-          {note}
-        </div>
+    <>
+      {live && (
+        <ZoneLabel live>
+          Recs{showNote && <span className="ml-2 font-normal">{note}</span>}
+        </ZoneLabel>
       )}
-      {loading && <div className="text-[10px] text-neutral-600 px-1">…</div>}
-      {!loading && failed && <ServerNotReached onRetry={onRetry} />}
-      {!loading && !failed && recs.length === 0 && (
-        <div className="text-[10px] text-neutral-600 italic px-1">no candidates</div>
-      )}
-      {recs.map((rec, i) => (
-        <PlanRecCard
-          key={rec.stem_file_id ?? rec.track_id}
-          rec={rec}
-          role={role}
-          mode={mode}
-          focused={isFocused(focus, role, "recs", i)}
-          onFocus={() => store.setGridFocus({ role, zone: "recs", index: i })}
-          onAdd={onAdd ? () => onAdd(rec.track_id) : undefined}
-          besideOriginalOn={deckBesideTheOriginal?.(rec)}
-        />
-      ))}
-    </div>
+      <div className={`flex flex-col gap-1 ${live ? LIVE_RECS_MIN_HEIGHT : ""}`}>
+        {!live && showNote && (
+          <div className="px-1 text-[9px] uppercase tracking-wider text-neutral-600">
+            {note}
+          </div>
+        )}
+        {loading && <div className={quiet}>…</div>}
+        {!loading && failed && <ServerNotReached onRetry={onRetry} />}
+        {!loading && !failed && recs.length === 0 && (
+          <div className={`${quiet} italic`}>no candidates</div>
+        )}
+        {recs.map((rec, i) => {
+          const card = {
+            rec,
+            role,
+            focused: isFocused(focus, role, "recs", i),
+            onFocus: () => store.setGridFocus({ role, zone: "recs", index: i }),
+            onAdd: onAdd ? () => onAdd(rec.track_id) : undefined,
+            besideOriginalOn: deckBesideTheOriginal?.(rec),
+          };
+          const key = rec.stem_file_id ?? rec.track_id;
+          return live ? (
+            <LiveRecCard key={key} {...card} />
+          ) : (
+            <PlanRecCard key={key} {...card} mode={mode} />
+          );
+        })}
+      </div>
+    </>
   );
 }
 
 /**
  * A role column is rendered as three horizontal BANDS across the grid (see
  * RoleColumnsGrid): the header, the PLAN band (your queued picks), and the RECS
- * band (recommendations). Splitting them into bands lets the plan zones share
- * one stretched row — so an empty "nothing queued" lines up with a filled card
- * next to it — while each recs list keeps its own height (a column with fewer
- * recs doesn't leave dead space). It also gives a natural seam between
- * "added" (plan) and "recommended" (recs).
+ * band (recommendations). In the Set view, splitting them into bands lets the
+ * plan zones share one stretched row — so an empty "nothing queued" lines up
+ * with a filled card next to it — while each recs list keeps its own height (a
+ * column with fewer recs doesn't leave dead space). In the Booth each plan zone
+ * is a box of one-line rows that scrolls inside itself, so the recs below stay
+ * on screen however long the plan is. The bands also give a natural seam
+ * between "added" (plan) and "recommended" (recs).
  */
 
 /** The role's colored title cell. */
-export function ColumnHeader({ role }: { role: PlanRole }) {
+export function ColumnHeader({ role, mode }: { role: PlanRole; mode?: Mode }) {
   const styles = ROLE_STYLES[visRole(role)];
   return (
-    <div className={`rounded px-2 py-1 text-[10px] font-semibold uppercase text-center border ${styles.header}`}>
+    <div
+      className={`rounded px-2 py-1 font-semibold uppercase text-center border ${
+        mode === "live" ? "text-xs" : "text-[10px]"
+      } ${styles.header}`}
+    >
       {roleLabel(visRole(role))}
     </div>
   );
 }
 
 /** PLAN band for one role — your queued picks (emerald edge), or the empty
- * placeholder. ``flex-1`` lets the zone fill the band's stretched height so
- * every column's plan zone is the same height. */
+ * placeholder. In the Set view ``flex-1`` lets the zone fill the band's
+ * stretched height so every column's plan zone is the same height. */
 export function PlanBand({
   setId,
   role,
@@ -683,27 +921,40 @@ export function PlanBand({
 }) {
   const plan = useSetPlan(setId);
   const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
+  const live = mode === "live";
   return (
     <div
       role="group"
       aria-label={`${roleLabel(visRole(role))} plan`}
-      className="flex h-full flex-col gap-1 min-w-0"
+      className={`flex flex-col gap-1 min-w-0 ${live ? "" : "h-full"}`}
     >
-      <ZoneLabel>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
-      <PlanZone
-        setId={setId}
-        role={role}
-        mode={mode}
-        onOpenPads={onOpenPads}
-        onFindVersions={onFindVersions}
-        className="flex-1"
-      />
+      <ZoneLabel live={live}>◆ Plan {queue.length > 0 && `· ${queue.length}`}</ZoneLabel>
+      {live ? (
+        <LivePlanZone setId={setId} role={role} />
+      ) : (
+        <PlanZone
+          setId={setId}
+          role={role}
+          mode={mode}
+          onOpenPads={onOpenPads}
+          onFindVersions={onFindVersions}
+          className="flex-1"
+        />
+      )}
     </div>
   );
 }
 
 function hasPicks(plan: SetPlan | null | undefined): boolean {
   return Object.values(plan?.queues ?? {}).some((queue) => queue.length > 0);
+}
+
+export function usePlanBandShown(setId: number | null, mode: Mode): boolean {
+  const plan = useSetPlan(setId);
+  if (setId == null) return false;
+  if (mode === "plan") return true;
+  const couldNotLoad = plan.isError && plan.data == null;
+  return couldNotLoad || hasPicks(plan.data);
 }
 
 export function PlanRow({
@@ -764,12 +1015,40 @@ export function RecsBand({
       aria-label={`${roleLabel(visRole(role))} recs`}
       className="flex flex-col gap-1 min-w-0"
     >
-      <ZoneLabel>Recs</ZoneLabel>
       {mode === "live" ? (
         <LiveRecsZone setId={setId} role={role} />
-      ) : setId != null ? (
-        <PlanRecsZone setId={setId} role={role} />
-      ) : null}
+      ) : (
+        <>
+          <ZoneLabel>Recs</ZoneLabel>
+          {setId != null ? <PlanRecsZone setId={setId} role={role} /> : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LivePlanZone({ setId, role }: { setId: number; role: PlanRole }) {
+  const focus = useAppStore((s) => s.gridFocus);
+  const plan = useSetPlan(setId);
+  const queue: PlanItem[] = plan.data?.queues?.[role] ?? [];
+  usePublishZone(role, "plan", queue.map((q) => q.track_id));
+  if (queue.length === 0) {
+    return (
+      <div className="flex h-9 items-center px-2 text-xs text-neutral-500">nothing queued</div>
+    );
+  }
+  return (
+    <div data-plan-scroll-box className={LIVE_PLAN_BOX}>
+      {queue.map((item, i) => (
+        <LivePlanRow
+          key={`${item.track_id}-${i}`}
+          item={item}
+          role={role}
+          index={i}
+          focused={isFocused(focus, role, "plan", i)}
+          onFocus={() => store.setGridFocus({ role, zone: "plan", index: i })}
+        />
+      ))}
     </div>
   );
 }

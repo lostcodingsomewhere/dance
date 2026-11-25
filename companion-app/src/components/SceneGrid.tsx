@@ -131,7 +131,7 @@ export function SceneGrid() {
 
   if (!columns) {
     return (
-      <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-xs text-neutral-600">
+      <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-xs text-neutral-400">
         Waiting for Ableton deck columns. Open Live and load a track to
         populate the grid.
       </div>
@@ -147,7 +147,7 @@ export function SceneGrid() {
           blocks the action that triggered it. */}
       {mudWarning && (
         <div
-          className="pointer-events-none absolute left-1/2 -top-1 -translate-x-1/2 -translate-y-full z-20 rounded-md border border-amber-400/50 bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-100 shadow-lg"
+          className="pointer-events-none absolute left-1/2 -top-1 -translate-x-1/2 -translate-y-full z-20 rounded-md border border-amber-400/50 bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-100 shadow-lg"
           role="status"
           data-testid="mud-warning"
         >
@@ -156,7 +156,7 @@ export function SceneGrid() {
         </div>
       )}
       <nav aria-label="Pages" className="flex items-center gap-1">
-        <span className="mr-1 text-[10px] uppercase tracking-widest text-neutral-500">
+        <span className="mr-1 text-xs uppercase tracking-widest text-neutral-400">
           Page
         </span>
         {Array.from({ length: pages }, (_, page) => {
@@ -170,7 +170,7 @@ export function SceneGrid() {
               aria-pressed={isShown}
               aria-label={`Page ${page + 1}${isPlaying ? ", playing" : ""}`}
               title={songTitlesOnPage(cells, page) || `Page ${page + 1}`}
-              className={`relative h-6 min-w-6 rounded border px-1.5 text-[11px] font-mono tabular-nums transition-colors ${
+              className={`relative h-6 min-w-6 rounded border px-1.5 text-xs font-mono tabular-nums transition-colors ${
                 isShown
                   ? "border-violet-400 bg-violet-500/25 text-violet-50"
                   : "border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-100"
@@ -188,7 +188,7 @@ export function SceneGrid() {
           one level up, so the same 8 column labels can sit above the
           TwoDeckStrip + SceneGrid + the rec banner row instead of being
           repeated inside each. */}
-      {rows.map((sceneIdx) => {
+      {rows.map((sceneIdx, rowOnPage) => {
         // Stem cells across both sides — for lone-stem detection, which
         // drives the per-cell anchor-fill (◇) affordance.
         const allStemCells: DeckCell[] = [];
@@ -214,12 +214,16 @@ export function SceneGrid() {
               const cell = cellAt.get(`${sceneIdx}|${deckKind}`);
               const isPlaying =
                 trackIdx != null && playing[trackIdx] === sceneIdx;
+              const padAbove = cellAt.get(`${sceneIdx - 1}|${deckKind}`);
+              const startsARunOfItsSong =
+                rowOnPage === 0 || padAbove?.track_id !== cell?.track_id;
               return (
                 <Cell
                   key={deckKind}
                   role={role}
                   deckKind={deckKind}
                   cell={cell}
+                  showTitle={cell?.cue == null || startsARunOfItsSong}
                   loaded={cell != null}
                   playing={isPlaying}
                   beatMs={beatMs}
@@ -272,6 +276,7 @@ function Cell({
   role,
   deckKind,
   cell,
+  showTitle,
   loaded,
   playing,
   beatMs,
@@ -285,6 +290,7 @@ function Cell({
    * to render the A/B side badge inside the cell. */
   deckKind: string;
   cell: DeckCell | undefined;
+  showTitle: boolean;
   loaded: boolean;
   playing: boolean;
   beatMs: number;
@@ -357,11 +363,11 @@ function Cell({
   if (!loaded) {
     return (
       <div
-        className={`relative rounded-md border h-14 ${styles.border} ${styles.bg} opacity-50`}
+        className={`flex items-center justify-end rounded-md border h-9 px-2 ${styles.border} ${styles.bg} opacity-50`}
         aria-label={`${deckColumnLabel(deckKind)} (empty)`}
       >
         {badgeText && (
-          <span className="absolute bottom-0.5 right-1 text-[8px] font-mono text-neutral-600 opacity-70">
+          <span className="text-xs font-mono leading-none text-neutral-400">
             {badgeText}
           </span>
         )}
@@ -385,7 +391,7 @@ function Cell({
             ? `${deckColumnLabel(deckKind)}: ${cell.title ?? `Track #${cell.track_id}`}${cell.artist ? ` — ${cell.artist}` : ""}${cueInTooltip} — tap to fire`
             : `${deckColumnLabel(deckKind)} (loaded)`
         }
-        className={`w-full rounded-md border h-14 px-2 py-1 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
+        className={`flex w-full items-center gap-1.5 rounded-md border h-9 px-2 text-left overflow-hidden transition-all duration-100 ease-out cursor-pointer focus:outline-none ${
           playing
             ? "border-emerald-300 bg-emerald-500/25 shadow-[0_0_18px_rgba(16,185,129,0.45)] hover:bg-emerald-500/35"
             : `${styles.border} ${styles.bg} hover:bg-neutral-900/60 hover:border-neutral-700`
@@ -398,49 +404,33 @@ function Cell({
             : undefined
         }
       >
-        {cell && (
-          <>
-            <div className={`text-xs truncate font-medium leading-tight ${playing ? "text-emerald-50" : "text-neutral-100"}`}>
-              {cell.title ?? `Track #${cell.track_id}`}
-            </div>
-            {(cue || cell.artist) && (
-              <div className={`flex items-center gap-1 text-[10px] leading-tight ${playing ? "text-emerald-100/80" : "text-neutral-400"}`}>
-                {cue && (
-                  <span
-                    className={`shrink-0 rounded px-1 text-[9px] font-semibold uppercase leading-[14px] tracking-wide ${sectionTone(cell.cue_label).head} ${cell.cue_silent ? "opacity-40" : ""}`}
-                  >
-                    {cue}
-                  </span>
-                )}
-                {cell.artist && <span className="truncate">{cell.artist}</span>}
-              </div>
-            )}
-            {(cell.bpm != null || cell.key_camelot || cell.floor_energy != null || cell.duration_seconds != null) && (
-              <div className={`text-[9px] truncate font-mono leading-none mt-0.5 ${playing ? "text-emerald-200/70" : "text-neutral-500"}`}>
-                {cell.bpm != null && <span>{cell.bpm.toFixed(1)}</span>}
-                {cell.key_camelot && (
-                  <span className="ml-1">· {cell.key_camelot}</span>
-                )}
-                {cell.floor_energy != null && (
-                  <span className="ml-1">· E{cell.floor_energy}</span>
-                )}
-                {cell.duration_seconds != null && (
-                  <span className="ml-1">· {formatDuration(cell.duration_seconds)}</span>
-                )}
-              </div>
-            )}
-          </>
+        {cell && cue && (
+          <span
+            className={`shrink-0 rounded px-1.5 text-base font-bold uppercase leading-6 tracking-wide ${sectionTone(cell.cue_label).head} ${cell.cue_silent ? "opacity-40" : ""}`}
+          >
+            {cue}
+          </span>
+        )}
+        {cell && showTitle ? (
+          <span
+            title={factsOf(cell)}
+            className={`min-w-0 flex-1 truncate text-[13px] font-medium leading-tight ${playing ? "text-emerald-50" : "text-neutral-100"}`}
+          >
+            {cell.title ?? `Track #${cell.track_id}`}
+          </span>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {badgeText && (
+          <span
+            className={`shrink-0 text-xs font-mono leading-none ${
+              playing ? "text-emerald-200/60" : "text-neutral-400"
+            }`}
+          >
+            {badgeText}
+          </span>
         )}
       </button>
-      {badgeText && (
-        <span
-          className={`pointer-events-none absolute bottom-0.5 right-1 text-[8px] font-mono leading-none ${
-            playing ? "text-emerald-200/60" : "text-neutral-500"
-          }`}
-        >
-          {badgeText}
-        </span>
-      )}
       {onRemove && <RemoveClipButton role={role} onRemove={onRemove} />}
       {onAnchorFill && (
         <button
@@ -459,6 +449,16 @@ function Cell({
       )}
     </div>
   );
+}
+
+function factsOf(cell: DeckCell): string | undefined {
+  const facts = [
+    cell.bpm != null ? cell.bpm.toFixed(1) : null,
+    cell.key_camelot,
+    cell.floor_energy != null ? `E${cell.floor_energy}` : null,
+    cell.duration_seconds != null ? formatDuration(cell.duration_seconds) : null,
+  ].filter(Boolean);
+  return facts.length > 0 ? facts.join(" · ") : undefined;
 }
 
 const REMOVE_STAYS_ARMED_MS = 2500;
