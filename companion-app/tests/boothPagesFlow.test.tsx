@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BoothBackend,
   LIVE_TRACK_OF,
-  PADS_PER_PAGE,
   deck,
   grid,
   renderApp,
@@ -16,6 +15,8 @@ import {
 const ORIGINAL = { track_id: 7, title: "Night Drive" };
 const CLUB_MIX = { track_id: 8, title: "Night Drive (Club Mix)" };
 const THIRD_SONG = { track_id: 9, title: "Half Light" };
+const STEM_COLUMNS_PER_DECK = 4;
+const PADS_WITHOUT_A_CUE = 1;
 
 function preparedSetInLive(): Cell[] {
   const cells = [...songOn(0, "a", ORIGINAL), ...songOn(0, "b", CLUB_MIX), ...songOn(1, "a", THIRD_SONG)];
@@ -48,8 +49,10 @@ describe("a prepared Set in the Booth", () => {
     expect(pageTwo).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "Page 3" })).not.toBeInTheDocument();
 
-    expect(within(grid()).getAllByText("Night Drive")).toHaveLength(4 * PADS_PER_PAGE);
-    expect(within(grid()).getAllByText("Night Drive (Club Mix)")).toHaveLength(4 * PADS_PER_PAGE);
+    expect(within(grid()).getAllByText("Night Drive")).toHaveLength(STEM_COLUMNS_PER_DECK);
+    expect(within(grid()).getAllByText("Night Drive (Club Mix)")).toHaveLength(
+      STEM_COLUMNS_PER_DECK + PADS_WITHOUT_A_CUE,
+    );
     expect(within(grid()).queryByText("Half Light")).not.toBeInTheDocument();
     expect(within(grid()).getAllByText("3 drop")).toHaveLength(8);
     expect(within(grid()).getAllByText("4 breakdown")).toHaveLength(7);
@@ -65,7 +68,7 @@ describe("a prepared Set in the Booth", () => {
 
     fireEvent.click(pageTwo);
     expect(pageTwo).toHaveAttribute("aria-pressed", "true");
-    expect(within(grid()).getAllByText("Half Light")).toHaveLength(4 * PADS_PER_PAGE);
+    expect(within(grid()).getAllByText("Half Light")).toHaveLength(STEM_COLUMNS_PER_DECK);
     expect(within(grid()).queryByText("Night Drive")).not.toBeInTheDocument();
     expect(songOnDeck("A", "Half Light")).not.toHaveLength(0);
     expect(songOnDeck("B", "Night Drive (Club Mix)")).toHaveLength(0);

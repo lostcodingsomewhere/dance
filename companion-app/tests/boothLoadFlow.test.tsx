@@ -17,6 +17,7 @@ const ORIGINAL = { track_id: 7, title: "Night Drive" };
 const CLUB_MIX = { track_id: 8, title: "Night Drive (Club Mix)" };
 const RECOMMENDED = { track_id: 9, title: "Half Light" };
 const SONG_COLUMN = "mix";
+const STEM_COLUMNS_PER_DECK = 4;
 
 let backend: BoothBackend;
 let inLive: Cell[];
@@ -87,7 +88,7 @@ describe("loading a song from the Booth during a set", () => {
 
     const pageTwo = await screen.findByRole("button", { name: "Page 2" });
     await waitFor(() => expect(pageTwo).toHaveAttribute("aria-pressed", "true"));
-    expect(within(grid()).getAllByText("Half Light")).toHaveLength(4 * PADS_PER_PAGE);
+    expect(within(grid()).getAllByText("Half Light")).toHaveLength(STEM_COLUMNS_PER_DECK);
     expect(within(grid()).queryByText("Night Drive")).not.toBeInTheDocument();
     expect(within(grid()).getAllByText("3 drop")).toHaveLength(4);
 
